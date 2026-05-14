@@ -6,8 +6,8 @@ import { IoCartOutline } from "react-icons/io5"
 import { FaMagnifyingGlass } from "react-icons/fa6"
 import { categories } from '@/Assets/dataset'
 import AccountList from "@/components/AccountList"
+import Cart from "@/components/Cart"
 import Link from 'next/link'
-import Cart from '@/components/Cart'
 import { useCartStore } from "@/Store/store"
 import { useRouter } from 'next/navigation'
 
@@ -115,7 +115,6 @@ const Header = () => {
   const cart = useCartStore((s) => s.cart)
   const itemCount = cart.reduce((acc, item) => acc + item.quantity, 0)
 
-  const [carton, setCartOn] = useState(false)
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [query, setQuery] = useState("")
   const [allProducts, setAllProducts] = useState<Product[]>([])
@@ -255,6 +254,7 @@ const Header = () => {
             className={`bg-[#f3f3f3] text-black text-sm px-2 border-r border-gray-300 rounded-l-md focus:ring-1 focus:ring-yellow-400 focus:border-yellow-400 ${selectedCategory === "all" ? "w-16" : "w-32"}`}
             value={selectedCategory}
             onChange={(e) => handleCategoryChange(e.target.value)}
+            suppressHydrationWarning
           >
             {categories.map((cat) => (
               <option key={cat.value} value={cat.value}>{cat.label}</option>
@@ -272,12 +272,14 @@ const Header = () => {
             onKeyDown={handleKeyDown}
             onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
             autoComplete="off"
+            suppressHydrationWarning
           />
 
           {/* Search button */}
           <button
             onClick={commitSearch}
             className="bg-[#E5E7EB] hover:bg-[#bbbcbe] px-4 flex items-center justify-center rounded-r-md duration-300"
+            suppressHydrationWarning
           >
             <FaMagnifyingGlass className="text-black font-bold" />
           </button>
@@ -351,20 +353,22 @@ const Header = () => {
         </div>
 
         {/* CART */}
-        <div className="flex items-center gap-1 border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer">
-          <button onClick={() => setCartOn(v => !v)} className="relative">
-            <IoCartOutline className="text-3xl" />
-            <span className="absolute -top-1 -right-1 bg-[#54499d] text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
-              {itemCount} 
-            </span>
-          </button>
+        <div className="flex items-center gap-1 border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer relative group">
+          <Link href="/Pages/Cart" className="relative" suppressHydrationWarning>
+            <IoCartOutline className="text-3xl text-white" />
+            {itemCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-[#54499d] text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {itemCount}
+              </span>
+            )}
+          </Link>
+          {/* Cart preview — appears on hover, click the icon to go to full cart page */}
+          <div className="absolute right-0 top-full mt-1 w-[440px] hidden group-hover:block z-[60] bg-white shadow-2xl border border-gray-200 rounded-xl text-black overflow-hidden">
+            <Cart />
+          </div>
         </div>
       </div>
 
-      {/* CART PANEL */}
-      <div className={`absolute right-0 top-0 mt-16 w-106 z-60 bg-white shadow-lg border border-gray-200 rounded p-3 transition-all text-black ${carton ? "block" : "hidden"}`}>
-        <Cart />
-      </div>
     </div>
   )
 }

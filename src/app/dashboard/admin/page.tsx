@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { LayoutDashboard, UserRoundPlus, Users, SquareUser, Plus, ClipboardList } from 'lucide-react';
 
 import { useEffect, useRef, useState } from "react";

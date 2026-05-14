@@ -101,32 +101,25 @@ export default function StaffDashboard() {
 
   // ── Fetch ────────────────────────────────────────────────
  const fetchDashboard = async (u: User) => {
+  const safeJson = async (res: Response) => {
+    try { return res.ok ? await res.json() : null } catch { return null }
+  }
+
   try {
-    const [staffOrdersRes, staffDealersRes, monthlyOrdersRes, monthlyDealersRes] = await Promise.all([
+    const [staffOrdersRes, staffDealersRes, monthlyOrdersRes, monthlyDealersRes] = await Promise.allSettled([
       fetch(`${BACKEND_URL}/getStaffOrders?staff_id=${u.staff_id}`),
       fetch(`${BACKEND_URL}/getStaffDealers?staff_id=${u.staff_id}`),
       fetch(`${BACKEND_URL}/getMonthlyreporttoporder`),
       fetch(`${BACKEND_URL}/getMonthlyreporttopdealer`),
     ])
 
-    // ✅ Check ALL four responses before calling .json() on any
-    const allResponses = [staffOrdersRes, staffDealersRes, monthlyOrdersRes, monthlyDealersRes]
-    const failedRes = allResponses.find(r => !r.ok)
-    if (failedRes) {
-      const errText = await failedRes.text()
-      console.error(`API error [${failedRes.status}] ${failedRes.url}:`, errText.slice(0, 300))
-      throw new Error(`HTTP ${failedRes.status} from ${failedRes.url}`)
-    }
+    const staffOrdersJson  = staffOrdersRes.status  === "fulfilled" ? await safeJson(staffOrdersRes.value)  : null
+    const staffDealersJson = staffDealersRes.status === "fulfilled" ? await safeJson(staffDealersRes.value) : null
+    const monthlyOrdersJson  = monthlyOrdersRes.status  === "fulfilled" ? await safeJson(monthlyOrdersRes.value)  : null
+    const monthlyDealersJson = monthlyDealersRes.status === "fulfilled" ? await safeJson(monthlyDealersRes.value) : null
 
-    const [staffOrdersJson, staffDealersJson, monthlyOrdersJson, monthlyDealersJson] = await Promise.all([
-      staffOrdersRes.json(),
-      staffDealersRes.json(),
-      monthlyOrdersRes.json(),
-      monthlyDealersRes.json(),
-    ])
-
-    const orders:  OrderItem[]  = staffOrdersJson.data  || []
-    const dealers: DealerItem[] = staffDealersJson.data || []
+    const orders:  OrderItem[]  = staffOrdersJson?.data  || []
+    const dealers: DealerItem[] = staffDealersJson?.data || []
 
     setStats({
       myOrders:      orders.length,
@@ -135,14 +128,14 @@ export default function StaffDashboard() {
       myDealers:     dealers.length,
     })
 
-    if (monthlyOrdersJson.status && Array.isArray(monthlyOrdersJson.month)) {
+    if (monthlyOrdersJson && Array.isArray(monthlyOrdersJson.month)) {
       setMonthlyOrders({ month: monthlyOrdersJson.month, total: monthlyOrdersJson.total })
     }
-    if (monthlyDealersJson.status && Array.isArray(monthlyDealersJson.month)) {
+    if (monthlyDealersJson && Array.isArray(monthlyDealersJson.month)) {
       setMonthlyDealers({ month: monthlyDealersJson.month, total: monthlyDealersJson.total })
     }
-    if (Array.isArray(monthlyOrdersJson.top))  setTopOrders(monthlyOrdersJson.top)
-    if (Array.isArray(monthlyDealersJson.top))  setTopDealers(monthlyDealersJson.top)
+    if (Array.isArray(monthlyOrdersJson?.top))  setTopOrders(monthlyOrdersJson.top)
+    if (Array.isArray(monthlyDealersJson?.top))  setTopDealers(monthlyDealersJson.top)
 
   } catch (err) {
     console.error("Dashboard fetch error:", err)

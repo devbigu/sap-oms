@@ -19,12 +19,12 @@ export type HotItem = {
 const HOT_ITEMS_KEY = "hotItems";
 
 const DEFAULT_ITEMS: HotItem[] = [
-  { id: "1", SKU: "PYC-25-A",  name: "Pycnometer Class A 25ml",   image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "🔥 Bestseller",   active: true  },
-  { id: "2", SKU: "VF-100",    name: "Volumetric Flask 100ml",     image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "⚡ Fast moving",  active: true  },
-  { id: "3", SKU: "BUR-50-A",  name: "Burette Class A 50ml",      image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "🔥 Trending",    active: true  },
-  { id: "4", SKU: "CF-250",    name: "Conical Flask 250ml",       image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "⚡ Popular",     active: true  },
-  { id: "5", SKU: "PP-10",     name: "Pipette 10ml Grade A",      image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "🔥 Top rated",   active: true  },
-  { id: "6", SKU: "RB-500",    name: "Round Bottom Flask 500ml",  image: "https://omsonslabs.com/wp-content/uploads/Pycnometers-Class-A-Individual-Work-Certificate-product-image.webp", badge: "⚡ Hot pick",    active: false },
+  { id: "1", SKU: "163",  name: "Adapters Reduction",          image: "", badge: "🔥 Bestseller",  active: true  },
+  { id: "2", SKU: "164",  name: "Adapters Cone and Cone",      image: "", badge: "⚡ Fast moving", active: true  },
+  { id: "3", SKU: "165",  name: "Adapters Socket and Socket",  image: "", badge: "🔥 Trending",   active: true  },
+  { id: "4", SKU: "144",  name: "Flask Erlenmeyer Amber",      image: "", badge: "⚡ Popular",    active: true  },
+  { id: "5", SKU: "145",  name: "Flask Erlenmeyer Narrow",     image: "", badge: "🔥 Top rated",  active: true  },
+  { id: "6", SKU: "147",  name: "Flask Iodine",                image: "", badge: "⚡ Hot pick",   active: false },
 ];
 
 export function getHotItems(): HotItem[] {

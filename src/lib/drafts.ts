@@ -1,27 +1,17 @@
 /**
  * lib/drafts.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * All Supabase CRUD helpers for order drafts.
- * Dealer isolation is enforced by always filtering on dealer_id.
+ * Named-draft CRUD helpers backed by MongoDB via /api/drafts.
+ * Dealer isolation is enforced by always sending dealer_id.
+ * Function signatures are identical to the former Supabase version so that
+ * AddOrderForm needs no changes.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { createClient } from "@supabase/supabase-js";
-
-// ── Supabase client ───────────────────────────────────────────────────────────
-// Replace the env vars with your actual Supabase project URL and anon key,
-// or set them in .env.local:
-//   NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
-//   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL2!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY2!
-);
-
-export { supabase };
+const BASE = "/api/drafts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Mirrors ProductRow in app/order/page.tsx */
 export type DraftProductRow = {
   key: number;
   productname: string;
@@ -57,137 +47,58 @@ export type DraftPayload = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * List all drafts for a dealer, newest first.
- */
+async function apiFetch(path: string, init?: RequestInit) {
+  const res  = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message ?? "API error");
+  return json;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
 export async function getDrafts(dealerId: string): Promise<OrderDraft[]> {
-  const { data, error } = await supabase
-    .from("order_drafts")
-    .select("*")
-    .eq("dealer_id", dealerId)
-    .order("updated_at", { ascending: false });
-
-  if (error) throw new Error(error.message);
-  return (data ?? []) as OrderDraft[];
+  const json = await apiFetch(`${BASE}?dealer_id=${encodeURIComponent(dealerId)}`);
+  return json.data ?? [];
 }
 
-/**
- * Fetch a single draft by id, verified to belong to dealerId.
- */
-export async function getDraftById(
-  id: string,
-  dealerId: string
-): Promise<OrderDraft | null> {
-  const { data, error } = await supabase
-    .from("order_drafts")
-    .select("*")
-    .eq("id", id)
-    .eq("dealer_id", dealerId)
-    .single();
-
-  if (error) {
-    if (error.code === "PGRST116") return null; // not found
-    throw new Error(error.message);
+export async function getDraftById(id: string, dealerId: string): Promise<OrderDraft | null> {
+  try {
+    const json = await apiFetch(`${BASE}/${id}?dealer_id=${encodeURIComponent(dealerId)}`);
+    return json.data ?? null;
+  } catch {
+    return null;
   }
-  return data as OrderDraft;
 }
 
-/**
- * Save a brand-new draft. Returns the created row.
- */
 export async function saveDraft(payload: DraftPayload): Promise<OrderDraft> {
-  const { data, error } = await supabase
-    .from("order_drafts")
-    .insert([
-      {
-        order_rows: payload.rows,
-        dealer_id:   payload.dealer_id,
-        name:        payload.name,
-        shipto:      payload.shipto ?? null,
-        refno:       payload.refno ?? null,
-        coupon_code: payload.coupon_code ?? null,
-        coupon_pct:  payload.coupon_pct ?? null,
-        rows:        payload.rows,
-      },
-    ])
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as OrderDraft;
+  const json = await apiFetch(BASE, { method: "POST", body: JSON.stringify(payload) });
+  return json.data as OrderDraft;
 }
 
-/**
- * Overwrite an existing draft (must belong to dealerId).
- */
 export async function updateDraft(
   id: string,
   dealerId: string,
   payload: Partial<Omit<DraftPayload, "dealer_id">>
 ): Promise<OrderDraft> {
-  const { data, error } = await supabase
-    .from("order_drafts")
-    .update({
-      ...(payload.name        !== undefined && { name:        payload.name }),
-      ...(payload.shipto      !== undefined && { shipto:      payload.shipto }),
-      ...(payload.refno       !== undefined && { refno:       payload.refno }),
-      ...(payload.coupon_code !== undefined && { coupon_code: payload.coupon_code }),
-      ...(payload.coupon_pct  !== undefined && { coupon_pct:  payload.coupon_pct }),
-      ...(payload.rows        !== undefined && { rows:        payload.rows }),
-      ...(payload.rows !== undefined && { order_rows: payload.rows }),
-
-    })
-    .eq("id", id)
-    .eq("dealer_id", dealerId)   // enforce ownership
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as OrderDraft;
+  const json = await apiFetch(`${BASE}/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ dealer_id: dealerId, ...payload }),
+  });
+  return json.data as OrderDraft;
 }
 
-/**
- * Rename a draft without touching its rows.
- */
-export async function renameDraft(
-  id: string,
-  dealerId: string,
-  name: string
-): Promise<void> {
-  const { error } = await supabase
-    .from("order_drafts")
-    .update({ name })
-    .eq("id", id)
-    .eq("dealer_id", dealerId);
-
-  if (error) throw new Error(error.message);
+export async function renameDraft(id: string, dealerId: string, name: string): Promise<void> {
+  await apiFetch(`${BASE}/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ dealer_id: dealerId, name }),
+  });
 }
 
-/**
- * Permanently delete a draft.
- */
-export async function deleteDraft(
-  id: string,
-  dealerId: string
-): Promise<void> {
-  const { error } = await supabase
-    .from("order_drafts")
-    .delete()
-    .eq("id", id)
-    .eq("dealer_id", dealerId);
-
-  if (error) throw new Error(error.message);
+export async function deleteDraft(id: string, dealerId: string): Promise<void> {
+  await apiFetch(`${BASE}/${id}?dealer_id=${encodeURIComponent(dealerId)}`, { method: "DELETE" });
 }
 
-/**
- * Count how many drafts a dealer has (for badges / limits).
- */
 export async function getDraftCount(dealerId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from("order_drafts")
-    .select("id", { count: "exact", head: true })
-    .eq("dealer_id", dealerId);
-
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  const json = await apiFetch(`${BASE}?dealer_id=${encodeURIComponent(dealerId)}&count=1`);
+  return json.count ?? 0;
 }

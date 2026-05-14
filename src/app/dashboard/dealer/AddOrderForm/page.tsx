@@ -99,6 +99,8 @@ function AddOrderPageInner() {
   const cartItems = useCartStore((s) => s.cart);
   const clearCart = useCartStore((s) => s.clearCart);
 
+  const fromCart = searchParams.get("from") === "cart";
+
   const [loading,       setLoading]       = useState(false);
   const [draftSaving,   setDraftSaving]   = useState(false);
   const [user,          setUser]          = useState<any>(null);
@@ -171,11 +173,48 @@ function AddOrderPageInner() {
     }).catch(() => toast.error("Could not load draft."));
   }, [draftIdParam, user, products]);
 
+  // ── Seed rows from DraftCart (when navigated from Cart page) ─────────────
+  useEffect(() => {
+    if (!fromCart || !user || products.length === 0) return;
+    if (seededRef.current) return;
+    seededRef.current = true;
+
+    fetch(`/api/draft-cart?dealer_id=${encodeURIComponent(user.Dealer_Id)}`)
+      .then(r => r.json())
+      .then(json => {
+        if (json.success && Array.isArray(json.data?.items) && json.data.items.length > 0) {
+          const rows: ProductRow[] = json.data.items.map((item: any, i: number) => {
+            const match = products.find(
+              (p: any) =>
+                String(p.product_cat).trim() === String(item.variantCode).trim() ||
+                String(p.product_id).trim()  === String(item.variantCode).trim()
+            );
+            return {
+              key:           i + 1,
+              productname:   match ? String(match.product_cat) : item.variantCode,
+              displayName:   match ? (match.product_name ?? item.productName) : item.productName,
+              variantCode:   item.variantCode,
+              producQuanity: item.quantity,
+              price:         item.unitPrice,
+              packSize:      item.packSize ?? 1,
+            };
+          });
+          setArr(rows);
+          setDraftBanner(`${rows.length} item${rows.length !== 1 ? "s" : ""} imported from your cart`);
+        } else {
+          setArr([emptyRow()]);
+        }
+      })
+      .catch(() => toast.error("Could not load cart draft."));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromCart, user, products]);
+
   // ── Seed rows from cart ───────────────────────────────────────────────────
   useEffect(() => {
     if (seededRef.current) return;
     if (products.length === 0) return;
     if (draftIdParam) return;
+    if (fromCart) return;           // DraftCart takes priority when ?from=cart
     seededRef.current = true;
 
     if (cartItems.length === 0) { setArr([emptyRow()]); return; }
@@ -269,7 +308,7 @@ function AddOrderPageInner() {
 
   // ── Totals ────────────────────────────────────────────────────────────────
   const grandTotal = arr1.reduce((acc, row) => {
-    const listPrice = row.producQuanity * row.price;
+    const listPrice = row.producQuanity * row.packSize * row.price;
     return acc + (listPrice - listPrice * (activeDiscount / 100));
   }, 0);
 
@@ -354,6 +393,10 @@ function AddOrderPageInner() {
       handleRemoveCoupon();
       setActiveDraftId(null);
       setDraftBanner(null);
+      // Clear the DraftCart from MongoDB if this order originated from the cart page
+      if (fromCart && user?.Dealer_Id) {
+        fetch(`/api/draft-cart?dealer_id=${encodeURIComponent(user.Dealer_Id)}`, { method: "DELETE" }).catch(() => {});
+      }
     } catch {
       toast.error("Order failed, please try again.", { autoClose: 5000 });
     } finally {
@@ -665,7 +708,7 @@ function AddOrderPageInner() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {arr1.map((row, idx) => {
-                    const listPrice  = row.producQuanity * row.price;
+                    const listPrice  = row.producQuanity * row.packSize * row.price;
                     const discAmt    = Math.round(listPrice * (activeDiscount / 100));
                     const rowTotal   = listPrice - discAmt;
                     const totalUnits = row.producQuanity * row.packSize;
@@ -735,7 +778,7 @@ function AddOrderPageInner() {
                               </span>
                               <span className="text-gray-300 text-xs">=</span>
                               <span className="inline-flex items-center px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded text-[11px] font-bold font-mono">
-                                {totalUnits} units
+                                {totalUnits} units 
                               </span>
                             </div>
                           ) : (
@@ -746,10 +789,10 @@ function AddOrderPageInner() {
                         </td>
                         <td className="px-3 py-3">
                           <span className="font-mono text-[13px] text-gray-600 font-semibold">
-                            {listPrice > 0 ? fmt(listPrice) : "—"}
+                            {listPrice > 0 ? fmt(listPrice) : "—"} 
                           </span>
                           {listPrice > 0 && (
-                            <p className="text-[10px] text-gray-400 mt-0.5">{fmt(row.price)} × {row.producQuanity}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{row.producQuanity} packs × {row.packSize} units × ₹{row.price}</p>
                           )}
                         </td>
                         <td className="px-3 py-3">

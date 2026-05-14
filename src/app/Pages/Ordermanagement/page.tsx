@@ -409,6 +409,53 @@ export default function OrdersPage() {
   const clearSearch     = () => { setOrderIdInput(''); setDealerInput(''); setStatusSearch('') }
   const clearAllFilters = () => { setMtFilter(''); setAmountMin(''); setAmountMax(''); setDateFrom(''); setDateTo('') }
 
+  const exportCSV = () => {
+    const rows = (hasClientFilters ? filteredAll : allData).map((o, i) => {
+      const base: Record<string, string | number> = {
+        'S.No.':        i + 1,
+        'Order No':     `OM/${YEAR}/${o.order_id}`,
+        'Date':         (o.orderDate || o.order_date || '').slice(0, 10),
+        'Due Date':     o.outstandingDate || '',
+        'Amount (₹)':   Number(o.order_amount  || 0),
+        'Discount (₹)': Number(o.order_discount || 0),
+        'Net (₹)':      Number(o.order_amount || 0) - Number(o.order_discount || 0),
+        'Qty':          o.orderdata_item_quantity || '',
+        'Confirmation': o.accept_order === '1' ? 'Accepted' : 'Awaiting',
+        'MT Status':    o.mtstatus || 'Pending',
+      }
+      if (cfg?.showDealerCol) base['Dealer'] = o.Dealer_Name || ''
+      return base
+    })
+    if (!rows.length) return
+
+    const headers = Object.keys(rows[0])
+    const csv = [
+      headers.join(','),
+      ...rows.map(r =>
+        headers.map(h => `"${String(r[h] ?? '').replace(/"/g, '""')}"`).join(',')
+      ),
+    ].join('\n')
+
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+
+    const parts = ['orders']
+    if (dealerInput)  parts.push(`dealer-${dealerInput.replace(/\s+/g, '-')}`)
+    if (orderIdInput) parts.push(`id-${orderIdInput}`)
+    if (dateFrom || dateTo) parts.push(`${dateFrom || 'start'}-to-${dateTo || 'now'}`)
+    if (statusSearch) parts.push(statusSearch === '1' ? 'accepted' : 'awaiting')
+    if (mtFilter)     parts.push(mtFilter.toLowerCase().replace(/\s/g, '-'))
+    if (amountMin || amountMax) parts.push(`amt-${amountMin || '0'}-${amountMax || 'max'}`)
+    parts.push(new Date().toISOString().slice(0, 10))
+
+    a.download = `${parts.join('_')}.csv`
+    document.body.appendChild(a); a.click()
+    document.body.removeChild(a); URL.revokeObjectURL(url)
+    setToast({ msg: `Exported ${rows.length} order${rows.length !== 1 ? 's' : ''}.`, type: 'ok' })
+  }
+
   const handleDelete = useCallback(async (id: string) => {
     if (!session || !cfg) return
     const reason = cfg.requireReason ? window.prompt('Reason for delete') : ''
@@ -567,6 +614,35 @@ export default function OrdersPage() {
               <h1 className="text-2xl font-bold tracking-tight">Orders</h1>
               <p className="text-sm text-slate-500 mt-1">{cfg.caption}</p>
             </div>
+            <button
+              onClick={exportCSV}
+              disabled={isLoading || allData.length === 0}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                padding: '8px 16px', borderRadius: 10,
+                border: `1px solid ${hasClientFilters ? '#a5b4fc' : '#e2e6ef'}`,
+                background: hasClientFilters ? '#eef2ff' : '#fff',
+                color: hasClientFilters ? '#4338ca' : '#374151',
+                fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+                fontFamily: 'inherit', transition: 'all 0.15s',
+                opacity: (isLoading || allData.length === 0) ? 0.4 : 1,
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Export CSV
+              <span style={{
+                padding: '1px 7px', borderRadius: 20,
+                background: hasClientFilters ? '#c7d2fe' : '#f1f3fb',
+                color: hasClientFilters ? '#3730a3' : '#64748b',
+                fontSize: 11, fontWeight: 700,
+              }}>
+                {hasClientFilters ? filteredAll.length : allData.length}
+              </span>
+            </button>
           </div>
 
           {/* Active filter tags */}

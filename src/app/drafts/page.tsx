@@ -114,12 +114,13 @@ export default function DraftsPage() {
 
   // ── open draft in order page ────────────────────────────────────────────
   const openDraft = (id: string) => {
-    router.push(`/order?draft=${id}`);
+    router.push(`/dashboard/dealer/AddOrderForm?draft=${id}`);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
   if (!user) return null;
 
+  const newLocal = <h1 onClick={() => router.back()} className="cursor-pointer">back</h1>;
   return (
     <>
       <ToastContainer position="top-right" autoClose={4000} />
@@ -129,13 +130,14 @@ export default function DraftsPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-7">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Saved Drafts</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Saved Drafts</h1>
+            {newLocal}
             <p className="text-sm text-gray-400 mt-1">
               {user.Dealer_Name} · {drafts.length} draft{drafts.length !== 1 ? "s" : ""}
             </p>
           </div>
           <button
-            onClick={() => router.push("/order")}
+            onClick={() => router.push("/dashboard/dealer/AddOrderForm")}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer border-none"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -161,7 +163,7 @@ export default function DraftsPage() {
               Start building an order and hit &ldquo;Save as Draft&rdquo; to pick it back up later.
             </p>
             <button
-              onClick={() => router.push("/order")}
+              onClick={() => router.push("/dashboard/dealer/AddOrderForm")}
               className="mt-5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[13.5px] font-semibold transition-colors cursor-pointer border-none"
             >
               Start an Order

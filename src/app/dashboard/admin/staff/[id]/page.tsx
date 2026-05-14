@@ -1,15 +1,13 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { use } from 'react'
-
+import { useRouter, useParams } from 'next/navigation'
 import axios from 'axios'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 
 function InputField({
-  label, value, onChange, type = "text", placeholder, required = true
+  label, value, onChange, type = "text", placeholder, required = true,
 }: {
   label: string
   value: string
@@ -20,7 +18,10 @@ function InputField({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">{label}</label>
+      <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+        {label}
+        {required && <span className="text-orange-500 ml-0.5">*</span>}
+      </label>
       <input
         required={required}
         type={type}
@@ -33,20 +34,23 @@ function InputField({
   )
 }
 
-export default function EditStaffPage({params}: {params:  Promise<{ id: string }>}) {
+export default function EditStaffPage() {
   const router = useRouter()
-  const { id } = use(params)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const params = useParams()
+  const id     = params.id as string
 
-  const [staffid, setStaffid] = useState("")
-  const [name, setName] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSaving,  setIsSaving]  = useState(false)
+  const [toastMsg,  setToastMsg]  = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const [staffid,     setStaffid]     = useState("")
+  const [name,        setName]        = useState("")
   const [designation, setDesignation] = useState("")
-  const [location, setLocation] = useState("")
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [role, setRole] = useState("")
+  const [location,    setLocation]    = useState("")
+  const [email,       setEmail]       = useState("")
+  const [password,    setPassword]    = useState("")
+  const [username,    setUsername]    = useState("")
+  const [role,        setRole]        = useState("")
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -55,13 +59,12 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
     return () => clearTimeout(t)
   }, [toastMsg])
 
-  // Fetch staff data
   useEffect(() => {
     if (!id) return
     const fetchStaff = async () => {
       setIsLoading(true)
       try {
-        const res = await fetch(`${BACKEND_URL}/getstaff?id=${id}`, {
+        const res  = await fetch(`${BACKEND_URL}/getstaff?id=${id}`, {
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ type: 'type' }),
@@ -69,13 +72,14 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
         const json = await res.json()
         if (json.status) {
           const d = json.data
-          setName(d.staff_name || "")
-          setEmail(d.staff_email || "")
+          setName(d.staff_name         || "")
+          setEmail(d.staff_email        || "")
           setDesignation(d.staff_designation || "")
-          setPassword(d.staff_password || "")
-          setLocation(d.staff_location || "")
-          setRole(d.staff_roletype || "")
-          setStaffid(d.staff_id || "")
+          setPassword(d.staff_password  || "")
+          setLocation(d.staff_location  || "")
+          setUsername(d.staff_username  || "")
+          setRole(d.staff_roletype      || "")
+          setStaffid(d.staff_id         || "")
         } else {
           setToastMsg({ text: json.msz || "Failed to load staff", type: 'error' })
         }
@@ -88,20 +92,21 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
     fetchStaff()
   }, [id])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: { preventDefault(): void }) => {
     e.preventDefault()
     setIsSaving(true)
     try {
-      const formData = new FormData()
-      formData.append("staff_name", name)
-      formData.append("staff_designation", designation)
-      formData.append("staff_email", email)
-      formData.append("staff_location", location)
-      formData.append("staff_password", password)
-      formData.append("staff_roletype", role)
-      formData.append("staff_id", staffid)
+      const fd = new FormData()
+      fd.append("staff_name",        name)
+      fd.append("staff_designation", designation)
+      fd.append("staff_email",       email)
+      fd.append("staff_location",    location)
+      fd.append("staff_password",    password)
+      fd.append("staff_username",    username)
+      fd.append("staff_roletype",    role)
+      fd.append("staff_id",          staffid)
 
-      const res = await axios.post(`${BACKEND_URL}/editstaff`, formData)
+      const res = await axios.post(`${BACKEND_URL}/editstaff`, fd)
       setToastMsg({ text: res.data.msg || "Staff updated successfully", type: 'success' })
     } catch {
       setToastMsg({ text: "Failed to update staff", type: 'error' })
@@ -126,9 +131,13 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
 
       {/* Toast */}
       {toastMsg && (
-        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all ${
+        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all flex items-center gap-2 ${
           toastMsg.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'
         }`}>
+          {toastMsg.type === 'success'
+            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+          }
           {toastMsg.text}
         </div>
       )}
@@ -144,10 +153,10 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 5l-7 7 7 7" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Back
+            Back to Staff List
           </button>
           <h1 className="text-3xl font-bold text-gray-900">Edit Staff</h1>
-          <p className="text-sm text-gray-500 mt-1">Update staff member details</p>
+          <p className="text-sm text-gray-500 mt-1">Update staff member information</p>
         </div>
 
         <form onSubmit={handleSubmit}>
@@ -159,23 +168,27 @@ export default function EditStaffPage({params}: {params:  Promise<{ id: string }
                 Personal Information
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <InputField label="Full Name" value={name} onChange={setName} placeholder="Enter full name" />
+                <InputField label="Full Name"   value={name}        onChange={setName}        placeholder="Enter full name" />
                 <InputField label="Designation" value={designation} onChange={setDesignation} placeholder="e.g. Sales Manager" />
-                <InputField label="Email" value={email} onChange={setEmail} type="email" placeholder="staff@company.com" />
-                <InputField label="Location" value={location} onChange={setLocation} placeholder="City / Branch" />
+                <InputField label="Email"       value={email}       onChange={setEmail}       type="email" placeholder="staff@company.com" />
+                <InputField label="Location"    value={location}    onChange={setLocation}    placeholder="City / Branch" />
               </div>
             </div>
 
-            {/* Account */}
+            {/* Account & Auth */}
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
               <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-5 pb-3 border-b border-gray-100">
-                Account Settings
+                Account &amp; Credentials
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <InputField label="Username" value={username} onChange={setUsername} placeholder="Login username" />
                 <InputField label="Password" value={password} onChange={setPassword} type="password" placeholder="Update password" />
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Role Type</label>
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                    Role Type
+                    <span className="text-orange-500 ml-0.5">*</span>
+                  </label>
                   <select
                     required
                     value={role}

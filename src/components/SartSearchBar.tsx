@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useSmartSearch, SearchResult } from "@/hooks/useSmartSearch";
 
-type Role = "admin" | "dealer" | "staff";
+type Role = "admin" | "dealer" | "staff" | "accountant";
 
 interface SmartSearchBarProps {
   role: Role;

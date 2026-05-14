@@ -6,42 +6,60 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, UserRoundPlus, Users, SquareUser,
   Plus, ClipboardList, Home, LogOut, Package, Images,
+  ShieldCheck, Gift, Receipt, TrendingUp, BookOpen,
 } from "lucide-react";
 
-type Role    = "admin" | "dealer" | "staff";
+type Role    = "admin" | "dealer" | "staff" | "accountant";
 type NavItem = { label: string; href: string; icon: React.ReactNode; section?: string };
 
 const NAV: Record<Role, NavItem[]> = {
   admin: [
-    { section: "Overview",  label: "Dashboard",     href: "/dashboard/admin",                          icon: <LayoutDashboard size={15} /> },
-    { section: "Dealers",   label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",        icon: <Users size={15} />           },
-    {                       label: "Add Dealer",     href: "/dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} />   },
-    { section: "Staff",     label: "Staff List",    href: "/dashboard/admin/staff/stafflist",          icon: <Users size={15} />           },
-    {                       label: "Add Staff",      href: "/dashboard/admin/staff/addstaff",           icon: <SquareUser size={15} />      },
-    { section: "Products",  label: "Products",      href: "/Pages/products",                           icon: <Package size={15} />         },
-    {                       label: "Add Product",    href: "/Pages/products/addproducts",               icon: <Plus size={15} />            },
-    { section: "Orders",    label: "Order List",    href: "/Pages/Ordermanagement",                    icon: <ClipboardList size={15} />   },
-    {                       label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",  icon: <ClipboardList size={15} />   },
-    { section: "Content",   label: "Slider Images", href: "/dashboard/admin/slider",                   icon: <Images size={15} />          },
-    { section: "Content",   label: "Hot Items", href: "/dashboard/admin/hot-items",                   icon: <Images size={15} />          },
+    { section: "Overview",    label: "Dashboard",          href: "/dashboard/admin",                                 icon: <LayoutDashboard size={15} /> },
+    { section: "Dealers",     label: "Dealer List",        href: "/dashboard/admin/dealer/DealerList",               icon: <Users size={15} />           },
+    {                         label: "Add Dealer",          href: "/dashboard/admin/dealer/AddDealerForm",            icon: <UserRoundPlus size={15} />   },
+    { section: "Staff",       label: "Staff List",         href: "/dashboard/admin/staff/stafflist",                 icon: <Users size={15} />           },
+    {                         label: "Add Staff",           href: "/dashboard/admin/staff/addstaff",                  icon: <SquareUser size={15} />      },
+    { section: "Products",    label: "Products",           href: "/Pages/products",                                  icon: <Package size={15} />         },
+    {                         label: "Add Product",         href: "/Pages/products/addproducts",                      icon: <Plus size={15} />            },
+    { section: "Orders",      label: "Order List",         href: "/Pages/Ordermanagement",                           icon: <ClipboardList size={15} />   },
+    {                         label: "Pending Orders",      href: "/Pages/Ordermanagement/outstandingorders",         icon: <ClipboardList size={15} />   },
+    { section: "Content",     label: "Slider Images",      href: "/dashboard/admin/slider",                          icon: <Images size={15} />          },
+    {                         label: "Hot Items",           href: "/dashboard/admin/hot-items",                       icon: <Images size={15} />          },
+    { section: "Accountants", label: "Manage Accountants", href: "/dashboard/admin/manageAccountants/add-account",   icon: <ShieldCheck size={15} />     },
+    { section: "Rewards",     label: "Dealer Rewards",     href: "/dashboard/admin/rewards",                         icon: <Gift size={15} />            },
   ],
   dealer: [
-    { section: "Home",     label: "Dashboard", href: "/dashboard/dealer",      icon: <Home size={15} />          },
-    { section: "Orders",   label: "My Order Status", href: "/Pages/Ordermanagement", icon: <ClipboardList size={15} /> },
-    { section: "Orders",   label: "My Order history", href: "/orders", icon: <ClipboardList size={15} /> },
-    {                      label: "Add Order",  href: "/dashboard/dealer/AddOrderForm",    icon: <Plus size={15} />          },
-    { section: "Products", label: "Products",  href: "/Pages/products",        icon: <Package size={15} />       },
+    { section: "Home",     label: "Dashboard",        href: "/dashboard/dealer",              icon: <Home size={15} />          },
+    { section: "Orders",   label: "My Order Status",  href: "/Pages/Ordermanagement",         icon: <ClipboardList size={15} /> },
+    {                      label: "My Order History",  href: "/orders",                        icon: <ClipboardList size={15} /> },
+    {                      label: "Add Order",         href: "/dashboard/dealer/AddOrderForm", icon: <Plus size={15} />          },
+    { section: "Products", label: "Products",         href: "/Pages/products",                icon: <Package size={15} />       },
   ],
   staff: [
-    { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                          icon: <LayoutDashboard size={15} /> },
-    { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                    icon: <ClipboardList size={15} />   },
-    {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",  icon: <ClipboardList size={15} />   },
+    { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                                icon: <LayoutDashboard size={15} /> },
+    { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
+    {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
+    { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },
+  ],
+  accountant: [
+    { section: "Overview",  label: "Dashboard",      href: "/dashboard/accountant",                         icon: <LayoutDashboard size={15} /> },
+    { section: "Orders",    label: "All Orders",     href: "/Pages/Ordermanagement",                        icon: <ClipboardList size={15} />   },
+    {                       label: "Pending Orders",  href: "/Pages/Ordermanagement/outstandingorders",      icon: <Receipt size={15} />         },
+    { section: "Finance",   label: "Order Book",     href: "/dashboard/accountant/order-book",              icon: <BookOpen size={15} />        },
+    {                       label: "Reports",        href: "/dashboard/accountant",                         icon: <TrendingUp size={15} />      },
+    { section: "Dealers",   label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",             icon: <Users size={15} />           },
   ],
 };
 
 function resolveUser() {
   if (typeof window === "undefined") return null;
   try {
+    // Accountant session takes priority when the token is present
+    const acctToken = localStorage.getItem("accountant_token");
+    if (acctToken) {
+      const acct = localStorage.getItem("AccountantData");
+      if (acct) { const p = JSON.parse(acct); return { role: "accountant" as Role, ...p }; }
+    }
     const d = localStorage.getItem("UserData");
     if (d) {
       const p = JSON.parse(d);
@@ -78,29 +96,44 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const role: Role = user?.role ?? "admin";
 
   const name =
-    role === "dealer" ? user?.Dealer_Name :
-    role === "staff"  ? user?.staff_name  :
+    role === "dealer"     ? user?.Dealer_Name :
+    role === "staff"      ? user?.staff_name  :
+    role === "accountant" ? user?.name        :
     user?.name ?? user?.username ?? "Administrator";
 
   const meta =
-    role === "dealer" ? (user?.Dealer_Email ?? user?.Dealer_Number ?? "") :
-    role === "staff"  ? (user?.staff_email ?? "") :
+    role === "dealer"     ? (user?.Dealer_Email ?? user?.Dealer_Number ?? "") :
+    role === "staff"      ? (user?.staff_email ?? "")                         :
+    role === "accountant" ? (user?.email ?? "")                               :
     (user?.email ?? "admin@omsons.com");
 
   const badge =
-    role === "dealer" ? user?.Dealer_Dealercode :
-    role === "staff"  ? staffRoleLabel(user?.staff_roletype) :
+    role === "dealer"     ? user?.Dealer_Dealercode          :
+    role === "staff"      ? staffRoleLabel(user?.staff_roletype) :
+    role === "accountant" ? "Accountant"                     :
     user?.role ?? "Administrator";
 
   const portal =
-    role === "admin"  ? "Admin Portal"  :
-    role === "dealer" ? "Dealer Portal" : "Staff Portal";
+    role === "admin"      ? "Admin Portal"      :
+    role === "dealer"     ? "Dealer Portal"     :
+    role === "accountant" ? "Finance Portal"    :
+    "Staff Portal";
 
-  const handleLogout = () => { localStorage.clear(); router.push("/auth/login"); };
+  const handleLogout = () => {
+    if (role === "accountant") {
+      localStorage.removeItem("accountant_token");
+      localStorage.removeItem("AccountantData");
+      localStorage.removeItem("roletype");
+      router.push("/auth/accountant-login");
+    } else {
+      localStorage.clear();
+      router.push("/auth/login");
+    }
+  };
 
   // Group nav by section
   const grouped: { section?: string; items: NavItem[] }[] = [];
-  NAV[role].forEach(item => {
+  (NAV[role] ?? NAV.admin).forEach(item => {
     if (item.section) {
       grouped.push({ section: item.section, items: [item] });
     } else {

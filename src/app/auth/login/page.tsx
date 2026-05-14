@@ -161,6 +161,23 @@ export default function Login() {
         >
           {loading ? "Signing in..." : "Continue"}
         </button>
+
+        <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800 text-center">
+          <p className="text-xs text-gray-400 mb-3">Signing in as an accountant?</p>
+          <button
+            type="button"
+            onClick={() => router.push("/auth/accountant-login")}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-sm border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white transition-all"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <rect x="2" y="7" width="20" height="14" rx="2"/>
+              <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+              <line x1="12" y1="12" x2="12" y2="16"/>
+              <line x1="10" y1="14" x2="14" y2="14"/>
+            </svg>
+            Accountant portal
+          </button>
+        </div>
       </form>
     </div>
   )

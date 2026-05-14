@@ -2,17 +2,11 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  fetchAllAccountants,
-  createAccountant,
-  updateAccountant,
-  deleteAccountant,
-} from "@/lib/accountantauth";
-import {
   UserPlus, Pencil, Trash2, X, Check, Eye, EyeOff,
   Users, Mail, Phone, ShieldCheck, Loader2, RefreshCw,
 } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 type Accountant = {
   _id: string;
   name: string;
@@ -29,81 +23,63 @@ type FormState = {
   phone: string;
 };
 
-const EMPTY_FORM: FormState = { name: "", email: "", password: "", phone: "" };
+const EMPTY: FormState = { name: "", email: "", password: "", phone: "" };
 
-// ─── Toast ────────────────────────────────────────────────────────────────────
+// ─── API helpers (plain fetch — no accountant token needed for admin) ─────────
+async function apiFetch(path: string, init?: RequestInit) {
+  const res  = await fetch(`/api${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || `Request failed (${res.status})`);
+  return json;
+}
+
+const api = {
+  list:   ()                              => apiFetch("/accountants"),
+  create: (body: FormState)              => apiFetch("/accountants",       { method: "POST",   body: JSON.stringify(body) }),
+  update: (id: string, body: Partial<FormState>) => apiFetch(`/accountants/${id}`, { method: "PUT",    body: JSON.stringify(body) }),
+  remove: (id: string)                   => apiFetch(`/accountants/${id}`, { method: "DELETE" }),
+};
+
+// ─── Toast ───────────────────────────────────────────────────────────────────
 function Toast({ type, text, onClose }: { type: "success" | "error"; text: string; onClose: () => void }) {
   useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
   return (
     <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-2xl text-[12.5px] font-semibold shadow-xl border ${
       type === "success" ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"
     }`}>
-      {type === "success"
-        ? <Check size={13} strokeWidth={2.5} />
-        : <X size={13} strokeWidth={2} />}
+      {type === "success" ? <Check size={13} strokeWidth={2.5}/> : <X size={13} strokeWidth={2}/>}
       {text}
       <button onClick={onClose} className="ml-1 opacity-50 hover:opacity-100"><X size={11}/></button>
     </div>
   );
 }
 
-// ─── Delete confirm modal ─────────────────────────────────────────────────────
-function ConfirmDelete({
-  name, onConfirm, onClose, loading,
-}: { name: string; onConfirm: () => void; onClose: () => void; loading: boolean }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(15,23,42,0.45)", backdropFilter: "blur(6px)" }}
-      onClick={e => { if (e.target === e.currentTarget && !loading) onClose(); }}
-    >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-        <div className="w-10 h-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mb-4">
-          <Trash2 size={16} className="text-red-500" />
-        </div>
-        <h3 className="text-[15px] font-bold text-gray-900">Delete accountant?</h3>
-        <p className="text-[13px] text-gray-500 mt-1.5">
-          <span className="font-semibold text-gray-700">{name}</span> will be permanently removed. This cannot be undone.
-        </p>
-        <div className="flex gap-2 mt-5">
-          <button onClick={onClose} disabled={loading}
-            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-[13px] font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors">
-            Cancel
-          </button>
-          <button onClick={onConfirm} disabled={loading}
-            className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[13px] font-semibold disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
-            {loading ? <Loader2 size={13} className="animate-spin"/> : <Trash2 size={13}/>}
-            {loading ? "Deleting…" : "Delete"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Field ────────────────────────────────────────────────────────────────────
+// ─── Field ───────────────────────────────────────────────────────────────────
 function Field({
   id, label, type = "text", value, onChange, error, placeholder, suffix, disabled,
 }: {
   id: string; label: string; type?: string; value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  error?: string; placeholder?: string;
-  suffix?: React.ReactNode;
-  disabled?: boolean;
+  error?: string; placeholder?: string; suffix?: React.ReactNode; disabled?: boolean;
 }) {
   return (
     <div>
-      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">{label}</label>
+      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">
+        {label}
+      </label>
       <div className="relative">
         <input
           id={id} type={type} value={value} onChange={onChange}
-          placeholder={placeholder}
-          disabled={disabled}
-          className={`w-full px-3.5 py-2.5 text-[13px] text-gray-900 border rounded-xl outline-none transition-all placeholder:text-gray-300 disabled:opacity-60 ${
-            error
+          placeholder={placeholder} disabled={disabled}
+          className={`w-full px-3.5 py-2.5 text-[13px] text-gray-900 border rounded-xl outline-none transition-all
+            placeholder:text-gray-300 disabled:opacity-60 bg-white
+            ${error
               ? "border-red-300 bg-red-50/30 focus:ring-2 focus:ring-red-100"
               : "border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-          } ${suffix ? "pr-10" : ""}`}
+            } ${suffix ? "pr-10" : ""}`}
         />
         {suffix && (
           <span className="absolute right-3 top-1/2 -translate-y-1/2">{suffix}</span>
@@ -114,21 +90,17 @@ function Field({
   );
 }
 
-// ─── Accountant Form Modal ────────────────────────────────────────────────────
+// ─── Modal ───────────────────────────────────────────────────────────────────
 function AccountantModal({
-  mode,
-  initial,
-  onSubmit,
-  onClose,
-  busy,
+  mode, initial, onSubmit, onClose, busy,
 }: {
   mode: "create" | "edit";
-  initial?: Partial<FormState & { _id: string }>;
+  initial?: Partial<FormState>;
   onSubmit: (data: FormState) => Promise<void>;
   onClose: () => void;
   busy: boolean;
 }) {
-  const [form, setForm]     = useState<FormState>({ ...EMPTY_FORM, ...initial });
+  const [form,   setForm]   = useState<FormState>({ ...EMPTY, ...initial });
   const [showPw, setShowPw] = useState(false);
   const [errors, setErrors] = useState<Partial<FormState>>({});
 
@@ -137,14 +109,16 @@ function AccountantModal({
     setErrors(er => ({ ...er, [key]: "" }));
   };
 
-  const validate = () => {
+  const validate = (): boolean => {
     const e: Partial<FormState> = {};
-    if (!form.name.trim())  e.name     = "Name is required";
-    if (!form.email.trim()) e.email    = "Email is required";
+    if (!form.name.trim())  e.name  = "Name is required";
+    if (!form.email.trim()) e.email = "Email is required";
     else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = "Invalid email";
-    if (mode === "create" && !form.password) e.password = "Password is required";
-    if (mode === "create" && form.password && form.password.length < 6) e.password = "Min 6 characters";
-    if (!form.phone.trim()) e.phone    = "Phone is required";
+    if (mode === "create") {
+      if (!form.password)          e.password = "Password is required";
+      else if (form.password.length < 6) e.password = "Min 6 characters";
+    }
+    if (!form.phone.trim()) e.phone = "Phone is required";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -166,7 +140,9 @@ function AccountantModal({
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
-              {mode === "create" ? <UserPlus size={15} className="text-indigo-600"/> : <Pencil size={15} className="text-indigo-600"/>}
+              {mode === "create"
+                ? <UserPlus size={15} className="text-indigo-600"/>
+                : <Pencil   size={15} className="text-indigo-600"/>}
             </div>
             <div>
               <h2 className="text-[14.5px] font-bold text-gray-900">
@@ -183,7 +159,7 @@ function AccountantModal({
           </button>
         </div>
 
-        {/* Body */}
+        {/* Form */}
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
           <Field id="name" label="Full Name" value={form.name} onChange={set("name")}
             error={errors.name} placeholder="e.g. Priya Sharma" disabled={busy} />
@@ -200,7 +176,7 @@ function AccountantModal({
             placeholder={mode === "create" ? "Min 6 characters" : "Leave blank to keep current"}
             disabled={busy}
             suffix={
-              <button type="button" onClick={() => setShowPw(v => !v)}
+              <button type="button" tabIndex={-1} onClick={() => setShowPw(v => !v)}
                 className="text-gray-400 hover:text-gray-600 transition-colors">
                 {showPw ? <EyeOff size={14}/> : <Eye size={14}/>}
               </button>
@@ -210,7 +186,6 @@ function AccountantModal({
           <Field id="phone" label="Phone" type="tel" value={form.phone} onChange={set("phone")}
             error={errors.phone} placeholder="+91 98765 43210" disabled={busy} />
 
-          {/* Actions */}
           <div className="flex gap-2 pt-2">
             <button type="button" onClick={onClose} disabled={busy}
               className="flex-1 py-2.5 border border-gray-200 rounded-xl text-[13px] font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors">
@@ -229,96 +204,121 @@ function AccountantModal({
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Confirm Delete ───────────────────────────────────────────────────────────
+function ConfirmDelete({ name, onConfirm, onClose, loading }: {
+  name: string; onConfirm: () => void; onClose: () => void; loading: boolean;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(15,23,42,0.45)", backdropFilter: "blur(6px)" }}
+      onClick={e => { if (e.target === e.currentTarget && !loading) onClose(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+        <div className="w-10 h-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center mb-4">
+          <Trash2 size={16} className="text-red-500"/>
+        </div>
+        <h3 className="text-[15px] font-bold text-gray-900">Delete accountant?</h3>
+        <p className="text-[13px] text-gray-500 mt-1.5">
+          <span className="font-semibold text-gray-700">{name}</span> will be permanently removed.
+        </p>
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose} disabled={loading}
+            className="flex-1 py-2.5 border border-gray-200 rounded-xl text-[13px] font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors">
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={loading}
+            className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[13px] font-semibold disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+            {loading ? <Loader2 size={13} className="animate-spin"/> : <Trash2 size={13}/>}
+            {loading ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function ManageAccountantsPage() {
-  const [accountants,  setAccountants]  = useState<Accountant[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [refreshing,   setRefreshing]   = useState(false);
-
-  // Modal state
-  const [modal,    setModal]    = useState<"create" | "edit" | null>(null);
-  const [editing,  setEditing]  = useState<Accountant | null>(null);
-  const [deleting, setDeleting] = useState<Accountant | null>(null);
-  const [busy,     setBusy]     = useState(false);
-
-  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [accountants, setAccountants] = useState<Accountant[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [modal,       setModal]       = useState<"create" | "edit" | null>(null);
+  const [editing,     setEditing]     = useState<Accountant | null>(null);
+  const [deleting,    setDeleting]    = useState<Accountant | null>(null);
+  const [busy,        setBusy]        = useState(false);
+  const [toast,       setToast]       = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const showToast = (type: "success" | "error", text: string) => setToast({ type, text });
 
-  // ── Fetch ──
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
     try {
-      const data = await fetchAllAccountants();
-      setAccountants(data || []);
-    } catch {
-      showToast("error", "Failed to load accountants");
+      const json = await api.list();
+      setAccountants(json.data ?? []);
+    } catch (e: any) {
+      showToast("error", e.message || "Failed to load accountants");
     } finally {
-      setLoading(false); setRefreshing(false);
+      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Create ──
   const handleCreate = async (form: FormState) => {
     setBusy(true);
     try {
-      await createAccountant(form);
-      showToast("success", "Accountant created successfully");
+      await api.create(form);
+      showToast("success", "Accountant created");
       setModal(null);
       load(true);
     } catch (e: any) {
-      showToast("error", e?.message || "Failed to create accountant");
+      showToast("error", e.message || "Failed to create accountant");
     } finally {
       setBusy(false);
     }
   };
 
-  // ── Update ──
   const handleUpdate = async (form: FormState) => {
     if (!editing) return;
     setBusy(true);
     try {
-      const payload: any = { name: form.name, email: form.email, phone: form.phone };
+      const payload: Partial<FormState> = {
+        name: form.name, email: form.email, phone: form.phone,
+      };
       if (form.password) payload.password = form.password;
-      await updateAccountant(editing._id, payload);
+      await api.update(editing._id, payload);
       showToast("success", "Accountant updated");
-      setModal(null); setEditing(null);
+      setModal(null);
+      setEditing(null);
       load(true);
     } catch (e: any) {
-      showToast("error", e?.message || "Failed to update");
+      showToast("error", e.message || "Failed to update accountant");
     } finally {
       setBusy(false);
     }
   };
 
-  // ── Delete ──
   const handleDelete = async () => {
     if (!deleting) return;
     setBusy(true);
     try {
-      await deleteAccountant(deleting._id);
+      await api.remove(deleting._id);
       showToast("success", `${deleting.name} deleted`);
       setDeleting(null);
       load(true);
     } catch (e: any) {
-      showToast("error", e?.message || "Failed to delete");
+      showToast("error", e.message || "Failed to delete");
     } finally {
       setBusy(false);
     }
   };
 
-  const openEdit = (a: Accountant) => {
-    setEditing(a);
-    setModal("edit");
-  };
-
-  // ─── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="px-6 py-6 max-w-5xl mx-auto" style={{ fontFamily: "'DM Sans', sans-serif" }}>
 
-      {/* ── Page header ── */}
+      {/* Header */}
       <div className="flex items-start justify-between mb-6 flex-wrap gap-4">
         <div>
           <h1 className="text-[22px] font-bold text-gray-900 flex items-center gap-2.5">
@@ -346,7 +346,7 @@ export default function ManageAccountantsPage() {
         </div>
       </div>
 
-      {/* ── Stats strip ── */}
+      {/* Stats */}
       <div className="flex items-center gap-3 mb-5 flex-wrap">
         <div className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-[12.5px] text-gray-600">
           <Users size={13} className="text-indigo-500"/>
@@ -354,11 +354,11 @@ export default function ManageAccountantsPage() {
         </div>
         <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-[12.5px] text-emerald-700">
           <ShieldCheck size={13}/>
-          <span>Active accounts: <strong>{accountants.length}</strong></span>
+          <span>Active: <strong>{accountants.length}</strong></span>
         </div>
       </div>
 
-      {/* ── Table ── */}
+      {/* Table */}
       <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400">
@@ -390,22 +390,18 @@ export default function ManageAccountantsPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {accountants.map((a, idx) => (
-                  <tr key={a._id} className="hover:bg-slate-50 transition-colors group">
-
-                    {/* # */}
+                  <tr key={a._id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-4 text-[12px] text-gray-400 font-mono">{String(idx + 1).padStart(2, "0")}</td>
 
-                    {/* Name */}
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0">
-                          {a.name?.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) || "AC"}
+                          {(a.name ?? "AC").split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)}
                         </div>
                         <span className="text-[13px] font-semibold text-gray-900">{a.name}</span>
                       </div>
                     </td>
 
-                    {/* Email */}
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-1.5 text-[12.5px] text-gray-600">
                         <Mail size={11} className="text-gray-300 flex-shrink-0"/>
@@ -413,7 +409,6 @@ export default function ManageAccountantsPage() {
                       </div>
                     </td>
 
-                    {/* Phone */}
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-1.5 text-[12.5px] text-gray-600">
                         <Phone size={11} className="text-gray-300 flex-shrink-0"/>
@@ -421,7 +416,6 @@ export default function ManageAccountantsPage() {
                       </div>
                     </td>
 
-                    {/* Role */}
                     <td className="px-5 py-4">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-indigo-50 border border-indigo-200 text-indigo-700">
                         <ShieldCheck size={10}/>
@@ -429,16 +423,16 @@ export default function ManageAccountantsPage() {
                       </span>
                     </td>
 
-                    {/* Created */}
                     <td className="px-5 py-4 text-[12px] text-gray-400 font-mono whitespace-nowrap">
-                      {a.createdAt ? new Date(a.createdAt).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" }) : "—"}
+                      {a.createdAt
+                        ? new Date(a.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                        : "—"}
                     </td>
 
-                    {/* Actions */}
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-1.5">
                         <button
-                          onClick={() => openEdit(a)}
+                          onClick={() => { setEditing(a); setModal("edit"); }}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11.5px] font-semibold bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-600 hover:text-indigo-700 rounded-lg transition-all shadow-sm"
                         >
                           <Pencil size={11}/> Edit
@@ -459,7 +453,7 @@ export default function ManageAccountantsPage() {
         )}
       </div>
 
-      {/* ── Modals ── */}
+      {/* Modals */}
       {modal === "create" && (
         <AccountantModal
           mode="create"

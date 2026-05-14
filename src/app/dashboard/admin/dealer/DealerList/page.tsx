@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Pencil, Trash2, Search } from 'lucide-react'
+import { Search, Trash2, BookOpen, Pencil, MoreVertical } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -35,6 +35,8 @@ type DealerResponse = {
   last_page: number
 }
 
+type AppRole = "admin" | "staff" | "accountant"
+
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
@@ -49,16 +51,35 @@ function statusBadge(s: string) {
     : { bg: "bg-red-50",     text: "text-red-600",     label: "Inactive" }
 }
 
+function getRole(): AppRole {
+  if (typeof window === "undefined") return "admin"
+  if (localStorage.getItem("accountant_token")) return "accountant"
+  const rt = localStorage.getItem("roletype")
+  if (rt === "1") return "staff"
+  return "admin"
+}
+
 export default function DealerListPage() {
   const router = useRouter()
 
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState("")
-  const [searchInput, setSearchInput] = useState("")
+  const [role,          setRole]          = useState<AppRole>("admin")
+  const [page,          setPage]          = useState(1)
+  const [search,        setSearch]        = useState("")
+  const [searchInput,   setSearchInput]   = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [openMenuId,    setOpenMenuId]    = useState<string | null>(null)
 
   const queryClient = useQueryClient()
+
+  useEffect(() => { setRole(getRole()) }, [])
+
+  // Close menu on outside click
+  useEffect(() => {
+    const handler = () => setOpenMenuId(null)
+    document.addEventListener("click", handler)
+    return () => document.removeEventListener("click", handler)
+  }, [])
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -70,9 +91,7 @@ export default function DealerListPage() {
   const { data: response, isLoading, isError, refetch } = useQuery<DealerResponse>({
     queryKey: ['dealers', page, search],
     queryFn: async () => {
-      const res = await fetch(
-        `${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`
-      )
+      const res = await fetch(`${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`)
       return res.json()
     },
     placeholderData: keepPreviousData,
@@ -96,9 +115,7 @@ export default function DealerListPage() {
     queryClient.prefetchQuery({
       queryKey: ['dealers', page + 1, search],
       queryFn: async () => {
-        const res = await fetch(
-          `${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`
-        )
+        const res = await fetch(`${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`)
         return res.json()
       },
     })
@@ -106,20 +123,17 @@ export default function DealerListPage() {
 
   // Debounced search
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setPage(1)
-      setSearch(searchInput)
-    }, 400)
+    const timer = setTimeout(() => { setPage(1); setSearch(searchInput) }, 400)
     return () => clearTimeout(timer)
   }, [searchInput])
 
   const handleDelete = async (id: string) => {
     try {
-      const formData = new FormData()
-      formData.append("id", id)
-      formData.append("tbl", "dealer_tbl")
-      formData.append("field", "Dealer_Id")
-      const res = await axios.post(`${BACKEND_URL}/delete`, formData)
+      const fd = new FormData()
+      fd.append("id", id)
+      fd.append("tbl", "dealer_tbl")
+      fd.append("field", "Dealer_Id")
+      const res = await axios.post(`${BACKEND_URL}/delete`, fd)
       setToastMsg({ text: res.data.msg || "Dealer deleted", type: 'success' })
       refetch()
     } catch {
@@ -150,16 +164,20 @@ export default function DealerListPage() {
   }
 
   const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
-  const endIndex = Math.min(page * ITEMS_PER_PAGE, total)
+  const endIndex   = Math.min(page * ITEMS_PER_PAGE, total)
 
   return (
     <div className="min-h-screen bg-gray-100">
 
       {/* Toast */}
       {toastMsg && (
-        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all ${
+        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all flex items-center gap-2 ${
           toastMsg.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'
         }`}>
+          {toastMsg.type === 'success'
+            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+          }
           {toastMsg.text}
         </div>
       )}
@@ -237,7 +255,7 @@ export default function DealerListPage() {
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Phone</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Password</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Actions</th>
+                  <th className="px-4 py-4 w-12" />
                 </tr>
               </thead>
 
@@ -264,7 +282,8 @@ export default function DealerListPage() {
 
                 {/* Rows */}
                 {!isLoading && data.map((dealer, i) => {
-                  const badge = statusBadge(dealer.status)
+                  const badge  = statusBadge(dealer.status)
+                  const isOpen = openMenuId === dealer.Dealer_Id
                   return (
                     <tr key={dealer.Dealer_Id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-4 text-gray-400 text-xs">{startIndex + i}</td>
@@ -285,7 +304,6 @@ export default function DealerListPage() {
                       </td>
 
                       <td className="px-4 py-4 text-gray-500 text-xs">{dealer.Dealer_Email || "—"}</td>
-
                       <td className="px-4 py-4 text-gray-600 text-xs">{dealer.Dealer_Number || "—"}</td>
 
                       <td className="px-4 py-4 font-mono text-xs text-gray-400 tracking-widest">
@@ -298,22 +316,65 @@ export default function DealerListPage() {
                         </span>
                       </td>
 
+                      {/* 3-dot action menu */}
                       <td className="px-4 py-4">
-                        <div className="flex items-center gap-2">
+                        <div className="relative flex justify-end">
                           <button
-                            onClick={() => router.push(`/Dashboard/admin/dealer/editdealer?id=${dealer.Dealer_Id}`)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setOpenMenuId(isOpen ? null : dealer.Dealer_Id)
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition"
+                            aria-label="Actions"
                           >
-                            <Pencil className="w-3 h-3" />
-                            Edit
+                            <MoreVertical className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => setDeleteConfirm(dealer.Dealer_Id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            Delete
-                          </button>
+
+                          {isOpen && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 top-8 z-20 bg-white rounded-xl border border-gray-200 shadow-xl py-1 min-w-[152px]"
+                            >
+                              {/* View Ledger — all roles */}
+                              <button
+                                onClick={() => {
+                                  router.push(`/dashboard/admin/dealer/${dealer.Dealer_Id}/ledger`)
+                                  setOpenMenuId(null)
+                                }}
+                                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
+                              >
+                                <BookOpen className="w-3.5 h-3.5 flex-shrink-0" />
+                                View Ledger
+                              </button>
+
+                              {/* Edit & Delete — staff only */}
+                              {role === "staff" && (
+                                <>
+                                  <div className="my-1 h-px bg-gray-100 mx-2" />
+                                  <button
+                                    onClick={() => {
+                                      router.push(`/dashboard/admin/dealer/${dealer.Dealer_Id}`)
+                                      setOpenMenuId(null)
+                                    }}
+                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-gray-50 text-left transition-colors"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5 flex-shrink-0" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setDeleteConfirm(dealer.Dealer_Id)
+                                      setOpenMenuId(null)
+                                    }}
+                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-red-600 hover:bg-red-50 text-left transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                    Delete
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>

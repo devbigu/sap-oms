@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter, useParams } from 'next/navigation'
 import axios from 'axios'
 
 type StaffOption = {
@@ -13,7 +13,7 @@ type StaffOption = {
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 
 function InputField({
-  label, value, onChange, type = "text", placeholder, required = true
+  label, value, onChange, type = "text", placeholder, required = true, hint,
 }: {
   label: string
   value: string
@@ -21,10 +21,14 @@ function InputField({
   type?: string
   placeholder?: string
   required?: boolean
+  hint?: string
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">{label}</label>
+      <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+        {label}
+        {required && <span className="text-orange-500 ml-0.5">*</span>}
+      </label>
       <input
         required={required}
         type={type}
@@ -33,37 +37,38 @@ function InputField({
         placeholder={placeholder || label}
         className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
       />
+      {hint && <p className="text-[11px] text-gray-400">{hint}</p>}
     </div>
   )
 }
 
 export default function EditDealerPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const id = searchParams.get("id")
+  const params = useParams()
+  const id     = params.id as string
 
-  const [isLoading, setIsLoading] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [isLoading,  setIsLoading]  = useState(false)
+  const [isSaving,   setIsSaving]   = useState(false)
+  const [toastMsg,   setToastMsg]   = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [staffOptions, setStaffOptions] = useState<StaffOption[]>([])
 
   // Form fields
-  const [name, setName] = useState("")
-  const [email, setEmail] = useState("")
-  const [city, setCity] = useState("")
-  const [pincode, setPincode] = useState("")
-  const [password, setPassword] = useState("")
-  const [dealercode, setDealercode] = useState("")
-  const [notes, setNotes] = useState("")
-  const [number, setNumber] = useState("")
-  const [address, setAddress] = useState("")
-  const [discount, setDiscount] = useState("")
-  const [gst, setGst] = useState("")
-  const [creditdays, setCreditdays] = useState("")
-  const [annualtarget, setAnnualtarget] = useState("")
-  const [currentlimit, setCurrentlimit] = useState("")
-  const [dealerid, setDealerid] = useState("")
-  const [staffname, setStaffname] = useState("")
+  const [name,           setName]           = useState("")
+  const [email,          setEmail]          = useState("")
+  const [number,         setNumber]         = useState("")
+  const [city,           setCity]           = useState("")
+  const [address,        setAddress]        = useState("")
+  const [pincode,        setPincode]        = useState("")
+  const [username,       setUsername]       = useState("")
+  const [password,       setPassword]       = useState("")
+  const [dealercode,     setDealercode]     = useState("")
+  const [gst,            setGst]            = useState("")
+  const [discount,       setDiscount]       = useState("")
+  const [creditdays,     setCreditdays]     = useState("")
+  const [annualtarget,   setAnnualtarget]   = useState("")
+  const [currentlimit,   setCurrentlimit]   = useState("")
+  const [notes,          setNotes]          = useState("")
+  const [dealerid,       setDealerid]       = useState("")
   const [assignedStaffIds, setAssignedStaffIds] = useState<string[]>([])
 
   // Toast auto-dismiss
@@ -73,12 +78,11 @@ export default function EditDealerPage() {
     return () => clearTimeout(t)
   }, [toastMsg])
 
-  // Fetch dealer data
   const fetchDealer = async () => {
     if (!id) return
     setIsLoading(true)
     try {
-      const res = await fetch(`${BACKEND_URL}/getdealer?id=${id}`, {
+      const res  = await fetch(`${BACKEND_URL}/getdealer?id=${id}`, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ type: 'type' }),
@@ -86,23 +90,25 @@ export default function EditDealerPage() {
       const json = await res.json()
       if (json.status) {
         const d = json.data
-        setName(d.Dealer_Name || "")
-        setEmail(d.Dealer_Email || "")
-        setNumber(d.Dealer_Number || "")
-        setCity(d.Dealer_City || "")
-        setPincode(d.Dealer_Pincode || "")
-        setAddress(d.Dealer_Address || "")
-        setDiscount(d.discount || "")
+        setName(d.Dealer_Name        || "")
+        setEmail(d.Dealer_Email       || "")
+        setNumber(d.Dealer_Number     || "")
+        setCity(d.Dealer_City         || "")
+        setPincode(d.Dealer_Pincode   || "")
+        setAddress(d.Dealer_Address   || "")
+        setUsername(d.Dealer_Username || "")
+        setDiscount(d.discount        || "")
         setPassword(d.Dealer_Password || "")
         setDealercode(d.Dealer_Dealercode || "")
-        setStaffname(d.staffname || "")
-        setGst(d.gst || "")
-        setCreditdays(d.creditdays || "")
-        setNotes(d.Dealer_Notes || "")
-        setDealerid(d.Dealer_Id || "")
+        setGst(d.gst                  || "")
+        setCreditdays(d.creditdays    || "")
+        setNotes(d.Dealer_Notes       || "")
+        setDealerid(d.Dealer_Id       || "")
         setAnnualtarget(d.annualtarget || "")
         setCurrentlimit(d.currentlimit || "")
-        setAssignedStaffIds(d.assignedstaff ? d.assignedstaff.split(',') : [])
+        setAssignedStaffIds(
+          d.assignedstaff ? d.assignedstaff.split(',').map((s: string) => s.trim()).filter(Boolean) : []
+        )
       } else {
         setToastMsg({ text: json.msz || "Failed to load dealer", type: 'error' })
       }
@@ -113,10 +119,9 @@ export default function EditDealerPage() {
     }
   }
 
-  // Fetch staff options for multi-select
   const fetchStaff = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/staffassign`)
+      const res  = await fetch(`${BACKEND_URL}/staffassign`)
       const json = await res.json()
       setStaffOptions(json.data || [])
     } catch {
@@ -130,34 +135,45 @@ export default function EditDealerPage() {
   }, [])
 
   const handleStaffSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = Array.from(e.target.selectedOptions, o => o.value)
-    setAssignedStaffIds(selected)
+    setAssignedStaffIds(Array.from(e.target.selectedOptions, o => o.value))
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Derive staffname string from current selection (matches what AddDealerForm does)
+  const getStaffNames = () =>
+    assignedStaffIds
+      .map(id => staffOptions.find(s => s.staff_id === id)?.staff_name ?? "")
+      .filter(Boolean)
+      .join(",")
+
+  const handleSubmit = async (e: { preventDefault(): void }) => {
     e.preventDefault()
+    if (!assignedStaffIds.length) {
+      setToastMsg({ text: "Please assign at least one staff member", type: 'error' })
+      return
+    }
     setIsSaving(true)
     try {
-      const formData = new FormData()
-      formData.append("Dealer_Name", name)
-      formData.append("Dealer_Email", email)
-      formData.append("Dealer_Number", number)
-      formData.append("Dealer_City", city)
-      formData.append("assignedstaff", assignedStaffIds.join(','))
-      formData.append("Dealer_Pincode", pincode)
-      formData.append("Dealer_Password", password)
-      formData.append("Dealer_Dealercode", dealercode)
-      formData.append("Dealer_Notes", notes)
-      formData.append("Dealer_Address", address)
-      formData.append("staffname", staffname)
-      formData.append("discount", discount)
-      formData.append("gst", gst)
-      formData.append("creditdays", creditdays)
-      formData.append("id", dealerid)
-      formData.append("annualtarget", annualtarget)
-      formData.append("currentlimit", currentlimit)
+      const fd = new FormData()
+      fd.append("Dealer_Name",      name)
+      fd.append("Dealer_Email",     email)
+      fd.append("Dealer_Number",    number)
+      fd.append("Dealer_City",      city)
+      fd.append("Dealer_Address",   address)
+      fd.append("Dealer_Pincode",   pincode)
+      fd.append("Dealer_Username",  username)
+      fd.append("Dealer_Password",  password)
+      fd.append("Dealer_Dealercode", dealercode)
+      fd.append("Dealer_Notes",     notes)
+      fd.append("assignedstaff",    assignedStaffIds.join(','))
+      fd.append("staffname",        getStaffNames())
+      fd.append("discount",         discount)
+      fd.append("gst",              gst)
+      fd.append("creditdays",       creditdays)
+      fd.append("annualtarget",     annualtarget)
+      fd.append("currentlimit",     currentlimit)
+      fd.append("id",               dealerid)
 
-      const res = await axios.post(`${BACKEND_URL}/updateDealer`, formData)
+      const res = await axios.post(`${BACKEND_URL}/updateDealer`, fd)
       setToastMsg({ text: res.data.msg || "Dealer updated successfully", type: 'success' })
     } catch {
       setToastMsg({ text: "Failed to update dealer", type: 'error' })
@@ -182,11 +198,13 @@ export default function EditDealerPage() {
 
       {/* Toast */}
       {toastMsg && (
-        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all ${
-          toastMsg.type === 'success'
-            ? 'bg-emerald-600 text-white'
-            : 'bg-red-500 text-white'
+        <div className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all flex items-center gap-2 ${
+          toastMsg.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'
         }`}>
+          {toastMsg.type === 'success'
+            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+          }
           {toastMsg.text}
         </div>
       )}
@@ -202,7 +220,7 @@ export default function EditDealerPage() {
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 5l-7 7 7 7" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Back
+            Back to Dealer List
           </button>
           <h1 className="text-3xl font-bold text-gray-900">Edit Dealer</h1>
           <p className="text-sm text-gray-500 mt-1">Update dealer information and settings</p>
@@ -217,24 +235,25 @@ export default function EditDealerPage() {
                 Basic Information
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <InputField label="Name" value={name} onChange={setName} />
-                <InputField label="Email Address" value={email} onChange={setEmail} type="email" />
-                <InputField label="Whatsapp Number" value={number} onChange={setNumber} type="number" />
-                <InputField label="City" value={city} onChange={setCity} />
-                <InputField label="Address" value={address} onChange={setAddress} />
-                <InputField label="Pin Code" value={pincode} onChange={setPincode} type="number" />
+                <InputField label="Name"             value={name}    onChange={setName}    placeholder="Full name" />
+                <InputField label="Email Address"    value={email}   onChange={setEmail}   type="email" placeholder="dealer@email.com" />
+                <InputField label="WhatsApp Number"  value={number}  onChange={setNumber}  type="number" placeholder="10-digit number" />
+                <InputField label="City"             value={city}    onChange={setCity}    placeholder="City / Location" />
+                <InputField label="Address"          value={address} onChange={setAddress} placeholder="Street address" />
+                <InputField label="Pin Code"         value={pincode} onChange={setPincode} type="number" placeholder="6-digit pin code" />
               </div>
             </div>
 
             {/* Account & Auth */}
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
               <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-5 pb-3 border-b border-gray-100">
-                Account & Auth
+                Account &amp; Credentials
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <InputField label="Dealer Code" value={dealercode} onChange={setDealercode} />
-                <InputField label="Password" value={password} onChange={setPassword} type="password" />
-                <InputField label="GST No." value={gst} onChange={setGst} />
+                <InputField label="Dealer Code" value={dealercode} onChange={setDealercode} placeholder="Unique dealer code" />
+                <InputField label="Username"    value={username}   onChange={setUsername}   placeholder="Login username" />
+                <InputField label="Password"    value={password}   onChange={setPassword}   type="password" placeholder="Set a password" />
+                <InputField label="GST No."     value={gst}        onChange={setGst}        placeholder="15-character GST number" />
               </div>
             </div>
 
@@ -244,10 +263,10 @@ export default function EditDealerPage() {
                 Financial Settings
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <InputField label="Discount %" value={discount} onChange={setDiscount} type="number" />
-                <InputField label="Credit Days" value={creditdays} onChange={setCreditdays} type="number" />
-                <InputField label="Annual Target" value={annualtarget} onChange={setAnnualtarget} type="number" />
-                <InputField label="Current Limit" value={currentlimit} onChange={setCurrentlimit} type="number" />
+                <InputField label="Discount %"     value={discount}     onChange={setDiscount}     type="number" placeholder="e.g. 10" />
+                <InputField label="Credit Days"    value={creditdays}   onChange={setCreditdays}   type="number" placeholder="e.g. 30" />
+                <InputField label="Annual Target"  value={annualtarget} onChange={setAnnualtarget} type="number" placeholder="Amount in ₹" />
+                <InputField label="Current Limit"  value={currentlimit} onChange={setCurrentlimit} type="number" placeholder="Credit limit in ₹" />
               </div>
             </div>
 
@@ -258,7 +277,9 @@ export default function EditDealerPage() {
               </h2>
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
-                  Assign Staff <span className="text-gray-400 normal-case font-normal">(hold Ctrl / Cmd to select multiple)</span>
+                  Assign Staff
+                  <span className="text-orange-500 ml-0.5">*</span>
+                  <span className="ml-2 text-gray-400 normal-case font-normal">(hold Ctrl / Cmd to select multiple)</span>
                 </label>
                 <select
                   multiple
@@ -272,13 +293,24 @@ export default function EditDealerPage() {
                     </option>
                   ))}
                 </select>
+
+                {/* Selected staff chips */}
                 {assignedStaffIds.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {assignedStaffIds.map(sid => {
                       const staff = staffOptions.find(s => s.staff_id === sid)
                       return staff ? (
-                        <span key={sid} className="bg-indigo-50 text-indigo-700 text-xs font-medium px-2.5 py-1 rounded-full">
+                        <span key={sid} className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs font-medium px-2.5 py-1 rounded-full border border-indigo-100">
                           {staff.staff_name}
+                          <button
+                            type="button"
+                            onClick={() => setAssignedStaffIds(prev => prev.filter(s => s !== sid))}
+                            className="text-indigo-400 hover:text-indigo-700 ml-0.5"
+                          >
+                            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                              <path d="M18 6 6 18M6 6l12 12"/>
+                            </svg>
+                          </button>
                         </span>
                       ) : null
                     })}
@@ -304,7 +336,7 @@ export default function EditDealerPage() {
               </div>
             </div>
 
-            {/* Submit */}
+            {/* Actions */}
             <div className="flex items-center justify-end gap-3 pb-6">
               <button
                 type="button"

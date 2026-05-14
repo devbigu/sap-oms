@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Pencil, Trash2, Download, Search, Users } from 'lucide-react'
+import { Pencil, Trash2, Download, Search, Users, Eye, EyeOff } from 'lucide-react'
 
 type StaffData = {
   staff_id: string
@@ -25,7 +25,7 @@ type StaffResponse = {
 
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 20
 
 function roleBadge(role: string) {
   switch (role) {
@@ -42,11 +42,12 @@ function initials(name: string) {
 export default function StaffListPage() {
   const router = useRouter()
 
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState("")
-  const [searchInput, setSearchInput] = useState("")
+  const [page,          setPage]          = useState(1)
+  const [search,        setSearch]        = useState("")
+  const [searchInput,   setSearchInput]   = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [showPasswords, setShowPasswords] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -58,10 +59,10 @@ export default function StaffListPage() {
   }, [toastMsg])
 
   const { data: response, isLoading, isError, refetch } = useQuery<StaffResponse>({
-    queryKey: ['stafflist', page, search, queryClient],
+    queryKey: ['stafflist', page, search],
     queryFn: async () => {
       const res = await axios.get(
-        `${BACKEND_URL}/staffpegination?page=${page}&search=${search}`
+        `${BACKEND_URL}/staffpegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}`
       )
       return res.data
     },
@@ -70,21 +71,22 @@ export default function StaffListPage() {
   })
 
   const data: StaffData[] = response?.data || []
-  const total = response?.count ?? 0
+  const total      = response?.count    ?? 0
   const totalPages = response?.last_page ?? 1
 
   // Prefetch next page
   useEffect(() => {
+    if (page >= totalPages) return
     queryClient.prefetchQuery({
       queryKey: ['stafflist', page + 1, search],
       queryFn: async () => {
         const res = await axios.get(
-          `${BACKEND_URL}/staffpegination?page=${page + 1}&search=${search}`
+          `${BACKEND_URL}/staffpegination?page=${page + 1}&limit=${ITEMS_PER_PAGE}&search=${search}`
         )
         return res.data
       },
     })
-  }, [page, search])
+  }, [page, search, totalPages, queryClient])
 
   // Debounced search
   useEffect(() => {
@@ -151,8 +153,8 @@ export default function StaffListPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const startIndex = (page - 1) * data.length + 1
-const endIndex = startIndex + data.length - 1
+  const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
+  const endIndex   = startIndex + data.length - 1
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -204,16 +206,33 @@ const endIndex = startIndex + data.length - 1
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Staff List</h1>
-              <p className="text-sm text-gray-500 mt-1">Manage all registered staff members</p>
+              <p className="text-sm text-gray-500 mt-1">
+                {total > 0 ? `${total} staff member${total !== 1 ? "s" : ""} total` : "Manage all registered staff members"}
+              </p>
             </div>
-            <button
-              onClick={handleDownloadCSV}
-              disabled={!data.length}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
-            >
-              <Download className="w-4 h-4" />
-              Export CSV
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Password visibility toggle */}
+              <button
+                onClick={() => setShowPasswords(v => !v)}
+                className={`flex items-center gap-2 px-4 py-2 text-sm border rounded-lg transition shadow-sm ${
+                  showPasswords
+                    ? "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+                    : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {showPasswords ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPasswords ? "Hide Passwords" : "Show Passwords"}
+              </button>
+
+              <button
+                onClick={handleDownloadCSV}
+                disabled={!data.length}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
+              >
+                <Download className="w-4 h-4" />
+                Export CSV
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -245,7 +264,16 @@ const endIndex = startIndex + data.length - 1
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Name</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Email</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Role</th>
-                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Password</th>
+                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                    <div className="flex items-center gap-2">
+                      Password
+                      {showPasswords && (
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold uppercase tracking-wider">
+                          Visible
+                        </span>
+                      )}
+                    </div>
+                  </th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
@@ -298,14 +326,17 @@ const endIndex = startIndex + data.length - 1
                         </span>
                       </td>
 
-                      <td className="px-4 py-4 font-mono text-xs text-gray-400 tracking-widest">
-                        ••••••••
+                      <td className="px-4 py-4 font-mono text-xs tracking-widest">
+                        {showPasswords
+                          ? <span className="text-gray-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-100 select-all">{staff.staff_password || "—"}</span>
+                          : <span className="text-gray-300">••••••••</span>
+                        }
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => router.push(`/Dashboard/admin/staff/${staff.staff_id}`)}
+                            onClick={() => router.push(`/dashboard/admin/staff/${staff.staff_id}`)}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
                           >
                             <Pencil className="w-3 h-3" />
@@ -330,7 +361,9 @@ const endIndex = startIndex + data.length - 1
           {/* Pagination */}
           <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100">
             <span className="text-xs text-gray-400">
-              {data.length > 0 ? `Showing ${startIndex}–${endIndex} of ${total}` : "No results"}
+              {data.length > 0
+                ? `Showing ${startIndex}–${endIndex} of ${total} staff`
+                : "No results"}
             </span>
             <div className="flex items-center gap-1">
               <button
@@ -361,8 +394,8 @@ const endIndex = startIndex + data.length - 1
 
               <button
                 onClick={() => handlePageChange(page + 1)}
-                
-                className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 transition"
+                disabled={page >= totalPages}
+                className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
                 Next →
               </button>

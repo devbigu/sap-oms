@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 const BASE_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
-type Role = "admin" | "dealer" | "staff";
+type Role = "admin" | "dealer" | "staff" | "accountant";
 
 export interface SearchResult {
   id: string | number;
@@ -36,6 +36,9 @@ const roleApiConfig: Record<Role, { endpoint: string; paramKey: string; idRequir
   staff: [
     { endpoint: "/orderhispegination", paramKey: "search", idRequired: true },
     { endpoint: "/pegination", paramKey: "search", idRequired: false },
+  ],
+  accountant: [
+    { endpoint: "/orderpegination", paramKey: "search", idRequired: false },
   ],
 };
 
@@ -77,6 +80,10 @@ const roleRouteMap: Record<Role, Record<string, string>> = {
     "add staff": "/Pages/staffmanagement/addstaff",
     invoices: "/orders",
     dashboard: "/dashboard/staff",
+  },
+  accountant: {
+    orders: "/dashboard/accountant",
+    dashboard: "/dashboard/accountant",
   },
 };
 

@@ -22,6 +22,19 @@ const PLACEHOLDER_IMAGE =
 
 const HOT_BADGES = ["🔥 Bestseller", "⚡ Fast moving", "🔥 Trending", "⚡ Popular", "🔥 Top rated", "⚡ Hot pick"];
 
+// ─── Hot items localStorage helper ───────────────────────────────────────────
+
+type StoredHotItem = { id: string; SKU: string; name: string; image: string; badge: string; active: boolean };
+
+function getStoredHotItems(): StoredHotItem[] {
+  try {
+    const raw = localStorage.getItem("hotItems");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface JsonProduct {
@@ -31,11 +44,11 @@ interface JsonProduct {
   Categories?: string[];
 }
 
-interface Product {
+interface HotItemDisplay {
   SKU: string;
   Name: string;
-  label?: string;
-  image?: string;
+  image: string;
+  badge: string;
 }
 
 type Order = {
@@ -173,7 +186,7 @@ function ProductCardSkeleton() {
 export default function Page() {
   const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
-  const [hotItems, setHotItems] = useState<JsonProduct[]>([]);
+  const [hotItems, setHotItems] = useState<HotItemDisplay[]>([]);
   const [hotLoading, setHotLoading] = useState(true);
   const [dealerId, setDealerId] = useState("225");
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
@@ -193,12 +206,50 @@ export default function Page() {
   }, []);
 
   // Fetch products for "Hot Right Now" section
+  // Priority: admin-managed localStorage hot items (with real images from products.json)
+  // Fallback: first 6 products that have images in products.json
   useEffect(() => {
     axios
       .get<JsonProduct[]>("/data/products.json")
       .then((res) => {
-        const withImages = res.data.filter((p) => p.Images?.length > 0).slice(0, 6);
-        setHotItems(withImages);
+        const allProducts = res.data;
+        // Build a SKU → image lookup from products.json
+        const imageMap = new Map<string, string>();
+        for (const p of allProducts) {
+          if (p.Images?.length) {
+            imageMap.set(String(p.SKU).trim(), p.Images[0]);
+          }
+        }
+
+        const adminItems = getStoredHotItems().filter((i) => i.active);
+
+        if (adminItems.length > 0) {
+          setHotItems(
+            adminItems.slice(0, 6).map((item) => ({
+              SKU:   item.SKU,
+              Name:  item.name,
+              badge: item.badge,
+              // Use real product image from products.json when available;
+              // fall back to admin-stored image only if it isn't the placeholder
+              image:
+                imageMap.get(item.SKU.trim()) ??
+                (item.image && item.image !== PLACEHOLDER_IMAGE ? item.image : ""),
+            }))
+          );
+        } else {
+          // No admin hot items configured → show first 6 products with images
+          setHotItems(
+            allProducts
+              .filter((p) => p.Images?.length > 0)
+              .slice(0, 6)
+              .map((p, i) => ({
+                SKU:   String(p.SKU),
+                Name:  p.Name,
+                image: p.Images[0],
+                badge: HOT_BADGES[i % HOT_BADGES.length],
+              }))
+          );
+        }
         setHotLoading(false);
       })
       .catch(() => setHotLoading(false));
@@ -326,8 +377,13 @@ export default function Page() {
             return (
               <div key={order.order_id}
                 className={`bg-white rounded-lg border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow ${isDeleted ? "opacity-60" : ""}`}>
-                <div className="bg-gray-50 flex items-center justify-center p-4 h-36">
-                  <img src={PLACEHOLDER_IMAGE} alt={`Order ${order.order_id}`} className="h-full object-contain" />
+                <div className="bg-gray-50 flex flex-col items-center justify-center p-4 h-36 gap-2">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.4" strokeLinecap="round">
+                    <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+                    <rect x="9" y="3" width="6" height="4" rx="1"/>
+                    <path d="M9 12h6M9 16h4"/>
+                  </svg>
+                  <span className="font-mono text-[11px] text-slate-400">OM/{year}/{order.order_id}</span>
                 </div>
                 <div className="p-3 flex flex-col gap-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -452,20 +508,25 @@ export default function Page() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           {hotLoading
             ? Array.from({ length: 6 }).map((_, i) => <ProductCardSkeleton key={i} />)
-            : hotItems.map((product, idx) => (
+            : hotItems.map((product) => (
             <button
               key={product.SKU}
-              onClick={() => goToProduct(String(product.SKU), product.Name, product.Images[0])}
+              onClick={() => goToProduct(product.SKU, product.Name, product.image || undefined)}
               className="group bg-white rounded-lg border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-all hover:-translate-y-0.5 text-left w-full"
             >
               <div className="relative bg-gray-50 flex items-center justify-center p-3 aspect-square">
-                <img
-                  src={product.Images[0]}
-                  alt={product.Name}
-                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
-                />
+                {product.image ? (
+                  <img
+                    src={product.image}
+                    alt={product.Name}
+                    className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                  />
+                ) : (
+                  <span className="text-4xl">📦</span>
+                )}
                 <span className="absolute top-2 left-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-500 text-white shadow-sm">
-                  {HOT_BADGES[idx % HOT_BADGES.length]}
+                  {product.badge}
                 </span>
               </div>
               <div className="p-2">

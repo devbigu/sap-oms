@@ -115,11 +115,10 @@ export default function DealerDashboard() {
         const fd = new FormData();
         fd.append("id", dealerId);  // ← was "dealer_id", endpoints expect "id"
 
-        // Run all three fetches in parallel
+        const API = "https://mirisoft.co.in/sas/dealerapi/api";
         const [ordersData, valuesData] = await Promise.allSettled([
-          safeFetch("https://localhost/dealerapi/api/getMonthlyreporttotalorderdealer", { method: "POST", body: fd }),
-          safeFetch("https://localhost/dealerapi/api/getMonthlyreporttotalvaluedealer", { method: "POST", body: fd }),
-          safeFetch(`https://localhost/dealerapi/api/getfunnel?id=${dealerId}`),
+          safeFetch(`${API}/getMonthlyreporttotalorderdealer`, { method: "POST", body: fd }),
+          safeFetch(`${API}/getMonthlyreporttotalvaluedealer`, { method: "POST", body: fd }),
         ]);
 
         if (ordersData.status === "fulfilled") {
