@@ -117,6 +117,8 @@ const Header = () => {
 
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [query, setQuery] = useState("")
+
+  
   const [allProducts, setAllProducts] = useState<Product[]>([])
   const [suggestions, setSuggestions] = useState<Product[]>([])
   const [showDropdown, setShowDropdown] = useState(false)
@@ -145,7 +147,7 @@ const Header = () => {
 
     let pool = allProducts
     if (selectedCategory !== "all") {
-      pool = pool.filter(p =>
+       pool = pool.filter(p =>
         p.Name.toLowerCase().includes(selectedCategory.toLowerCase()) ||
         (p.Description ?? "").toLowerCase().includes(selectedCategory.toLowerCase())
       )
@@ -202,8 +204,7 @@ const Header = () => {
     const q = query.trim()
     if (!q) return
     setShowDropdown(false)
-    router.push(`/Pages/products?q=${encodeURIComponent(q)}`)
-  }
+    router.push(`/Pages/products?q=${encodeURIComponent(q)}`)  }
 
   // ── Category change → store filter + navigate ───────────────
   const handleCategoryChange = (value: string) => {
@@ -387,7 +388,7 @@ function HighlightMatch({ text, query }: { text: string; query: string }) {
       {text.slice(0, idx)}
       <strong style={{ color: "#1e3a5f" }}>{text.slice(idx, idx + q.length)}</strong>
       {text.slice(idx + q.length)} 
-    </span>
+    </span> 
     
   )
 }

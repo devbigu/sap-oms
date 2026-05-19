@@ -6,7 +6,8 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import moment from "moment";
 import { ImageSlider } from "@/components/ImageSlider";
-import { bottleProducts, NAV_LINKS, CATEGORY_CARDS } from "@/Assets/dataset";
+import { bottleProducts, CATEGORY_CARDS } from "@/Assets/dataset";
+import { SIDEBAR_CATEGORIES } from "@/lib/categories";
 import Footer from "@/components/Footer";
 import Link from "next/link";
 import axios from "axios";
@@ -123,12 +124,12 @@ function SectionHeading({
   return (
     <div className="flex items-end justify-between mb-6">
       <div className="flex items-center gap-3">
-        <div>
+        <div> 
           <div className="flex items-center gap-2">
             <h2 className="text-xl font-bold text-slate-900 tracking-tight">{title} </h2>
             {badge && (
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-200">
-                {badge}
+                {badge} 
               </span>
             )}
           </div>
@@ -275,30 +276,65 @@ export default function Page() {
   return (
     <div className="w-full min-h-screen bg-gray-50 text-black">
 
-      {/* ── Top Nav ── */}
-      <nav className="bg-[#032e66] relative h-10 flex items-center text-white gap-4 text-sm w-full px-4">
-        <div className="flex items-center gap-2">
-          <GiHamburgerMenu className="h-5 w-5 cursor-pointer" onClick={() => setNavOpen(!navOpen)} />
-          <div className="hidden md:flex gap-1">
-            {NAV_LINKS.map((link) => (
-              <Link key={link.href} href={link.href}
-                className="rounded-md px-3 py-2 text-sm font-medium hover:bg-slate-800 transition-colors">
-                {link.label}
+      {/* ── Categories Nav ── */}
+      <nav className="bg-[#032e66] relative h-10 flex items-center text-white text-sm w-full px-4">
+        <button
+          onClick={() => setNavOpen(!navOpen)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-[#054080] transition-colors font-medium"
+        >
+          <GiHamburgerMenu className="h-4 w-4" />
+          All Categories
+          <svg
+            className="h-3 w-3 transition-transform duration-200"
+            style={{ transform: navOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+
+        {/* Backdrop */}
+        {navOpen && (
+          <div className="fixed inset-0 z-40" onClick={() => setNavOpen(false)} />
+        )}
+
+        {/* Dropdown panel */}
+        <div
+          className="absolute top-10 left-0 z-50 bg-white text-gray-800 shadow-2xl rounded-b-xl overflow-hidden"
+          style={{
+            width: 680,
+            maxHeight: navOpen ? 480 : 0,
+            opacity: navOpen ? 1 : 0,
+            transition: "max-height 0.25s ease, opacity 0.2s ease",
+            pointerEvents: navOpen ? "auto" : "none",
+          }}
+        >
+          <div className="p-4 overflow-y-auto" style={{ maxHeight: 480 }}>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 px-1">Browse by Category</p>
+            <div className="grid grid-cols-3 gap-1">
+              {Object.keys(SIDEBAR_CATEGORIES).map(label => (
+                <Link
+                  key={label}
+                  href={`/Products?cat=${encodeURIComponent(label)}`}
+                  onClick={() => setNavOpen(false)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                  {label}
+                </Link>
+              ))}
+            </div>
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <Link
+                href="/Products"
+                onClick={() => setNavOpen(false)}
+                className="flex items-center gap-2 px-3 py-2 text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+              >
+                View all products →
               </Link>
-            ))}
+            </div>
           </div>
         </div>
-        {navOpen && (
-          <div className="absolute top-10 left-0 py-4 px-2 z-50 w-48 bg-slate-900 text-white shadow-lg rounded-md flex flex-col gap-1 lg:hidden ml-2 mt-2">
-            {NAV_LINKS.map((link) => (
-              <Link key={link.href} href={link.href}
-                className="px-4 py-2 text-sm hover:bg-slate-800 transition-colors rounded-md"
-                onClick={() => setNavOpen(false)}>
-                {link.label}
-              </Link>
-            ))}
-          </div>
-        )}
       </nav>
 
       {/* ── Hero Slider ── */}
@@ -317,25 +353,25 @@ export default function Page() {
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           {CATEGORY_CARDS.map((cat: any) => (
-              <div key={cat.title}
-                className="bg-white rounded-lg shadow-sm border border-gray-100 p-4 flex flex-col hover:shadow-md transition-shadow">
-                <h3 className="text-base font-bold text-slate-800 mb-3">{cat.title}</h3>
-                <div className="grid grid-cols-2 gap-2 flex-1">
-                  {cat.items.map((item: { label: string; imageUrl: string }) => (
-                    <a key={item.label} href={cat.link} className="group">
-                      <img src={item.imageUrl} alt={item.label} loading="lazy"
-                        className="w-full aspect-square object-cover rounded group-hover:opacity-90 transition-opacity" />
-                      <span className="text-[11px] mt-1 block text-slate-600 leading-tight line-clamp-2">
-                        {item.label}
-                      </span>
-                    </a>
-                  ))}
-                </div>
-                <Link href={"/Products"}
-                  className="mt-4 text-sm font-medium text-slate-700 hover:text-slate-900 hover:underline transition-colors">
-                  See all →
-                </Link>
+            <Link key={cat.title} href={cat.link}
+              className="bg-white rounded-lg shadow-sm border border-gray-100 p-4 flex flex-col hover:shadow-md hover:border-indigo-200 transition-all group"
+              style={{ textDecoration: "none" }}>
+              <h3 className="text-base font-bold text-slate-800 mb-3 group-hover:text-indigo-700 transition-colors">{cat.title}</h3>
+              <div className="grid grid-cols-2 gap-2 flex-1">
+                {cat.items.map((item: { label: string; imageUrl: string }) => (
+                  <div key={item.label}>
+                    <img src={item.imageUrl} alt={item.label} loading="lazy"
+                      className="w-full aspect-square object-cover rounded group-hover:opacity-90 transition-opacity" />
+                    <span className="text-[11px] mt-1 block text-slate-600 leading-tight line-clamp-2">
+                      {item.label}
+                    </span>
+                  </div>
+                ))}
               </div>
+              <span className="mt-4 text-sm font-medium text-indigo-600 group-hover:text-indigo-800 group-hover:underline transition-colors">
+                See all →
+              </span>
+            </Link>
           ))}
         </div>
       </section>

@@ -106,11 +106,14 @@ export default function CartPage() {
     }
   };
 
-  const subtotalPaise = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
   const totalPacks    = cart.reduce((acc, item) => acc + item.quantity, 0);
-  const totalUnits    = cart.reduce((acc, item) => {
+  const totalPcs      = cart.reduce((acc, item) => {
     const ps = lookup[item.id]?.packSize ?? item.packSize ?? 1;
     return acc + item.quantity * ps;
+  }, 0);
+  const subtotalPaise = cart.reduce((acc, item) => {
+    const ps = lookup[item.id]?.packSize ?? item.packSize ?? 1;
+    return acc + item.price * item.quantity * ps;
   }, 0);
 
   const handleRemove = (id: string) => {
@@ -120,33 +123,45 @@ export default function CartPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#f0f2f5", fontFamily: "'DM Sans', sans-serif" }}>
-
+      
       {/* ── Breadcrumb bar ── */}
       <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "10px 24px", display: "flex", alignItems: "center", gap: 8 }}>
         <Link href="/Pages/products" style={{ fontSize: 13, color: "#6366f1", textDecoration: "none", fontWeight: 500 }}>
           Products
         </Link>
+
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+
         <span style={{ fontSize: 13, color: "#374151", fontWeight: 500 }}>Shopping Cart</span>
         {cart.length > 0 && (
           <span style={{ marginLeft: 4, fontSize: 12, color: "#6b7280" }}>
             ({cart.length} item{cart.length !== 1 ? "s" : ""})
           </span>
         )}
+
+        <button
+          onClick={() => router.back()}
+          style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600, color: "#fff", background: "#6A5ACD", border: "none", borderRadius: 20, padding: "6px 16px", cursor: "pointer" }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          Back
+        </button>
       </div>
 
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 20px", display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, alignItems: "start" }}>
+
 
         {/* ── Cart Items Panel ─────────────────────────────────────── */}
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 20, overflow: "hidden" }}>
 
           {/* Panel header */}
           <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            
             <div>
               <h1 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: 0 }}>Shopping Cart</h1>
               {cart.length > 0 && (
                 <p style={{ fontSize: 12, color: "#9ca3af", marginTop: 3, marginBottom: 0 }}>
-                  {totalPacks} pack{totalPacks !== 1 ? "s" : ""} · {totalUnits} unit{totalUnits !== 1 ? "s" : ""}
+                  {totalPacks} pack{totalPacks !== 1 ? "s" : ""} · {totalPcs} Pcs.
                 </p>
               )}
             </div>
@@ -187,8 +202,8 @@ export default function CartPage() {
             {cart.map((item, idx) => {
               const meta       = lookup[item.id];
               const packSize   = meta?.packSize ?? item.packSize ?? 1;
-              const lineTotal  = item.price * item.quantity;
-              const unitCount  = item.quantity * packSize;
+              const lineTotal  = item.price * item.quantity * packSize;
+              const pcsCount   = item.quantity * packSize;
               const nameParts  = item.name.split(" - ");
               const prodName   = nameParts[0] ?? item.name;
               const varCode    = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
@@ -265,7 +280,7 @@ export default function CartPage() {
 
                     {packSize > 1 && (
                       <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, fontFamily: "monospace" }}>
-                        {item.quantity} pack{item.quantity !== 1 ? "s" : ""} × {packSize} units = {unitCount} units total
+                        {item.quantity} pack{item.quantity !== 1 ? "s" : ""} × {packSize} Pcs. = {pcsCount} Pcs. total
                       </p>
                     )}
                   </div>
@@ -276,11 +291,11 @@ export default function CartPage() {
                       {fmt(lineTotal)}
                     </p>
                     {item.quantity > 1 && (
-                      <p style={{ fontSize: 11, color: "#9ca3af" }}>{fmt(item.price)} / pack</p>
+                      <p style={{ fontSize: 11, color: "#9ca3af" }}>{fmt(item.price * packSize)} / pack</p>
                     )}
                     {packSize > 1 && (
                       <p style={{ fontSize: 11, color: "#9ca3af" }}>
-                        {fmt(Math.round(item.price / packSize))} / unit
+                        {fmt(item.price)} / Pc.
                       </p>
                     )}
                   </div>
@@ -317,8 +332,8 @@ export default function CartPage() {
                 <span style={{ fontWeight: 600 }}>{totalPacks}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#374151" }}>
-                <span>Total Units</span>
-                <span style={{ fontWeight: 600 }}>{totalUnits}</span>
+                <span>Total Pcs.</span>
+                <span style={{ fontWeight: 600 }}>{totalPcs}</span>
               </div>
               <div style={{ height: 1, background: "#f3f4f6", margin: "4px 0" }} />
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, color: "#111827" }}>

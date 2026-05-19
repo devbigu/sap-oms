@@ -83,7 +83,7 @@ export const CATEGORY_CARDS = [
       { label: "Bottle Aspirator GL 45 Cap with Tubulation", imageUrl: "https://omsonslabs.com/wp-content/uploads/Bottle-Aspirator-GL-45-Cap-with-Tubulation-product-image.webp" },
       { label: "Bottle Aspirator with GL 45 Cap with Socket & Interchangeable Stopcock ", imageUrl: "https://omsonslabs.com/wp-content/uploads/Bottle-Aspirator-with-GL-45-Cap-with-Socket-Interchangeable-Stopcock.webp" },
     ],
-    link: "#",
+    link: "/Products?cat=Bottles",
   },
   {
     title: "Flask",
@@ -93,7 +93,7 @@ export const CATEGORY_CARDS = [
       { label: "Flask Iodine with Funnel Shaped Cup and Stopper ", imageUrl: "https://omsonslabs.com/wp-content/uploads/147-1024x1024.jpg" },
       { label: "Flask Kjeldahl with Socket ", imageUrl: "https://omsonslabs.com/wp-content/uploads/139-1024x1024.jpg" },
     ],
-    link: "#",
+    link: "/Products?cat=Flasks",
   },
   {
     title: "Syringe filters",
@@ -103,7 +103,7 @@ export const CATEGORY_CARDS = [
       { label: "Double Layered Syringe Filters Hydrophilic PTFE Non Sterile ", imageUrl: "https://omsonslabs.com/wp-content/uploads/Double-Layered-Syringe-Filters-Hydrophilic-PTFE-Non-Sterile.webp" },
       { label: "Double Layered Syringe Filters Hydrophobic PTFE Sterile ", imageUrl: "https://omsonslabs.com/wp-content/uploads/Double-Layered-Syringe-Filters-Hydrophobic-PTFE-Sterile.webp" },
     ],
-    link: "#",
+    link: "/Products?cat=Filters",
   },
   {
     title: "Membrane Filters",
@@ -113,7 +113,7 @@ export const CATEGORY_CARDS = [
       { label: "Ultrafiltration Membrane Filter (UF) Non Sterile ", imageUrl: "https://omsonslabs.com/wp-content/uploads/CN-Membrane-Disc-Filter-Plain-Hydrophobic-Edge-Sterile.webp" },
       { label: "Glass Fiber Membrane Disc Filter ", imageUrl: "https://omsonslabs.com/wp-content/uploads/PES-Membrane-Disc-Filter.webp" },
     ],
-    link: "#",
+    link: "/Products?cat=Filters",
   },
 ];
 

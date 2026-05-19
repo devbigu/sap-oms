@@ -8,16 +8,18 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast, ToastContainer } from "react-toastify";
 import moment from "moment";
+import { type OrderDraft } from "@/lib/drafts";
 import {
-  getDrafts,
-  deleteDraft,
-  renameDraft,
-  type OrderDraft,
-} from "@/lib/drafts";
+  useDrafts,
+  useDeleteDraft,
+  useRenameDraft,
+  prefetchDraft,
+} from "@/lib/useDrafts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -40,17 +42,15 @@ function draftTotal(draft: OrderDraft): number {
 
 export default function DraftsPage() {
   const router = useRouter();
-  const [user,    setUser]    = useState<any>(null);
-  const [drafts,  setDrafts]  = useState<OrderDraft[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const [user, setUser] = useState<any>(null);
 
   // inline rename
   const [renamingId,  setRenamingId]  = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameRef = useRef<HTMLInputElement>(null);
 
-  // ── auth + load ─────────────────────────────────────────────────────────
+  // ── auth ────────────────────────────────────────────────────────────────
   useEffect(() => {
     const stored   = localStorage.getItem("UserData");
     const loggedIn = localStorage.getItem("status");
@@ -58,36 +58,24 @@ export default function DraftsPage() {
       router.push("/login");
       return;
     }
-    const u = JSON.parse(stored);
-    setUser(u);
-    fetchDrafts(u.Dealer_Id);
+    setUser(JSON.parse(stored));
   }, []);
 
-  const fetchDrafts = useCallback(async (dealerId: string) => {
-    setLoading(true);
-    try {
-      const data = await getDrafts(dealerId);
-      setDrafts(data);
-    } catch {
-      toast.error("Failed to load drafts.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // ── React Query hooks ──────────────────────────────────────────────────
+  const { data: drafts = [], isLoading: loading } = useDrafts(user?.Dealer_Id);
+  const deleteMutation = useDeleteDraft();
+  const renameMutation = useRenameDraft();
 
   // ── delete ──────────────────────────────────────────────────────────────
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this draft? This cannot be undone.")) return;
-    setDeleting(id);
-    try {
-      await deleteDraft(id, user.Dealer_Id);
-      setDrafts((prev) => prev.filter((d) => d.id !== id));
-      toast.success("Draft deleted.");
-    } catch {
-      toast.error("Could not delete draft.");
-    } finally {
-      setDeleting(null);
-    }
+    deleteMutation.mutate(
+      { id, dealerId: user.Dealer_Id },
+      {
+        onSuccess: () => toast.success("Draft deleted."),
+        onError:   () => toast.error("Could not delete draft."),
+      }
+    );
   };
 
   // ── rename ──────────────────────────────────────────────────────────────
@@ -100,16 +88,13 @@ export default function DraftsPage() {
   const commitRename = async (id: string) => {
     const trimmed = renameValue.trim();
     if (!trimmed) { setRenamingId(null); return; }
-    try {
-      await renameDraft(id, user.Dealer_Id, trimmed);
-      setDrafts((prev) =>
-        prev.map((d) => (d.id === id ? { ...d, name: trimmed } : d))
-      );
-    } catch {
-      toast.error("Rename failed.");
-    } finally {
-      setRenamingId(null);
-    }
+    renameMutation.mutate(
+      { id, dealerId: user.Dealer_Id, name: trimmed },
+      {
+        onError:   () => toast.error("Rename failed."),
+        onSettled: () => setRenamingId(null),
+      }
+    );
   };
 
   // ── open draft in order page ────────────────────────────────────────────
@@ -192,7 +177,7 @@ export default function DraftsPage() {
             {drafts.map((draft) => {
               const total      = draftTotal(draft);
               const productQty = draft.rows.filter((r) => r.productname).length;
-              const isDeleting = deleting === draft.id;
+              const isDeleting = deleteMutation.isPending && deleteMutation.variables?.id === draft.id;
               const isRenaming = renamingId === draft.id;
 
               return (
@@ -312,9 +297,10 @@ export default function DraftsPage() {
                       </p>
 
                       <div className="flex items-center gap-2">
-                        {/* Open / Continue */}
+                        {/* Open / Continue — prefetch on hover */}
                         <button
                           onClick={() => openDraft(draft.id)}
+                          onMouseEnter={() => prefetchDraft(queryClient, user.Dealer_Id, draft.id)}
                           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[12px] font-semibold transition-colors cursor-pointer border-none"
                         >
                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">

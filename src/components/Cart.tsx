@@ -99,7 +99,7 @@ export default function Cart() {
 
           {/* ── Cart Items ── */}
           <div className="flex-1 w-full bg-white border border-gray-300 rounded px-2 py-2">
-
+            
             {/* Header */}
             <div className="flex justify-between items-center border-b border-gray-200 pb-3 mb-0">
               <h2 className="text-xl font-normal p-1 text-[#0F1111]">Shopping Cart</h2>

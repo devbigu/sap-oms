@@ -14,6 +14,7 @@ import {
   getDraftById,
   type DraftProductRow,
 } from "@/lib/drafts";
+import { useDraft } from "@/lib/useDrafts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type ProductRow = {
@@ -153,25 +154,34 @@ function AddOrderPageInner() {
     });
   }, [user]);
 
-  // ── Load draft from ?draft=<id> ───────────────────────────────────────────
+  // ── Load draft from ?draft=<id> (via React Query cache) ────────────────────
+  const { data: cachedDraft, isError: draftError } = useDraft(
+    user?.Dealer_Id,
+    draftIdParam
+  );
+
   useEffect(() => {
     if (!draftIdParam || !user || products.length === 0) return;
     if (seededRef.current) return;
+    if (!cachedDraft && !draftError) return;        // still loading
+
     seededRef.current = true;
 
-    getDraftById(draftIdParam, user.Dealer_Id).then((draft) => {
-      if (!draft) { toast.error("Draft not found or does not belong to your account."); return; }
-      setActiveDraftId(draft.id);
-      setDraftName(draft.name);
-      if (draft.shipto)  setShipto(draft.shipto);
-      if (draft.refno)   setRefno(draft.refno);
-      if (draft.coupon_code && draft.coupon_pct) {
-        setAppliedCoupon({ code: draft.coupon_code, pct: draft.coupon_pct });
-      }
-      setArr(draft.rows.length > 0 ? draft.rows : [emptyRow()]);
-      setDraftBanner(`Loaded: "${draft.name}"`);
-    }).catch(() => toast.error("Could not load draft."));
-  }, [draftIdParam, user, products]);
+    if (draftError || !cachedDraft) {
+      toast.error("Draft not found or does not belong to your account.");
+      return;
+    }
+
+    setActiveDraftId(cachedDraft.id);
+    setDraftName(cachedDraft.name);
+    if (cachedDraft.shipto)  setShipto(cachedDraft.shipto);
+    if (cachedDraft.refno)   setRefno(cachedDraft.refno);
+    if (cachedDraft.coupon_code && cachedDraft.coupon_pct) {
+      setAppliedCoupon({ code: cachedDraft.coupon_code, pct: cachedDraft.coupon_pct });
+    }
+    setArr(cachedDraft.rows.length > 0 ? cachedDraft.rows : [emptyRow()]);
+    setDraftBanner(`Loaded: "${cachedDraft.name}"`);
+  }, [draftIdParam, user, products, cachedDraft, draftError]);
 
   // ── Seed rows from DraftCart (when navigated from Cart page) ─────────────
   useEffect(() => {
@@ -697,7 +707,7 @@ function AddOrderPageInner() {
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 min-w-[260px]">Product</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Cat. No / Variant</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-32">Quantity</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-36">Pack → Units</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-36">Pack → Pcs.</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">List Price</th>
                     <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-28 ${appliedCoupon ? "text-violet-500" : "text-gray-400"}`}>
                       Discount ({activeDiscount}%)
@@ -778,12 +788,12 @@ function AddOrderPageInner() {
                               </span>
                               <span className="text-gray-300 text-xs">=</span>
                               <span className="inline-flex items-center px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded text-[11px] font-bold font-mono">
-                                {totalUnits} units 
+                                {totalUnits} pcs. 
                               </span>
                             </div>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 bg-gray-50 border border-gray-200 text-gray-500 rounded text-[11px] font-mono">
-                              {totalUnits} unit{totalUnits !== 1 ? "s" : ""}
+                              {totalUnits} pc{totalUnits !== 1 ? "s." : "."}
                             </span>
                           )}
                         </td>
@@ -792,7 +802,7 @@ function AddOrderPageInner() {
                             {listPrice > 0 ? fmt(listPrice) : "—"} 
                           </span>
                           {listPrice > 0 && (
-                            <p className="text-[10px] text-gray-400 mt-0.5">{row.producQuanity} packs × {row.packSize} units × ₹{row.price}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{totalUnits} pcs. × ₹{row.price}</p>
                           )}
                         </td>
                         <td className="px-3 py-3">
@@ -839,7 +849,7 @@ function AddOrderPageInner() {
               <div>
                 <p className="text-[13px] text-gray-500">Order Total</p>
                 <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
-                  {arr1.reduce((a, r) => a + r.producQuanity, 0)} packs ·{" "}
+                  {arr1.reduce((a, r) => a + r.producQuanity * r.packSize, 0)} pcs. ·{" "}
                   {arr1.filter(r => r.productname).length} product{arr1.filter(r => r.productname).length !== 1 ? "s" : ""}
                   {appliedCoupon && <span className="ml-2 text-violet-600 font-semibold">· {appliedCoupon.code} applied</span>}
                 </p>

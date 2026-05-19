@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, BookOpen, Pencil, MoreVertical } from 'lucide-react'
+import { Search, Trash2, BookOpen, Pencil, MoreVertical, Eye } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -290,7 +290,7 @@ export default function DealerListPage() {
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold shrink-0">
                             {initials(dealer.Dealer_Name)}
                           </div>
                           <span className="font-medium text-gray-800">{dealer.Dealer_Name || "—"}</span>
@@ -343,13 +343,24 @@ export default function DealerListPage() {
                                 }}
                                 className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
                               >
-                                <BookOpen className="w-3.5 h-3.5 flex-shrink-0" />
+                                <BookOpen className="w-3.5 h-3.5 shrink-0" />
                                 View Ledger
                               </button>
 
-                              {/* Edit & Delete — staff only */}
+                              {/* View & Edit & Delete — staff only */}
                               {role === "staff" && (
                                 <>
+                                  <div className="my-1 h-px bg-gray-100 mx-2" />
+                                  <button
+                                    onClick={() => {
+                                      router.push(`/dashboard/staff/dealer/${dealer.Dealer_Id}`)
+                                      setOpenMenuId(null)
+                                    }}
+                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
+                                  >
+                                    <Eye className="w-3.5 h-3.5 shrink-0" />
+                                    View
+                                  </button>
                                   <div className="my-1 h-px bg-gray-100 mx-2" />
                                   <button
                                     onClick={() => {
@@ -358,7 +369,7 @@ export default function DealerListPage() {
                                     }}
                                     className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-gray-50 text-left transition-colors"
                                   >
-                                    <Pencil className="w-3.5 h-3.5 flex-shrink-0" />
+                                    <Pencil className="w-3.5 h-3.5 shrink-0" />
                                     Edit
                                   </button>
                                   <button
@@ -368,7 +379,7 @@ export default function DealerListPage() {
                                     }}
                                     className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-red-600 hover:bg-red-50 text-left transition-colors"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
                                     Delete
                                   </button>
                                 </>

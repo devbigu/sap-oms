@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, UserRoundPlus, Users, SquareUser,
   Plus, ClipboardList, Home, LogOut, Package, Images,
-  ShieldCheck, Gift, Receipt, TrendingUp, BookOpen,
+  ShieldCheck, Gift, Receipt, TrendingUp, BookOpen, FileText,
 } from "lucide-react";
 
 type Role    = "admin" | "dealer" | "staff" | "accountant";
@@ -33,6 +33,7 @@ const NAV: Record<Role, NavItem[]> = {
     { section: "Orders",   label: "My Order Status",  href: "/Pages/Ordermanagement",         icon: <ClipboardList size={15} /> },
     {                      label: "My Order History",  href: "/orders",                        icon: <ClipboardList size={15} /> },
     {                      label: "Add Order",         href: "/dashboard/dealer/AddOrderForm", icon: <Plus size={15} />          },
+    {                      label: "Saved Drafts",      href: "/drafts",                        icon: <FileText size={15} />      },
     { section: "Products", label: "Products",         href: "/Pages/products",                icon: <Package size={15} />       },
   ],
   staff: [

@@ -2,70 +2,46 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import axios from 'axios';
+import { Suspense } from 'react';
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
 type Variant = {
-  SKU: string;
-  Name: string;
-  "Regular price": number | null;
-  "Sale price": number | null;
-  "In stock": boolean;
-  "Attribute value": string;
+  id: string;
+  sku: string;
+  slug: string;
+  name: string;
+  specs: Record<string, string>;
+  specsText: string;
+  pack: number;
+  price: number;      // rupees
+  priceLabel: string;
+  inStock: boolean;
+  images: string[];
 };
 
 type Product = {
-  SKU: number | string;
-  Name: string;
-  Description: string;
-  "Short description": string;
-  Categories: string[];
-  Brands: string | null;
-  Images: string[];
-  "Regular price": number | null;
-  "Sale price": number | null;
-  "In stock": boolean;
-  Stock: number | null;
+  id: string;
+  sku: string;
+  slug: string;
+  name: string;
+  category: string;
+  categories: string[];
+  page: number;
+  features: string[];
+  descriptionHtml: string;
+  images: string[];
   variants?: Variant[];
 };
 
 // ─────────────────────────────────────────────────────────────
-// SIDEBAR CATEGORIES — exact strings from the JSON data
+// SIDEBAR CATEGORIES — sourced from shared lib
 // ─────────────────────────────────────────────────────────────
-export const SIDEBAR_CATEGORIES: Record<string, string[]> = {
-  "Adapters":           ["Laboratory Glassware > Adapters"],
-  "Distillation":       ["Laboratory Glassware > Distillations"],
-  "Flasks":             ["Laboratory Glassware > Flasks", "Laboratory Glassware > Flasks > Flask Conical", "Laboratory Glassware > Flasks > Round Bottom Flask", "Laboratory Glassware > Volumetric Flask"],
-  "Bottles":            ["Laboratory Glassware > Bottles", "Laboratory Glassware > Reagent Bottles"],
-  "Burettes":           ["Laboratory Glassware > Burettes"],
-  "Pipettes":           ["Laboratory Glassware > Pipettes"],
-  "Funnels":            ["Laboratory Glassware > Funnels"],
-  "Cylinders":          ["Laboratory Glassware > Cylinders"],
-  "Beakers":            ["Laboratory Glassware > Beakers"],
-  "Tubes":              ["Laboratory Glassware > Tubes", "Laboratory Glassware > Tubes > Culture Media"],
-  "Condensers":         ["Laboratory Glassware > Condensers"],
-  "Columns":            ["Laboratory Glassware > Columns"],
-  "Viscometers":        ["Laboratory Glassware > Viscometers"],
-  "Crucibles":          ["Laboratory Glassware > Crucibles"],
-  "Desiccators":        ["Laboratory Glassware > Dessicators"],
-  "Joints & Stopcocks": ["Laboratory Glassware > Joints", "Laboratory Glassware > Stopcock", "Laboratory Glassware > Stopper"],
-  "Dishes":             ["Laboratory Glassware > Dishes"],
-  "Extraction":         ["Laboratory Glassware > Extraction Apparatus"],
-  "Kjeldahl":           ["Laboratory Glassware > Kjeldahl Apparatus"],
-  "Hydrometers":        ["Hydrometers", "Hydrometers > Petroleum Testing", "Hydrometers > Specific Gravity", "Hydrometers > Brix (°Bx)", "Hydrometers > Alcoholometer", "Hydrometers > Density Hydrometers", "Hydrometers > Lactometer", "Hydrometers > Baume (°Be)", "Hydrometers > API Scale Hydrometers", "Hydrometers > Twaddle", "Hydrometers > Soil Glass", "Hydrometers > Sikes(°SK)", "Hydrometers > Brass Baume", "Hydrometers > Wine Testing Kit", "Hydrometers > Brass Brix", "Hydrometers > Plato Scale", "Hydrometers > Hydrometer Cylinder"],
-  "Thermometers":       ["Thermometers"],
-  "Hygrometers":        ["Hygrometers"],
-  "Rubberware":         ["Rubberware"],
-  "Plasticware":        ["Plasticware"],
-  "Metalware":          ["Metalware"],
-  "Brushes":            ["Brushes"],
-  "Lab Instruments":    ["Laboratory Instruments"],
-  "Education":          ["Education Supplies", "Education Supplies > Spectrum Utilities"],
-  "Filters":            ["Filters & Membrane"],
-  "Liquid Handling":    ["Liquid Handling"],
-};
+import { SIDEBAR_CATEGORIES } from '@/lib/categories';
+export { SIDEBAR_CATEGORIES };
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -73,55 +49,30 @@ export const SIDEBAR_CATEGORIES: Record<string, string[]> = {
 
 function matchesSidebarCat(product: Product, label: string): boolean {
   const exactCats = SIDEBAR_CATEGORIES[label] ?? [];
-  return (product.Categories ?? []).some(c => exactCats.includes(c));
+  return (product.categories ?? []).some(c => exactCats.includes(c));
 }
 
 function countForSidebarCat(products: Product[], label: string): number {
   return products.filter(p => matchesSidebarCat(p, label)).length;
 }
 
-/** Get the first product image (real .webp from omsonslabs.com). No dummy fallback. */
-/** Get the first product image (real .webp from omsonslabs.com). */
 function getProductImage(product: Product): string | null {
-  return (product.Images ?? []).find(img => typeof img === "string" && img.length > 0) ?? null;
+  return (product.images ?? []).find(img => typeof img === "string" && img.length > 0) ?? null;
 }
 
-/**
- * Prices are on variants only, in paise.
- * 10000 paise = ₹100.00 (price per pack as listed in PACK OF column).
- */
+// Returns prices in paise (×100) so fmt() stays consistent throughout the app.
 function getLowestPrice(product: Product): { regular: number | null; sale: number | null } {
   const vs = product.variants ?? [];
-  const regulars = vs.map(v => v["Regular price"]).filter((p): p is number => p !== null);
-  const sales    = vs.map(v => v["Sale price"]).filter((p): p is number => p !== null);
+  const prices = vs.map(v => v.price * 100).filter(p => p > 0);
   return {
-    regular: regulars.length ? Math.min(...regulars) : null,
-    sale:    sales.length    ? Math.min(...sales)    : null,
+    regular: prices.length ? Math.min(...prices) : null,
+    sale:    null,
   };
 }
 
-/**
- * Parse the PACK OF value from the description HTML table for the first variant.
- * Returns pack size as a number (e.g. 10), or 1 if not found.
- */
+// Pack size is stored directly on each variant in the new JSON.
 function getFirstPackSize(product: Product): number {
-  const desc = product.Description ?? "";
-  const theadMatch = desc.match(/<thead>([\s\S]*?)<\/thead>/i);
-  if (!theadMatch) return 1;
-  const headers = [...theadMatch[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
-    .map(m => m[1].replace(/<[^>]*>/g, '').trim());
-  const packIdx = headers.findIndex(h => /pack|qty|quantity/i.test(h));
-  if (packIdx === -1) return 1;
-
-  const tbodyMatch = desc.match(/<tbody>([\s\S]*?)<\/tbody>/i);
-  if (!tbodyMatch) return 1;
-  const firstRowMatch = tbodyMatch[1].match(/<tr>([\s\S]*?)<\/tr>/i);
-  if (!firstRowMatch) return 1;
-  const cells = [...firstRowMatch[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
-    .map(m => m[1].replace(/<[^>]*>/g, '').trim());
-  const packStr = cells[packIdx] ?? "1";
-  const num = parseInt(packStr, 10);
-  return isNaN(num) ? 1 : num;
+  return product.variants?.[0]?.pack ?? 1;
 }
 
 /** Format paise → ₹ rupees string */
@@ -129,11 +80,9 @@ function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function parseBullets(html: string): string[] {
-  if (!html) return [];
-  return [...html.matchAll(/<li>([\s\S]*?)<\/li>/gi)]
-    .map(m => m[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').trim())
-    .filter(Boolean);
+// features is already a plain string array in the new JSON — no HTML parsing needed.
+function parseBullets(features: string[]): string[] {
+  return features ?? [];
 }
 
 const PAGE_SIZE = 24;
@@ -152,12 +101,13 @@ function ProductCard({ product }: { product: Product }) {
     : null;
 
   const variantCount = product.variants?.length ?? 0;
-  const leafCat = product.Categories?.[0]?.split(">").pop()?.trim() ?? "";
-  const bullet = parseBullets(product["Short description"])[0] ?? "";
+  const leafCat = product.category ?? "";
+  const bullet = parseBullets(product.features)[0] ?? "";
   const multiVariant = variantCount > 1;
+  const inStock = product.variants?.some(v => v.inStock) ?? false;
 
   return (
-    <Link href={`/Products/${product.SKU}`} style={{ textDecoration: "none", display: "block", height: "100%" }}>
+    <Link href={`/Products/${product.sku}`} style={{ textDecoration: "none", display: "block", height: "100%" }}>
       <article
         style={{
           background: "#fff", borderRadius: 10, border: "1px solid #e8edf3",
@@ -172,7 +122,7 @@ function ProductCard({ product }: { product: Product }) {
          {img ? (
   <img
     src={img}
-    alt={product.Name}
+    alt={product.name}
     style={{ width: "100%", height: "100%", objectFit: "contain", padding: "12px" }}
     loading="lazy"
     onError={e => {
@@ -198,7 +148,7 @@ function ProductCard({ product }: { product: Product }) {
           {sale !== null && (
             <span style={{ position: "absolute", top: 8, left: 8, background: "#ef4444", color: "#fff", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>SALE</span>
           )}
-          {!product["In stock"] && (
+          {!inStock && (
             <span style={{ position: "absolute", top: 8, right: 8, background: "#94a3b8", color: "#fff", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>OUT OF STOCK</span>
           )}
         </div>
@@ -212,7 +162,7 @@ function ProductCard({ product }: { product: Product }) {
           )}
 
           <h3 style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", lineHeight: 1.4, margin: 0 }}>
-            {product.Name}
+            {product.name}
           </h3>
 
           {bullet && (
@@ -222,7 +172,7 @@ function ProductCard({ product }: { product: Product }) {
           )}
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10.5, color: "#94a3b8" }}>SKU: {product.SKU}</span>
+            <span style={{ fontSize: 10.5, color: "#94a3b8" }}>SKU: {product.sku}</span>
             {multiVariant && <span style={{ fontSize: 10.5, color: "#64748b" }}>{variantCount} variants</span>}
           </div>
 
@@ -281,18 +231,23 @@ function CategoryRow({ label, count, checked, onChange }: { label: string; count
 // ─────────────────────────────────────────────────────────────
 // PAGE
 // ─────────────────────────────────────────────────────────────
-export default function ProductsPage() {
+function ProductsContent() {
+  const searchParams = useSearchParams();
+
   const [allData, setAllData]             = useState<Product[]>([]);
   const [loading, setLoading]             = useState(true);
   const [currentPage, setCurrentPage]     = useState(1);
   const [sortBy, setSortBy]               = useState("default");
   const [searchQuery, setSearchQuery]     = useState("");
-  const [selectedCats, setSelectedCats]   = useState<string[]>([]);
+  const [selectedCats, setSelectedCats]   = useState<string[]>(() => {
+    const cat = searchParams.get("cat");
+    return cat && SIDEBAR_CATEGORIES[cat] ? [cat] : [];
+  });
   const [inStockOnly, setInStockOnly]     = useState(false);
   const [catExpanded, setCatExpanded]     = useState(true);
 
   useEffect(() => {
-    axios.get("/data/products.json")
+    axios.get("/data/nested_omsons_products.json")
       .then(res => { setAllData(res.data); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -301,14 +256,14 @@ export default function ProductsPage() {
     let d = [...allData];
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      d = d.filter(p => p.Name.toLowerCase().includes(q) || String(p.SKU).includes(q) || (p.Categories ?? []).some(c => c.toLowerCase().includes(q)));
+      d = d.filter(p => p.name.toLowerCase().includes(q) || p.sku.includes(q) || (p.categories ?? []).some(c => c.toLowerCase().includes(q)));
     }
     if (selectedCats.length > 0) d = d.filter(p => selectedCats.some(cat => matchesSidebarCat(p, cat)));
-    if (inStockOnly) d = d.filter(p => p["In stock"]);
+    if (inStockOnly) d = d.filter(p => p.variants?.some(v => v.inStock) ?? false);
     if (sortBy === "price_asc")  d.sort((a, b) => (getLowestPrice(a).regular ?? Infinity) - (getLowestPrice(b).regular ?? Infinity));
     if (sortBy === "price_desc") d.sort((a, b) => (getLowestPrice(b).regular ?? 0) - (getLowestPrice(a).regular ?? 0));
-    if (sortBy === "name_asc")   d.sort((a, b) => a.Name.localeCompare(b.Name));
-    if (sortBy === "name_desc")  d.sort((a, b) => b.Name.localeCompare(a.Name));
+    if (sortBy === "name_asc")   d.sort((a, b) => a.name.localeCompare(b.name));
+    if (sortBy === "name_desc")  d.sort((a, b) => b.name.localeCompare(a.name));
     return d;
   }, [allData, selectedCats, sortBy, searchQuery, inStockOnly]);
 
@@ -342,6 +297,13 @@ export default function ProductsPage() {
       <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "14px 0" }}>
         <div style={{ maxWidth: 1360, margin: "0 auto", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
           <div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
+              <Link href="/" style={{ color: "#64748b", textDecoration: "none" }}>Home</Link>
+              <span style={{ margin: "0 6px" }}>/</span>
+              <Link href="/categories" style={{ color: "#64748b", textDecoration: "none" }}>Categories</Link>
+              <span style={{ margin: "0 6px" }}>/</span>
+              <span style={{ color: "#0f172a" }}>All Products</span>
+            </div>
             <h1 style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", margin: 0 }}>All Products</h1>
             {!loading && <p style={{ fontSize: 12, color: "#94a3b8", margin: "2px 0 0" }}>{filtered.length.toLocaleString()} products</p>}
           </div>
@@ -439,7 +401,7 @@ export default function ProductsPage() {
 
           {!loading && displayed.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-              {displayed.map(p => <ProductCard key={p.SKU} product={p} />)}
+              {displayed.map(p => <ProductCard key={p.sku} product={p} />)}
             </div>
           )}
 
@@ -468,5 +430,14 @@ function PBtn({ children, onClick, disabled = false, active = false }: { childre
       color: active ? "#fff" : disabled ? "#cbd5e1" : "#0f172a",
       fontWeight: active ? 700 : 400, opacity: disabled ? 0.4 : 1,
     }}>{children}</button>
+  );
+}
+
+// Add this after the PBtn function
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={<div style={{ textAlign: "center", padding: "80px 0", color: "#94a3b8" }}>Loading…</div>}>
+      <ProductsContent />
+    </Suspense>
   );
 }
