@@ -72,6 +72,7 @@ export default function Cart() {
   const increment = useCartStore((s) => s.incrementQty);
   const decrement = useCartStore((s) => s.decrementQty);
   const remove    = useCartStore((s) => s.removeFromCart);
+  const togglePriority = useCartStore((s) => s.togglePriority);
   const clearCart = useCartStore((s) => s.clearCart);
   const router    = useRouter();
 
@@ -85,7 +86,10 @@ export default function Cart() {
   }, []);
 
   // Prices are in paise; quantity = number of packs
-  const subtotalPaise = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
+  const subtotalPaise = cart.reduce((acc, item) => {
+  const ps = lookup[item.id]?.packSize ?? item.packSize ?? 1;
+  return acc + item.price * item.quantity * ps; // ✅ multiplied by packSize
+}, 0);
   const totalPacks    = cart.reduce((acc, item) => acc + item.quantity, 0);
   const totalUnits    = cart.reduce((acc, item) => {
     const ps = lookup[item.id]?.packSize ?? item.packSize ?? 1;
@@ -125,7 +129,7 @@ export default function Cart() {
                   const meta      = lookup[item.id];
                   const packSize  = meta?.packSize ?? item.packSize ?? 1;
                   const unitPrice = item.price;                        // paise per pack
-                  const lineTotal = unitPrice * item.quantity;         // paise total
+                  const lineTotal = unitPrice * item.quantity * packSize;         // paise total
                   const totalUnitCount = item.quantity * packSize;
 
                   // Split name: "Adapters Reduction - 163/1" → ["Adapters Reduction", "163/1"]
@@ -174,6 +178,11 @@ export default function Cart() {
                               Pack of {packSize}
                             </span>
                           )}
+                          {item.isPriority && (
+                            <span className="inline-flex items-center px-2 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded text-[11px] font-bold">
+                              Priority
+                            </span>
+                          )}
                         </div>
 
                         {/* Quantity controls */}
@@ -196,6 +205,17 @@ export default function Cart() {
                             onClick={() => remove(item.id)}
                             className="text-sm text-[#de0000] hover:text-[#C7511F] hover:underline"
                           >Delete</button>
+                          <button
+                            onClick={() => togglePriority(item.id)}
+                            className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                              item.isPriority
+                                ? "bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                            }`}
+                            title="Mark this product as priority"
+                          >
+                            {item.isPriority ? "Priority on" : "Priority"}
+                          </button>
                         </div>
 
                         {/* Pack × units breakdown */}

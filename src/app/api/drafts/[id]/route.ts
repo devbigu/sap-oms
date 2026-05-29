@@ -51,7 +51,7 @@ export async function PUT(
 
   try {
     const body = await req.json();
-    const { dealer_id, name, rows, shipto, refno, coupon_code, coupon_pct } = body;
+    const { dealer_id, name, rows, shipto, refno, order_note, coupon_code, coupon_pct } = body;
 
     if (!dealer_id)
       return NextResponse.json({ success: false, message: "dealer_id required" }, { status: 400 });
@@ -61,6 +61,7 @@ export async function PUT(
     if (rows        !== undefined) set.rows        = rows;
     if (shipto      !== undefined) set.shipto      = shipto;
     if (refno       !== undefined) set.refno       = refno;
+    if (order_note  !== undefined) set.order_note  = order_note;
     if (coupon_code !== undefined) set.coupon_code = coupon_code;
     if (coupon_pct  !== undefined) set.coupon_pct  = coupon_pct;
 

@@ -365,14 +365,14 @@ export default function AdminDashboard() {
 
                   <div key={stat.key} className="stat-card">
                     <div className="stat-lbl">{stat.label}</div>
-                    <div className="stat-val">{loading ? "—" : value}</div>
+                    <div className="font-sans font-bold">{loading ? "—" : value}</div>
                     <div className={`stat-badge ${badgeClass}`}>{value.toLocaleString("en-IN")}</div>
                   </div>
 
                 );
               })}
               <div className="stat-card"><div className="stat-lbl">Today's Sale</div>
-                <div className="stat-val">₹0</div>
+                <div className="font-sans font-bold">₹0</div>
                 <div className="stat-badge badge-green">0</div></div>
             </div>
 

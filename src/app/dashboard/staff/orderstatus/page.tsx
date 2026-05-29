@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Download, Search, Package } from 'lucide-react'
+import { hasPriorityTag } from '@/lib/orderPriority'
 
 type OrderItem = {
   orderdata_id: string
@@ -17,6 +18,10 @@ type OrderItem = {
   orderdata_afterDisPrice: string
   orderdata_totalprice: string
   remark: string
+  remarks?: string
+  priority?: string | boolean
+  isPriority?: string | boolean
+  is_priority?: string | boolean
   orderdata_status: string
   orderdata_datetime: string
   orderdata_orderid: string
@@ -129,7 +134,7 @@ export default function DispatchStatusPage() {
     if (!data.length) return
     const headers = [
       "S.No.", "Order ID", "Cat. No.", "Description", "Quantity",
-      "Price", "Discount", "After Discount", "Total Price", "Remark", "Status", "Date/Time"
+      "Priority", "Price", "Discount", "After Discount", "Total Price", "Remark", "Status", "Date/Time"
     ]
     const rows = data.map((o, i) => [
       (page - 1) * ITEMS_PER_PAGE + i + 1,
@@ -137,6 +142,7 @@ export default function DispatchStatusPage() {
       o.orderdata_cat_no,
       o.order_item_description,
       o.orderdata_item_quantity,
+      hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks) ? "Priority" : "",
       o.orderdata_price,
       o.orderdata_discount,
       o.orderdata_afterDisPrice,
@@ -208,6 +214,7 @@ export default function DispatchStatusPage() {
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Cat. No.</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Description</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Qty</th>
+                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Priority</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Price</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Discount</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">After Disc.</th>
@@ -222,7 +229,7 @@ export default function DispatchStatusPage() {
                 {/* Shimmer */}
                 {isLoading && Array.from({ length: ITEMS_PER_PAGE }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 12 }).map((_, j) => (
+                    {Array.from({ length: 13 }).map((_, j) => (
                       <td key={j} className="px-4 py-4">
                         <div className={`${SHIMMER} h-4 w-full`} />
                       </td>
@@ -233,7 +240,7 @@ export default function DispatchStatusPage() {
                 {/* Empty */}
                 {!isLoading && data.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-6 py-16 text-center">
+                    <td colSpan={13} className="px-6 py-16 text-center">
                       <div className="flex flex-col items-center gap-2 text-gray-400">
                         <Package className="w-8 h-8" />
                         <span className="text-sm">No order items found</span>
@@ -245,6 +252,7 @@ export default function DispatchStatusPage() {
                 {/* Rows */}
                 {!isLoading && data.map((item, i) => {
                   const badge = statusBadge(item.orderdata_status)
+                  const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks)
                   return (
                     <tr key={item.orderdata_id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-4 text-gray-400 text-xs">{startIndex + i}</td>
@@ -267,6 +275,16 @@ export default function DispatchStatusPage() {
 
                       <td className="px-4 py-4 text-gray-600 text-xs text-center">
                         {item.orderdata_item_quantity || "—"}
+                      </td>
+
+                      <td className="px-4 py-4">
+                        {isPriority ? (
+                          <span className="bg-red-50 text-red-700 border border-red-200 text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap">
+                            Priority
+                          </span>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
                       </td>
 
                       <td className="px-4 py-4 text-gray-600 text-xs">

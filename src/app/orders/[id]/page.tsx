@@ -4,6 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import moment from "moment";
 import * as XLSX from "xlsx";
+import { hasPriorityTag } from "@/lib/orderPriority";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -20,6 +21,13 @@ type OrderData = {
   product_discription: string;
   product_unit: string;
   readyquantity: string;
+  remark?: string;
+  remarks?: string;
+  order_note?: string;
+  note?: string;
+  priority?: string | boolean;
+  isPriority?: string | boolean;
+  is_priority?: string | boolean;
   discount: string;
   order_discount: string;
   del_status: string;
@@ -79,6 +87,18 @@ function StatusPill({ code }: { code: string }) {
       {s.label}
     </span>
   );
+}
+
+function extractOrderNote(orders: OrderData[], overlayNote: string) {
+  if (overlayNote.trim()) return overlayNote.trim();
+  for (const order of orders) {
+    const direct = order.order_note || order.note;
+    if (direct?.trim()) return direct.trim();
+    const remarks = [order.remark, order.remarks].filter(Boolean).join(" | ");
+    const fromRemark = remarks.match(/Order note:\s*([^|]+)/i)?.[1]?.trim();
+    if (fromRemark) return fromRemark;
+  }
+  return "";
 }
 
 // ─── Tracking Modal ────────────────────────────────────────────────────────────
@@ -192,10 +212,11 @@ function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode
 // ─── Card View ─────────────────────────────────────────────────────────────────
 function ItemCard({ o, idx, year, onTrack }: { o: OrderData; idx: number; year: number; onTrack: () => void }) {
   const left    = Number(o.orderdata_item_quantity) - Number(o.readyquantity || 0);
-  const gross   = Number(o.orderdata_price) * Number(o.orderdata_item_quantity);
+  const gross   = Number(o.orderdata_price);
   const isDeleted = o.del_status === "1";
   const pct     = Number(o.orderdata_item_quantity) > 0
     ? Math.round((Number(o.readyquantity || 0) / Number(o.orderdata_item_quantity)) * 100) : 0;
+  const isPriority = hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks);
 
   return (
     <div className={`bg-white border border-gray-200 rounded-2xl p-5 flex flex-col gap-4 hover:border-gray-300 hover:shadow-md transition-all ${isDeleted ? "opacity-50" : ""}`}>
@@ -204,6 +225,11 @@ function ItemCard({ o, idx, year, onTrack }: { o: OrderData; idx: number; year: 
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[10px] font-bold text-gray-400 font-mono">#{String(idx + 1).padStart(2, "0")}</span>
             <span className="text-[10px] font-bold text-amber-700 font-mono bg-amber-50 px-2 py-0.5 rounded-full">{o.orderdata_cat_no || "—"}</span>
+            {isPriority && (
+              <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+                Priority
+              </span>
+            )}
           </div>
           <h3 className="text-[14px] font-bold text-gray-900 truncate">{o.product_name || "—"}</h3>
           {o.product_discription && <p className="text-[12px] text-gray-500 truncate mt-0.5">{o.product_discription}</p>}
@@ -228,7 +254,7 @@ function ItemCard({ o, idx, year, onTrack }: { o: OrderData; idx: number; year: 
       <div className="grid grid-cols-3 gap-3 border-t border-gray-100 pt-4">
         {[
           { label: "Ordered",    val: `${o.orderdata_item_quantity} `, sub: o.product_unit, cls: "text-gray-900" },
-          { label: "Unit Price", val: `₹${o.orderdata_price}`,        cls: "text-gray-900" },
+          { label: "Price",      val: `₹${Number(o.orderdata_price).toLocaleString("en-IN")}`, cls: "text-gray-900" },
           { label: "Discount",   val: `${o.discount || 0}%`,          cls: "text-amber-700" },
           { label: "Gross",      val: `₹${gross.toLocaleString("en-IN")}`, cls: "text-gray-500 line-through" },
           { label: "Saved",      val: `−₹${Number(o.orderdata_discount || 0).toLocaleString("en-IN")}`, cls: "text-amber-700" },
@@ -278,6 +304,7 @@ export default function ViewOrderDealerPage() {
   const [trackItem, setTrackItem] = useState<{ id: string; name: string; leftQty: number } | null>(null);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
   const [dealer,    setDealer   ] = useState<DealerInfo | null>(null);
+  const [localOrderNote, setLocalOrderNote] = useState("");
 
   // Read dealer info from localStorage
   useEffect(() => {
@@ -297,6 +324,16 @@ export default function ViewOrderDealerPage() {
       .then(d => { setOrders(d.data ?? []); setLoading(false); });
   }, [id]);
 
+  useEffect(() => {
+    if (!id) return;
+    fetch(`/api/order-notes?order_id=${encodeURIComponent(id)}`)
+      .then(r => r.json())
+      .then(json => {
+        if (json.success && json.data?.[0]?.note) setLocalOrderNote(json.data[0].note);
+      })
+      .catch(() => {});
+  }, [id]);
+
   const handleExport = () => {
     if (!tableRef.current) return;
     const wb = XLSX.utils.table_to_book(tableRef.current, { sheet: "Order Details" });
@@ -306,7 +343,7 @@ export default function ViewOrderDealerPage() {
   const firstOrder = orders[0];
   const totals = orders.reduce((acc, o) => ({
     qty:      acc.qty      + Number(o.orderdata_item_quantity || 0),
-    gross:    acc.gross    + Number(o.orderdata_price || 0) * Number(o.orderdata_item_quantity || 0),
+    gross:    acc.gross    + Number(o.orderdata_price || 0),
     discount: acc.discount + Number(o.orderdata_discount || 0),
     final:    acc.final    + Number(o.orderdata_afterDisPrice || 0),
   }), { qty: 0, gross: 0, discount: 0, final: 0 });
@@ -330,6 +367,7 @@ export default function ViewOrderDealerPage() {
   ] : [];
 
   const visibleDealerFields = dealerFields.filter(f => f.value);
+  const orderNote = extractOrderNote(orders, localOrderNote);
 
   return (
     <>
@@ -401,6 +439,20 @@ export default function ViewOrderDealerPage() {
             </div>
           )}
 
+          {orderNote && (
+            <div className="bg-white border border-indigo-200 rounded-2xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round">
+                    <path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                  </svg>
+                </div>
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Order Note</p>
+              </div>
+              <p className="whitespace-pre-wrap text-[13px] leading-6 text-gray-700">{orderNote}</p>
+            </div>
+          )}
+
           {/* ── Totals ── */}
           {!loading && orders.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -455,7 +507,7 @@ export default function ViewOrderDealerPage() {
                 <table ref={tableRef} className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-gray-100">
-                      {["#","Order No","Cat No.","Product","Description","Qty","Dispatched","Left","Unit","Unit Price","Disc %","Gross","Discount","Final","Status","Date",""].map(h => (
+                      {["#","Order No","Cat No.","Product","Description","Qty","Dispatched","Left","Unit","Price","Disc %","Amount","Discount","Final","Status","Date",""].map(h => (
                         <th key={h} className="px-4 py-3.5 text-left text-[10px] font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap bg-gray-50/80">{h}</th>
                       ))}
                     </tr>
@@ -463,8 +515,9 @@ export default function ViewOrderDealerPage() {
                   <tbody className="divide-y divide-gray-50">
                     {orders.map((o, idx) => {
                       const left      = Number(o.orderdata_item_quantity) - Number(o.readyquantity || 0);
-                      const gross     = Number(o.orderdata_price) * Number(o.orderdata_item_quantity);
+                      const gross     = Number(o.orderdata_price);
                       const isDeleted = o.del_status === "1";
+                      const isPriority = hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks);
                       return (
                         <tr key={o.orderdata_id} className={`group hover:bg-gray-50/80 transition-colors ${isDeleted ? "opacity-40" : ""}`}>
                           <td className="px-4 py-3.5 text-[11px] text-gray-400 font-mono font-semibold">{String(idx + 1).padStart(2, "0")}</td>
@@ -472,7 +525,14 @@ export default function ViewOrderDealerPage() {
                             <span className="font-mono text-[11px] font-bold text-indigo-600">OM/{year}/{o.orderdata_orderid}</span>
                           </td>
                           <td className="px-4 py-3.5">
-                            <span className="font-mono text-[12px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg">{o.orderdata_cat_no || "—"}</span>
+                            <div className="flex flex-col gap-1">
+                              <span className="font-mono text-[12px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg w-fit">{o.orderdata_cat_no || "—"}</span>
+                              {isPriority && (
+                                <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full w-fit">
+                                  Priority
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3.5 max-w-[160px]">
                             <span className="block truncate text-[13px] font-semibold text-gray-900">{o.product_name || "—"}</span>

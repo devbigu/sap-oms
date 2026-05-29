@@ -8,6 +8,7 @@ import { toast, ToastContainer } from "react-toastify";
 import Select from "react-select";
 import moment from "moment";
 import { useCartStore } from "@/Store/store";
+import discountUtils from "@/lib/discount";
 import {
   saveDraft,
   updateDraft,
@@ -15,6 +16,9 @@ import {
   type DraftProductRow,
 } from "@/lib/drafts";
 import { useDraft } from "@/lib/useDrafts";
+import { buildPriorityRemarks } from "@/lib/orderPriority";
+
+const { calculateStackedDiscount, getDiscountStatusMessage } = discountUtils;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type ProductRow = {
@@ -25,9 +29,21 @@ type ProductRow = {
   producQuanity: number;
   price: number;
   packSize: number;
+  isPriority?: boolean;
 };
 
 type OptionType = { value: string; label: string; price: number };
+
+type CustomDiscountRequest = {
+  id: string;
+  status: "pending" | "approved" | "rejected";
+  requestedDiscountPercent: number;
+  currentDiscountPercent: number;
+  orderSignature: string;
+  adminNote?: string;
+  createdAt?: string;
+  reviewedAt?: string | null;
+};
 
 // ─── Product meta from nested_products.json ───────────────────────────────────
 type ProductMeta = { image: string | null; productName: string; packSize: number };
@@ -71,29 +87,102 @@ function fmt(paise: number): string {
   return `₹${(paise / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function toPaise(amount: number): number {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return Math.round(amount * 100);
+}
+
+function payloadAmount(amount: number): string {
+  if (!Number.isFinite(amount) || amount <= 0) return "0";
+  return String(Math.round((amount + Number.EPSILON) * 100) / 100);
+}
+
+function safePositiveNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function rowSubtotalPaise(row: ProductRow): number {
+  const quantity = safePositiveNumber(row.producQuanity);
+  const packSize = safePositiveNumber(row.packSize) || 1;
+  const price = safePositiveNumber(row.price);
+  return Math.max(0, Math.round(quantity * packSize * price * 100));
+}
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function buildOrderSignature(rows: ProductRow[], subtotalAmount: number): string {
+  const items = rows
+    .filter((r) => r.productname)
+    .map((r) => ({
+      productname: r.productname,
+      quantity: safePositiveNumber(r.producQuanity),
+      price: safePositiveNumber(r.price/100),
+      packSize: safePositiveNumber(r.packSize) || 1,
+      priority: !!r.isPriority,
+    }));
+  return hashString(JSON.stringify({ subtotal: payloadAmount(subtotalAmount), items }));
+}
+
+function buildOrderRemarks(variantCode: string, isPriority: boolean | undefined, orderNote: string): string {
+  const remarks = buildPriorityRemarks(variantCode, isPriority);
+  const note = orderNote.trim();
+  return [remarks, note ? `Order note: ${note}` : ""].filter(Boolean).join(" | ");
+}
+
+function extractOrderIdFromResponse(data: any): string {
+  const candidates = [
+    data?.order_id,
+    data?.orderId,
+    data?.Order_Id,
+    data?.OrderID,
+    data?.id,
+    data?.lastid,
+    data?.last_id,
+    data?.data?.order_id,
+    data?.data?.orderId,
+    data?.data?.id,
+    Array.isArray(data?.data) ? data.data[0]?.order_id : undefined,
+  ];
+  const direct = candidates.find((v) => v !== undefined && v !== null && String(v).trim());
+  if (direct) return String(direct).trim();
+
+  const msg = String(data?.msg || data?.message || "");
+  return msg.match(/OM\/\d{4}\/(\d+)/i)?.[1] || msg.match(/order\s*(?:id|no\.?)?\s*#?\s*(\d+)/i)?.[1] || "";
+}
+
 // ─── Coupons ──────────────────────────────────────────────────────────────────
 const COUPONS: Record<string, number> = {
   "test60": 60,
   "SAVE50": 50,
-  "VIP80":  80,
+  "VIP80": 80,
 };
+
+const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
 // ─── Empty row factory ────────────────────────────────────────────────────────
 const emptyRow = (): ProductRow => ({
   key: Date.now() + Math.random(),
-  productname:   "",
-  displayName:   "",
-  variantCode:   "",
+  productname: "",
+  displayName: "",
+  variantCode: "",
   producQuanity: 1,
-  price:         0,
-  packSize:      1,
+  price: 0,
+  packSize: 1,
+  isPriority: false,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Inner component — uses useSearchParams so must live inside <Suspense>
 // ─────────────────────────────────────────────────────────────────────────────
 function AddOrderPageInner() {
-  const router       = useRouter();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const draftIdParam = searchParams.get("draft");
 
@@ -102,37 +191,44 @@ function AddOrderPageInner() {
 
   const fromCart = searchParams.get("from") === "cart";
 
-  const [loading,       setLoading]       = useState(false);
-  const [draftSaving,   setDraftSaving]   = useState(false);
-  const [user,          setUser]          = useState<any>(null);
-  const [products,      setProducts]      = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [products, setProducts] = useState<any[]>([]);
   const [variantLookup, setVariantLookup] = useState<Record<string, ProductMeta>>({});
-  const [shipto,        setShipto]        = useState("");
-  const [refno,         setRefno]         = useState("");
-  const [file,          setFile]          = useState<File | null>(null);
-  const [tab,           setTab]           = useState<"manual" | "excel">("manual");
-  const [mounted,       setMounted]       = useState(false);
-  const seededRef                         = useRef(false);
+  const [shipto, setShipto] = useState("");
+  const [refno, setRefno] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [tab, setTab] = useState<"manual" | "excel">("manual");
+  const [mounted, setMounted] = useState(false);
+  const seededRef = useRef(false);
 
   // ── Draft state ───────────────────────────────────────────────────────────
-  const [activeDraftId,    setActiveDraftId]    = useState<string | null>(null);
-  const [draftName,        setDraftName]        = useState("Untitled Draft");
-  const [showNameModal,    setShowNameModal]    = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("Untitled Draft");
+  const [showNameModal, setShowNameModal] = useState(false);
   const [pendingDraftName, setPendingDraftName] = useState("");
-  const [draftBanner,      setDraftBanner]      = useState<string | null>(null);
+  const [draftBanner, setDraftBanner] = useState<string | null>(null);
 
   // ── Coupon state ──────────────────────────────────────────────────────────
-  const [couponInput,   setCouponInput]   = useState("");
+  const [couponInput, setCouponInput] = useState("");
   const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; pct: number } | null>(null);
-  const [couponError,   setCouponError]   = useState("");
+  const [couponError, setCouponError] = useState("");
   const [couponSuccess, setCouponSuccess] = useState("");
+
+  // ── Order note + custom discount approval ────────────────────────────────
+  const [orderNote, setOrderNote] = useState("");
+  const [showCustomDiscountEditor, setShowCustomDiscountEditor] = useState(false);
+  const [customDiscountInput, setCustomDiscountInput] = useState("");
+  const [customDiscountSubmitting, setCustomDiscountSubmitting] = useState(false);
+  const [customDiscountRequests, setCustomDiscountRequests] = useState<CustomDiscountRequest[]>([]);
 
   const [arr1, setArr] = useState<ProductRow[]>([emptyRow()]);
 
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    const stored   = localStorage.getItem("UserData");
+    const stored = localStorage.getItem("UserData");
     const loggedIn = localStorage.getItem("status");
     if (!stored || JSON.parse(loggedIn ?? "false") !== true) { router.push("/login"); return; }
     const u = JSON.parse(stored);
@@ -143,16 +239,26 @@ function AddOrderPageInner() {
   useEffect(() => {
     if (!user) return;
     Promise.all([
-      fetch(`https://mirisoft.co.in/sas/dealerapi/api/productname`).then(r => r.json()),
+      fetch(`${BACKEND_URL}/productname`).then(r => r.json()),
       axios.get("/data/products.json").then(r => r.data),
     ]).then(([apiData, localData]) => {
       setProducts(apiData.data ?? []);
       setVariantLookup(buildVariantLookup(localData));
     }).catch(() => {
-      fetch(`https://mirisoft.co.in/sas/dealerapi/api/productname`)
+      fetch(`${BACKEND_URL}/productname`)
         .then(r => r.json()).then(d => setProducts(d.data ?? []));
     });
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.Dealer_Id) return;
+    fetch(`/api/custom-discount-requests?dealer_id=${encodeURIComponent(user.Dealer_Id)}&limit=25`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.success) setCustomDiscountRequests(json.data ?? []);
+      })
+      .catch(() => { });
+  }, [user?.Dealer_Id]);
 
   // ── Load draft from ?draft=<id> (via React Query cache) ────────────────────
   const { data: cachedDraft, isError: draftError } = useDraft(
@@ -174,8 +280,9 @@ function AddOrderPageInner() {
 
     setActiveDraftId(cachedDraft.id);
     setDraftName(cachedDraft.name);
-    if (cachedDraft.shipto)  setShipto(cachedDraft.shipto);
-    if (cachedDraft.refno)   setRefno(cachedDraft.refno);
+    if (cachedDraft.shipto) setShipto(cachedDraft.shipto);
+    if (cachedDraft.refno) setRefno(cachedDraft.refno);
+    if (cachedDraft.order_note) setOrderNote(cachedDraft.order_note);
     if (cachedDraft.coupon_code && cachedDraft.coupon_pct) {
       setAppliedCoupon({ code: cachedDraft.coupon_code, pct: cachedDraft.coupon_pct });
     }
@@ -197,16 +304,17 @@ function AddOrderPageInner() {
             const match = products.find(
               (p: any) =>
                 String(p.product_cat).trim() === String(item.variantCode).trim() ||
-                String(p.product_id).trim()  === String(item.variantCode).trim()
+                String(p.product_id).trim() === String(item.variantCode).trim()
             );
             return {
-              key:           i + 1,
-              productname:   match ? String(match.product_cat) : item.variantCode,
-              displayName:   match ? (match.product_name ?? item.productName) : item.productName,
-              variantCode:   item.variantCode,
+              key: i + 1,
+              productname: match ? String(match.product_cat) : item.variantCode,
+              displayName: match ? (match.product_name ?? item.productName) : item.productName,
+              variantCode: item.variantCode,
               producQuanity: item.quantity,
-              price:         item.unitPrice,
-              packSize:      item.packSize ?? 1,
+              price: item.unitPrice,
+              packSize: item.packSize ?? 1,
+              isPriority: item.isPriority ?? item.priority ?? false,
             };
           });
           setArr(rows);
@@ -216,7 +324,7 @@ function AddOrderPageInner() {
         }
       })
       .catch(() => toast.error("Could not load cart draft."));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromCart, user, products]);
 
   // ── Seed rows from cart ───────────────────────────────────────────────────
@@ -233,25 +341,26 @@ function AddOrderPageInner() {
       const match = products.find(
         (p) =>
           String(p.product_cat).trim() === String(item.id).trim() ||
-          String(p.product_id).trim()  === String(item.id).trim()
+          String(p.product_id).trim() === String(item.id).trim()
       );
-      const nameParts   = item.name.split(" - ");
+      const nameParts = item.name.split(" - ");
       const productName = nameParts[0] ?? item.name;
       const variantCode = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
-      const localMeta   = variantLookup[item.id];
-      const packSize    = localMeta?.packSize ?? (item as any).packSize ?? 1;
-      const cartPrice   = Number(item.price);
-      const apiPrice    = match ? Number(match.product_price) : 0;
-      const price       = cartPrice > 0 ? cartPrice : apiPrice;
+      const localMeta = variantLookup[item.id];
+      const packSize = localMeta?.packSize ?? (item as any).packSize ?? 1;
+      const cartPrice = Number(item.price);
+      const apiPrice = match ? Number(match.product_price) : 0;
+      const price = cartPrice > 0 ? cartPrice : apiPrice;
 
       return {
-        key:           i + 1,
-        productname:   match ? String(match.product_cat) : String(item.id),
-        displayName:   match ? (match.product_name ?? productName) : productName,
+        key: i + 1,
+        productname: match ? String(match.product_cat) : String(item.id),
+        displayName: match ? (match.product_name ?? productName) : productName,
         variantCode,
         producQuanity: item.quantity,
         price,
         packSize,
+        isPriority: item.isPriority ?? false,
       };
     });
 
@@ -259,27 +368,127 @@ function AddOrderPageInner() {
   }, [products, cartItems, variantLookup, draftIdParam]);
 
   // ── Discount ──────────────────────────────────────────────────────────────
-  const activeDiscount: number = appliedCoupon ? appliedCoupon.pct : (user?.discount ?? 0);
-  const dealerDiscount: number = user?.discount ?? 0;
+  const subtotalPaise = arr1.reduce((acc, row) => acc + rowSubtotalPaise(row), 0);
+  const subtotal = subtotalPaise / 100;
+  const dealerDiscount = safePositiveNumber(user?.discount);
+  const couponDiscount = appliedCoupon?.pct ?? 0;
+  const baseDiscountPayload = calculateStackedDiscount(subtotal, {
+    allocatedDiscountPercent: dealerDiscount,
+    couponDiscountPercent: couponDiscount,
+  });
+  const currentOrderSignature = buildOrderSignature(arr1, subtotal);
+  const matchingCustomRequests = customDiscountRequests.filter(
+    (r) => r.orderSignature === currentOrderSignature
+  );
+  const approvedCustomRequest = matchingCustomRequests.find((r) => r.status === "approved");
+  const pendingCustomRequest = matchingCustomRequests.find((r) => r.status === "pending");
+  const rejectedCustomRequest = matchingCustomRequests.find((r) => r.status === "rejected");
+  const visibleCustomRequest = approvedCustomRequest ?? pendingCustomRequest ?? rejectedCustomRequest ?? null;
+  const approvedCustomDiscountPercent = approvedCustomRequest
+    ? Math.min(100, Math.max(0, Number(approvedCustomRequest.requestedDiscountPercent) || 0))
+    : null;
+  const discountPayload = approvedCustomDiscountPercent !== null
+    ? {
+      ...baseDiscountPayload,
+      discountPercent: approvedCustomDiscountPercent,
+      discountAmount: Number(payloadAmount(subtotal * (approvedCustomDiscountPercent / 100))),
+      finalPayableAmount: Number(payloadAmount(Math.max(0, subtotal - subtotal * (approvedCustomDiscountPercent / 100)))),
+    }
+    : baseDiscountPayload;
+  const activeDiscount: number = discountPayload.discountPercent;
+  const discountAmountPaise = toPaise(discountPayload.discountAmount);
+  const finalPayablePaise = toPaise(discountPayload.finalPayableAmount);
+  const discountStatusMessage = getDiscountStatusMessage(discountPayload.slabDiscountPercent);
+  const hasSlabDiscount = discountPayload.slabDiscountPercent > 0;
+  const hasAnyDiscount = discountPayload.discountPercent > 0;
+  const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null;
+  const requestedCustomDiscountPercent = Math.min(100, Math.max(0, Number(customDiscountInput) || 0));
+  const requestedCustomDiscountAmount = subtotal * (requestedCustomDiscountPercent / 100);
+  const requestedCustomFinalPayable = Math.max(0, subtotal - requestedCustomDiscountAmount);
 
   // ── Coupon handlers ───────────────────────────────────────────────────────
   const handleApplyCoupon = () => {
     setCouponError(""); setCouponSuccess("");
-    const trimmed = couponInput.trim();
+    const trimmed = couponInput.trim().toUpperCase();
     if (!trimmed) { setCouponError("Please enter a coupon code."); return; }
     const pct = COUPONS[trimmed];
     if (pct === undefined) { setCouponError("Invalid coupon code."); return; }
-    if (pct <= dealerDiscount) {
-      setCouponError(`This coupon gives ${pct}% off — your dealer rate (${dealerDiscount}%) is already better.`);
-      return;
-    }
     setAppliedCoupon({ code: trimmed, pct });
-    setCouponSuccess(`"${trimmed}" applied — ${pct}% off (was ${dealerDiscount}%)`);
+    setCouponSuccess(`"${trimmed}" applied — ${pct}% coupon discount added`);
     setCouponInput("");
   };
 
   const handleRemoveCoupon = () => {
     setAppliedCoupon(null); setCouponError(""); setCouponSuccess(""); setCouponInput("");
+  };
+
+  const refreshCustomDiscountRequests = async () => {
+    if (!user?.Dealer_Id) return [];
+    const res = await fetch(`/api/custom-discount-requests?dealer_id=${encodeURIComponent(user.Dealer_Id)}&limit=25`);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.message ?? "Could not load discount requests");
+    setCustomDiscountRequests(json.data ?? []);
+    return json.data ?? [];
+  };
+
+  const handleRequestCustomDiscount = async () => {
+    if (arr1.every(r => !r.productname)) { toast("Please select at least one product before requesting approval."); return; }
+    if (requestedCustomDiscountPercent <= baseDiscountPayload.discountPercent) {
+      toast(`Enter a custom discount above the current ${baseDiscountPayload.discountPercent}%.`);
+      return;
+    }
+
+    setCustomDiscountSubmitting(true);
+    try {
+      const requestProducts = arr1.filter(r => r.productname).map((r) => ({
+        productname: r.productname,
+        displayName: r.displayName,
+        variantCode: r.variantCode,
+        quantity: r.producQuanity,
+        price: r.price,
+        packSize: r.packSize,
+        priority: !!r.isPriority,
+        rowSubtotal: payloadAmount(rowSubtotalPaise(r) / 100),
+      }));
+
+      const res = await fetch("/api/custom-discount-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dealerId: user.Dealer_Id,
+          dealerName: user.Dealer_Name,
+          dealerCode: user.Dealer_Dealercode,
+          dealerEmail: user.Dealer_Email,
+          dealerPhone: user.Dealer_Number,
+          requestedDiscountPercent: requestedCustomDiscountPercent,
+          currentDiscountPercent: baseDiscountPayload.discountPercent,
+          subtotal: Number(payloadAmount(baseDiscountPayload.subtotal)),
+          currentDiscountAmount: Number(payloadAmount(baseDiscountPayload.discountAmount)),
+          requestedDiscountAmount: Number(payloadAmount(requestedCustomDiscountAmount)),
+          currentFinalPayable: Number(payloadAmount(baseDiscountPayload.finalPayableAmount)),
+          requestedFinalPayable: Number(payloadAmount(requestedCustomFinalPayable)),
+          shipto,
+          refno,
+          orderNote: orderNote.trim(),
+          orderSignature: currentOrderSignature,
+          discountBreakdown: {
+            allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
+            slabDiscountPercent: baseDiscountPayload.slabDiscountPercent,
+            couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
+            couponCode: appliedCoupon?.code ?? "",
+          },
+          products: requestProducts,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message ?? "Request failed");
+      setCustomDiscountRequests((prev) => [json.data, ...prev.filter((r) => r.id !== json.data.id)]);
+      toast.success("Custom discount request sent to admin.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not request custom discount.");
+    } finally {
+      setCustomDiscountSubmitting(false);
+    }
   };
 
   // ── Select options ────────────────────────────────────────────────────────
@@ -295,11 +504,11 @@ function AddOrderPageInner() {
   // ── Row helpers ───────────────────────────────────────────────────────────
   const handleChangeSelect = (opt: OptionType, idx: number) => {
     const labelParts = opt.label.split(" — ");
-    const catNo      = labelParts[0]?.trim() ?? opt.value;
-    const rest       = labelParts.slice(1).join(" — ");
-    const namePart   = rest.split("(")[0].trim();
-    const localMeta  = variantLookup[opt.value];
-    const packSize   = localMeta?.packSize ?? 1;
+    const catNo = labelParts[0]?.trim() ?? opt.value;
+    const rest = labelParts.slice(1).join(" — ");
+    const namePart = rest.split("(")[0].trim();
+    const localMeta = variantLookup[opt.value];
+    const packSize = localMeta?.packSize ?? 1;
 
     setArr((prev) => {
       const n = [...prev];
@@ -313,21 +522,16 @@ function AddOrderPageInner() {
     setArr((prev) => { const n = [...prev]; n[i] = { ...n[i], producQuanity: v }; return n; });
   };
 
-  const addRow    = () => setArr((prev) => [...prev, emptyRow()]);
+  const togglePriority = (i: number) => {
+    setArr((prev) => {
+      const n = [...prev];
+      n[i] = { ...n[i], isPriority: !n[i].isPriority };
+      return n;
+    });
+  };
+
+  const addRow = () => setArr((prev) => [...prev, emptyRow()]);
   const removeRow = (key: number) => setArr((prev) => prev.filter((r) => r.key !== key));
-
-  // ── Totals ────────────────────────────────────────────────────────────────
-  const grandTotal = arr1.reduce((acc, row) => {
-    const listPrice = row.producQuanity * row.packSize * row.price;
-    return acc + (listPrice - listPrice * (activeDiscount / 100));
-  }, 0);
-
-  const grandTotalWithoutCoupon = appliedCoupon
-    ? arr1.reduce((acc, row) => {
-        const listPrice = row.producQuanity * row.packSize * row.price;
-        return acc + (listPrice - Math.round(listPrice * (dealerDiscount / 100)));
-      }, 0)
-    : null;
 
   // ── Save Draft ────────────────────────────────────────────────────────────
   const commitSaveDraft = async (nameToUse: string) => {
@@ -339,8 +543,9 @@ function AddOrderPageInner() {
       if (activeDraftId) {
         await updateDraft(activeDraftId, user.Dealer_Id, {
           name: nameToUse, shipto, refno,
+          order_note: orderNote.trim() || null,
           coupon_code: appliedCoupon?.code ?? null,
-          coupon_pct:  appliedCoupon?.pct  ?? null,
+          coupon_pct: appliedCoupon?.pct ?? null,
           rows: draftRows,
         });
         setDraftName(nameToUse);
@@ -348,8 +553,9 @@ function AddOrderPageInner() {
       } else {
         const created = await saveDraft({
           dealer_id: user.Dealer_Id, name: nameToUse, shipto, refno,
+          order_note: orderNote.trim() || null,
           coupon_code: appliedCoupon?.code ?? null,
-          coupon_pct:  appliedCoupon?.pct  ?? null,
+          coupon_pct: appliedCoupon?.pct ?? null,
           rows: draftRows,
         });
         setActiveDraftId(created.id);
@@ -374,38 +580,88 @@ function AddOrderPageInner() {
     }
   };
 
+  const fetchLatestOrderId = async () => {
+    if (!user?.Dealer_Id) return "";
+    try {
+      const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+      const json = await res.json();
+      return String(json?.data?.[0]?.order_id ?? "").trim();
+    } catch {
+      return "";
+    }
+  };
+
+  const saveOrderNoteForHistory = async (orderId: string) => {
+    const note = orderNote.trim();
+    if (!orderId || !note || !user?.Dealer_Id) return;
+    await fetch("/api/order-notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orderId,
+        dealerId: user.Dealer_Id,
+        dealerName: user.Dealer_Name,
+        note,
+      }),
+    }).catch(() => { });
+  };
+
   // ── Submit Order ──────────────────────────────────────────────────────────
   const handleSubmitProductArray = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product"); return; }
     setLoading(true);
     const payload = arr1.filter(r => r.productname).map(r => ({
-      productname:   r.productname,
+      productname: r.productname,
       producQuanity: String(r.producQuanity),
-      price:         String(r.price),
-      remarks:       r.variantCode ? `Cat. No: ${r.variantCode}` : "",
+      price: String(r.price),
+      remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote),
+      priority: r.isPriority ? "1" : "0",
+      isPriority: !!r.isPriority,
     }));
+
+    console.log(payload.map(r=>r.price))
     const fd = new FormData();
-    fd.append("productorder",  JSON.stringify(payload));
+    fd.append("productorder", JSON.stringify(payload));
     fd.append("Dealer_shipto", shipto);
-    fd.append("id",            user.Dealer_Id);
-    fd.append("discount",      String(activeDiscount));
-    if (refno)         fd.append("refno",       refno);
+    fd.append("id", user.Dealer_Id);
+    fd.append("discount", String(activeDiscount));
+    fd.append("subtotal", payloadAmount(discountPayload.subtotal));
+    fd.append("discountPercent", String(discountPayload.discountPercent));
+    fd.append("discountAmount", payloadAmount(discountPayload.discountAmount));
+    fd.append("finalPayableAmount", payloadAmount(discountPayload.finalPayableAmount));
+    fd.append("allocatedDiscountPercent", String(discountPayload.allocatedDiscountPercent));
+    fd.append("slabDiscountPercent", String(discountPayload.slabDiscountPercent));
+    fd.append("couponDiscountPercent", String(discountPayload.couponDiscountPercent));
+    if (orderNote.trim()) {
+      fd.append("note", orderNote.trim());
+      fd.append("order_note", orderNote.trim());
+      fd.append("Dealer_note", orderNote.trim());
+    }
+    if (approvedCustomRequest) {
+      fd.append("customDiscountRequestId", approvedCustomRequest.id);
+      fd.append("customDiscountStatus", approvedCustomRequest.status);
+      fd.append("customDiscountPercent", String(approvedCustomRequest.requestedDiscountPercent));
+    }
+    if (refno) fd.append("refno", refno);
     if (appliedCoupon) fd.append("coupon_code", appliedCoupon.code);
     try {
       const { data } = await axios.post(
-        `https://mirisoft.co.in/sas/dealerapi/api/PlaceOrderarray?id=${user.Dealer_Id}&staffid=${user.assignedstaff}`,
+        `${BACKEND_URL}/PlaceOrderarray?id=${user.Dealer_Id}&staffid=${user.assignedstaff}`,
         fd
       );
+      const placedOrderId = extractOrderIdFromResponse(data) || await fetchLatestOrderId();
+      await saveOrderNoteForHistory(placedOrderId);
       toast.success(data.msg, { autoClose: 5000 });
       clearCart();
       seededRef.current = false;
       setArr([emptyRow()]);
+      setOrderNote("");
       handleRemoveCoupon();
       setActiveDraftId(null);
       setDraftBanner(null);
       // Clear the DraftCart from MongoDB if this order originated from the cart page
       if (fromCart && user?.Dealer_Id) {
-        fetch(`/api/draft-cart?dealer_id=${encodeURIComponent(user.Dealer_Id)}`, { method: "DELETE" }).catch(() => {});
+        fetch(`/api/draft-cart?dealer_id=${encodeURIComponent(user.Dealer_Id)}`, { method: "DELETE" }).catch(() => { });
       }
     } catch {
       toast.error("Order failed, please try again.", { autoClose: 5000 });
@@ -419,9 +675,9 @@ function AddOrderPageInner() {
     if (!file) return;
     setLoading(true);
     const fd = new FormData();
-    fd.append("staffid",      user.assignedstaff);
+    fd.append("staffid", user.assignedstaff);
     fd.append("order_dealer", user.Dealer_Id);
-    fd.append("exelefile",    file);
+    fd.append("exelefile", file);
     try {
       const { data } = await axios.post(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/importdata`, fd);
       toast.success(data.msg);
@@ -451,10 +707,10 @@ function AddOrderPageInner() {
       backgroundColor: state.isSelected ? "#6366f1" : state.isFocused ? "#f5f5ff" : "white",
       color: state.isSelected ? "#fff" : "#111827",
     }),
-    placeholder:        (base: any) => ({ ...base, color: "#9ca3af", fontSize: 13 }),
-    singleValue:        (base: any) => ({ ...base, color: "#111827", fontSize: 13 }),
-    menu:               (base: any) => ({ ...base, borderRadius: 10, border: "1px solid #e5e7eb", boxShadow: "0 8px 30px rgba(0,0,0,0.1)" }),
-    indicatorSeparator: ()          => ({ display: "none" }),
+    placeholder: (base: any) => ({ ...base, color: "#9ca3af", fontSize: 13 }),
+    singleValue: (base: any) => ({ ...base, color: "#111827", fontSize: 13 }),
+    menu: (base: any) => ({ ...base, borderRadius: 10, border: "1px solid #e5e7eb", boxShadow: "0 8px 30px rgba(0,0,0,0.1)" }),
+    indicatorSeparator: () => ({ display: "none" }),
   };
 
   return (
@@ -473,7 +729,7 @@ function AddOrderPageInner() {
               value={pendingDraftName}
               onChange={(e) => setPendingDraftName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter"  && pendingDraftName.trim()) commitSaveDraft(pendingDraftName.trim());
+                if (e.key === "Enter" && pendingDraftName.trim()) commitSaveDraft(pendingDraftName.trim());
                 if (e.key === "Escape") setShowNameModal(false);
               }}
               placeholder="e.g. Q2 Restock Order"
@@ -517,8 +773,8 @@ function AddOrderPageInner() {
           <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 mb-5 text-[12.5px] text-indigo-700 font-medium">
             <div className="flex items-center gap-2">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
               </svg>
               {draftBanner}
             </div>
@@ -529,7 +785,7 @@ function AddOrderPageInner() {
               </button>
               <button onClick={() => setDraftBanner(null)} className="text-indigo-400 hover:text-indigo-600 cursor-pointer">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               </button>
             </div>
@@ -545,8 +801,8 @@ function AddOrderPageInner() {
           <button onClick={() => router.push("/drafts")}
             className="inline-flex items-center gap-1.5 text-[12.5px] text-gray-400 hover:text-indigo-600 border border-gray-200 hover:border-indigo-200 hover:bg-indigo-50 px-3 py-2 rounded-xl transition-all cursor-pointer bg-white">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
             </svg>
             My Drafts
           </button>
@@ -592,42 +848,205 @@ function AddOrderPageInner() {
                 className="text-[13.5px] text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-gray-300" />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Discount Rate</label>
-              <div className={`text-[13.5px] font-semibold rounded-xl px-3 py-2.5 border flex items-center justify-between ${
-                appliedCoupon ? "text-violet-700 bg-violet-50 border-violet-200" : "text-emerald-600 bg-emerald-50 border-emerald-200"
-              }`}>
-                <span>
-                  {appliedCoupon
-                    ? <>{appliedCoupon.pct}% <span className="text-[11px] font-normal">(coupon)</span></>
-                    : <>{user.discount}% dealer discount</>}
-                </span>
-                {appliedCoupon && <span className="text-[11px] text-gray-400 line-through ml-2">{user.discount}%</span>}
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Discount Rate</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomDiscountInput(String(visibleCustomRequest?.requestedDiscountPercent ?? activeDiscount));
+                    setShowCustomDiscountEditor(true);
+                  }}
+                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg px-2 py-1 transition-colors"
+                >
+                  ✏️ Edit
+                </button>
+              </div>
+              <div className={`text-[13.5px] font-semibold rounded-xl px-3 py-2.5 border flex items-center justify-between ${hasAnyDiscount ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-slate-600 bg-slate-50 border-slate-200"
+                }`}>
+                <span>{discountPayload.discountPercent}% total discount</span>
+                <span className="text-[11px] font-medium">{hasApprovedCustomDiscount ? "custom approved" : `${dealerDiscount}% allocated`}</span>
               </div>
             </div>
           </div>
         </div>
 
+        {/* Discount Stack */}
+        <div className={`border rounded-2xl p-5 mb-5 ${hasAnyDiscount ? "bg-emerald-50/70 border-emerald-200" : "bg-white border-gray-200"
+          }`}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${hasAnyDiscount ? "bg-emerald-600 border-emerald-600 text-white" : "bg-slate-50 border-slate-200 text-slate-500"
+                }`}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><circle cx="7" cy="7" r="1" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-[13px] font-semibold text-gray-900">Combined Discount</p>
+                <p className={`text-[12px] mt-0.5 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"}`}>
+                  Allocated discount + slab discount + coupon code
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomDiscountInput(String(visibleCustomRequest?.requestedDiscountPercent ?? activeDiscount));
+                  setShowCustomDiscountEditor((v) => !v);
+                }}
+                className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[12px] font-bold text-indigo-700 hover:bg-indigo-50 transition-colors sm:col-span-1"
+              >
+                <span>✏️</span>
+                Custom Discount
+              </button>
+              <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Subtotal</p>
+                <p className="font-mono text-[13px] font-semibold text-gray-900">{fmt(subtotalPaise)}</p>
+              </div>
+              <div className={`rounded-xl border px-3 py-2 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"
+                }`}>
+                <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Savings</p>
+                <p className="font-mono text-[13px] font-bold">{hasAnyDiscount ? `-${fmt(discountAmountPaise)}` : fmt(0)}</p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Allocated</p>
+              <p className="mt-1 font-mono text-[13px] font-semibold text-gray-900">{discountPayload.allocatedDiscountPercent}%</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Slab</p>
+              <p className={`mt-1 font-mono text-[13px] font-semibold ${hasSlabDiscount ? "text-emerald-700" : "text-gray-500"}`}>
+                {discountPayload.slabDiscountPercent}%
+              </p>
+              <p className="mt-0.5 text-[10px] text-gray-400">{discountStatusMessage}</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Coupon</p>
+              <p className={`mt-1 font-mono text-[13px] font-semibold ${appliedCoupon ? "text-violet-700" : "text-gray-500"}`}>
+                {discountPayload.couponDiscountPercent}%
+              </p>
+              <p className="mt-0.5 text-[10px] text-gray-400">{appliedCoupon?.code ?? "No code applied"}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Total</p>
+              <p className="mt-1 font-mono text-[13px] font-bold text-emerald-700">{discountPayload.discountPercent}%</p>
+            </div>
+          </div>
+        </div>
+
+        {(showCustomDiscountEditor || visibleCustomRequest) && (
+          <div className="bg-white border border-indigo-200 rounded-2xl p-5 mb-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[14px] font-bold text-gray-900">Custom Discount Approval</h3>
+                  {visibleCustomRequest && (
+                    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${visibleCustomRequest.status === "approved"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : visibleCustomRequest.status === "rejected"
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700"
+                      }`}>
+                      {visibleCustomRequest.status === "rejected" ? "Disapproved" : visibleCustomRequest.status}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[12px] text-gray-500 mt-1">
+                  Request a one-time discount for this product list. Approved requests are applied automatically while the order stays unchanged.
+                </p>
+                {visibleCustomRequest?.adminNote && (
+                  <p className="mt-2 text-[12px] text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+                    Admin note: {visibleCustomRequest.adminNote}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-[11px] min-w-[260px]">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                  <p className="font-bold uppercase tracking-wider text-gray-400">Current</p>
+                  <p className="mt-1 font-mono text-[13px] font-bold text-gray-900">{baseDiscountPayload.discountPercent}%</p>
+                </div>
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
+                  <p className="font-bold uppercase tracking-wider text-indigo-500">Requested</p>
+                  <p className="mt-1 font-mono text-[13px] font-bold text-indigo-700">
+                    {visibleCustomRequest?.requestedDiscountPercent ?? requestedCustomDiscountPercent}%
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {showCustomDiscountEditor && (
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end">
+                <div>
+                  <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Custom Discount %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    value={customDiscountInput}
+                    onChange={(e) => setCustomDiscountInput(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2.5 text-[13.5px] font-mono font-semibold text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="e.g. 18"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-xl border border-gray-200 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Requested Savings</p>
+                    <p className="mt-1 font-mono text-[13px] font-bold text-indigo-700">-{fmt(toPaise(requestedCustomDiscountAmount))}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-900 bg-gray-900 px-3 py-2 text-white">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Requested Payable</p>
+                    <p className="mt-1 font-mono text-[13px] font-bold">{fmt(toPaise(requestedCustomFinalPayable))}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRequestCustomDiscount}
+                    disabled={customDiscountSubmitting || requestedCustomDiscountPercent <= baseDiscountPayload.discountPercent}
+                    className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-[13px] font-bold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {customDiscountSubmitting ? "Sending..." : "Request Approval"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => refreshCustomDiscountRequests()
+                      .then(() => toast.success("Approval status refreshed."))
+                      .catch(() => toast.error("Could not refresh approval status."))}
+                    className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[12px] font-semibold text-gray-600 hover:bg-gray-50"
+                  >
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Coupon */}
         <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-5">
           <div className="flex items-center gap-2 mb-3">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-violet-500">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1"/>
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><circle cx="7" cy="7" r="1" />
             </svg>
-            <span className="text-[13px] font-semibold text-gray-800">Special Price</span>
+            <span className="text-[13px] font-semibold text-gray-800">Discount Code</span>
             {appliedCoupon && (
               <span className="ml-auto text-[11px] font-bold px-2.5 py-0.5 bg-violet-100 text-violet-700 rounded-full border border-violet-200">
-                {appliedCoupon.code} · {appliedCoupon.pct}% off
+                {appliedCoupon.code} · +{appliedCoupon.pct}%
               </span>
             )}
           </div>
           {!appliedCoupon ? (
-            <div className="flex gap-2">
-              <input type="text" placeholder="Enter price" value={couponInput}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input type="text" placeholder="Enter discount code" value={couponInput}
                 onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(""); setCouponSuccess(""); }}
                 onKeyDown={e => { if (e.key === "Enter") handleApplyCoupon(); }}
-                className={`flex-1 text-[13px] text-gray-900 border rounded-xl px-4 py-2.5 outline-none transition-all font-mono tracking-wider placeholder:text-gray-300 placeholder:font-normal ${
-                  couponError ? "border-red-300 bg-red-50/30 focus:ring-2 focus:ring-red-100" : "border-gray-200 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                }`}
+                className={`flex-1 text-[13px] text-gray-900 border rounded-xl px-4 py-2.5 outline-none transition-all font-mono tracking-wider placeholder:text-gray-300 placeholder:font-normal ${couponError ? "border-red-300 bg-red-50/30 focus:ring-2 focus:ring-red-100" : "border-gray-200 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  }`}
               />
               <button onClick={handleApplyCoupon} disabled={!couponInput.trim()}
                 className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold rounded-xl transition-colors">
@@ -635,14 +1054,14 @@ function AddOrderPageInner() {
               </button>
             </div>
           ) : (
-            <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-4 py-3">
+            <div className="flex flex-col gap-3 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5"/></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5" /></svg>
                 </div>
                 <div>
                   <p className="text-[13px] font-bold text-violet-800 font-mono tracking-wider">{appliedCoupon.code}</p>
-                  <p className="text-[11px] text-violet-600 mt-0.5">{appliedCoupon.pct}% off · saving extra {appliedCoupon.pct - dealerDiscount}% over dealer rate</p>
+                  <p className="text-[11px] text-violet-600 mt-0.5">Coupon adds {appliedCoupon.pct}% to the allocated and slab discounts</p>
                 </div>
               </div>
               <button onClick={handleRemoveCoupon}
@@ -653,20 +1072,19 @@ function AddOrderPageInner() {
           )}
           {couponError && (
             <p className="text-[12px] text-red-600 mt-2 flex items-center gap-1.5">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" /></svg>
               {couponError}
             </p>
           )}
-          {couponSuccess && !appliedCoupon && <p className="text-[12px] text-emerald-600 mt-2">{couponSuccess}</p>}
+          {couponSuccess && appliedCoupon && <p className="text-[12px] text-emerald-600 mt-2">{couponSuccess}</p>}
         </div>
 
         {/* Tabs */}
         <div className="flex gap-2 mb-5">
           {(["manual", "excel"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
-              className={`px-5 py-2 rounded-xl text-[13px] font-medium border transition-all duration-150 cursor-pointer ${
-                tab === t ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50 hover:text-gray-700"
-              }`}>
+              className={`px-5 py-2 rounded-xl text-[13px] font-medium border transition-all duration-150 cursor-pointer ${tab === t ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50 hover:text-gray-700"
+                }`}>
               {t === "manual" ? "Manual Entry" : "Upload Excel"}
             </button>
           ))}
@@ -685,14 +1103,14 @@ function AddOrderPageInner() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                {appliedCoupon && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[11px] font-semibold">
-                    {appliedCoupon.pct}% special price applied
+                {hasAnyDiscount && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[11px] font-semibold">
+                    {discountPayload.discountPercent}% total discount
                   </span>
                 )}
                 {cartItems.length > 0 && (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[11px] font-semibold">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5"/></svg>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5" /></svg>
                     {cartItems.length} from cart
                   </span>
                 )}
@@ -704,12 +1122,13 @@ function AddOrderPageInner() {
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
                     <th className="pl-6 pr-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-10">#</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 min-w-[260px]">Product</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 min-w-[360px]">Product / Priority</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Cat. No / Variant</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-32">Quantity</th>
-                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-36">Pack → Pcs.</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Pack Size</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-24">Pieces</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">List Price</th>
-                    <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-28 ${appliedCoupon ? "text-violet-500" : "text-gray-400"}`}>
+                    <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-28 ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
                       Discount ({activeDiscount}%)
                     </th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Final Price</th>
@@ -718,11 +1137,11 @@ function AddOrderPageInner() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {arr1.map((row, idx) => {
-                    const listPrice  = row.producQuanity * row.packSize * row.price;
-                    const discAmt    = Math.round(listPrice * (activeDiscount / 100));
-                    const rowTotal   = listPrice - discAmt;
-                    const totalUnits = row.producQuanity * row.packSize;
-                    const meta       = variantLookup[row.productname];
+                    const listPrice = rowSubtotalPaise(row);
+                    const discAmt = Math.round(listPrice * (activeDiscount / 100));
+                    const rowTotal = Math.max(0, listPrice - discAmt);
+                    const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
+                    const meta = variantLookup[row.productname];
 
                     return (
                       <tr key={row.key} className="hover:bg-gray-50/50 transition-colors">
@@ -738,7 +1157,7 @@ function AddOrderPageInner() {
                               ) : (
                                 <div className="w-8 h-8 rounded border border-gray-100 bg-gray-50 flex-shrink-0 flex items-center justify-center">
                                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
-                                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+                                    <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" />
                                   </svg>
                                 </div>
                               )}
@@ -746,19 +1165,48 @@ function AddOrderPageInner() {
                                 <p className="text-[12px] font-semibold text-gray-800 truncate leading-tight">
                                   {row.displayName || meta?.productName || row.productname}
                                 </p>
+                                {row.isPriority && (
+                                  <span className="inline-flex mt-1 px-2 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded-full text-[10px] font-bold">
+                                    Priority delivery
+                                  </span>
+                                )}
                               </div>
                             </div>
                           )}
-                          <Select
-                            options={optionList}
-                            placeholder="Search and select product…"
-                            value={getSelectValue(row)}
-                            onChange={(opt) => opt && handleChangeSelect(opt, idx)}
-                            isSearchable
-                            styles={selectStyles}
-                            menuPortalTarget={mounted ? document.body : undefined}
-                            menuPosition="fixed"
-                          />
+                          <div className="flex items-center gap-2">
+                            <div className="min-w-[240px] flex-1">
+                              <Select
+                                options={optionList}
+                                placeholder="Search and select product…"
+                                value={getSelectValue(row)}
+                                onChange={(opt) => opt && handleChangeSelect(opt, idx)}
+                                isSearchable
+                                styles={selectStyles}
+                                menuPortalTarget={mounted ? document.body : undefined}
+                                menuPosition="fixed"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => togglePriority(idx)}
+                              title="Mark this product as priority"
+                              className={`inline-flex h-[38px] shrink-0 items-center gap-2 rounded-xl border px-3 text-[11px] font-bold transition-colors ${row.isPriority
+                                  ? "bg-red-600 border-red-600 text-white shadow-sm"
+                                  : "bg-white border-red-200 text-red-600 hover:bg-red-50"
+                                }`}
+                            >
+                              <span
+                                className={`relative inline-flex h-4 w-7 items-center rounded-full ${row.isPriority ? "bg-white/30" : "bg-red-100"
+                                  }`}
+                              >
+                                <span
+                                  className={`inline-block h-3 w-3 rounded-full transition-transform ${row.isPriority ? "translate-x-3.5 bg-white" : "translate-x-0.5 bg-red-500"
+                                    }`}
+                                />
+                              </span>
+                              {row.isPriority ? "Priority on" : "Priority"}
+                            </button>
+                          </div>
                         </td>
                         <td className="px-3 py-3">
                           {row.variantCode ? (
@@ -782,31 +1230,31 @@ function AddOrderPageInner() {
                         </td>
                         <td className="px-3 py-3">
                           {row.packSize > 1 ? (
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 rounded text-[11px] font-semibold font-mono">
-                                {row.producQuanity} × {row.packSize}
-                              </span>
-                              <span className="text-gray-300 text-xs">=</span>
-                              <span className="inline-flex items-center px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded text-[11px] font-bold font-mono">
-                                {totalUnits} pcs. 
-                              </span>
-                            </div>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 rounded text-[11px] font-semibold font-mono">
+                              {row.producQuanity} × {row.packSize}
+                            </span>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 bg-gray-50 border border-gray-200 text-gray-500 rounded text-[11px] font-mono">
-                              {totalUnits} pc{totalUnits !== 1 ? "s." : "."}
+                              1
                             </span>
                           )}
                         </td>
                         <td className="px-3 py-3">
+                          <span className="inline-flex items-center px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-[12px] font-bold font-mono">
+                            {totalUnits}
+                          </span>
+                          <p className="text-[10px] text-gray-400 mt-0.5">pc{totalUnits !== 1 ? "s" : ""}</p>
+                        </td>
+                        <td className="px-3 py-3">
                           <span className="font-mono text-[13px] text-gray-600 font-semibold">
-                            {listPrice > 0 ? fmt(listPrice) : "—"} 
+                            {listPrice > 0 ? fmt(listPrice) : "—"}
                           </span>
                           {listPrice > 0 && (
                             <p className="text-[10px] text-gray-400 mt-0.5">{totalUnits} pcs. × ₹{row.price}</p>
                           )}
                         </td>
                         <td className="px-3 py-3">
-                          <span className={`font-mono text-[12px] font-semibold ${appliedCoupon ? "text-violet-600" : "text-amber-500"}`}>
+                          <span className={`font-mono text-[12px] font-semibold ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
                             {discAmt > 0 ? `−${fmt(discAmt)}` : "—"}
                           </span>
                           {discAmt > 0 && <p className="text-[10px] text-gray-400 mt-0.5">{activeDiscount}% off</p>}
@@ -815,7 +1263,7 @@ function AddOrderPageInner() {
                           {listPrice > 0 && discAmt > 0 && (
                             <span className="block font-mono text-[11px] text-gray-400 line-through">{fmt(listPrice)}</span>
                           )}
-                          <span className={`font-mono text-[13px] font-semibold ${appliedCoupon ? "text-violet-700" : "text-emerald-600"}`}>
+                          <span className="font-mono text-[13px] font-semibold text-emerald-700">
                             {rowTotal > 0 ? fmt(rowTotal) : "—"}
                           </span>
                         </td>
@@ -823,8 +1271,8 @@ function AddOrderPageInner() {
                           <button onClick={() => removeRow(row.key)} title="Remove row"
                             className="w-[30px] h-[30px] flex items-center justify-center rounded-lg border border-red-100 text-red-400 hover:bg-red-50 hover:border-red-200 transition-colors cursor-pointer bg-transparent">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                              <polyline points="3 6 5 6 21 6"/>
-                              <path d="M19 6l-1 14H6L5 6m5 0V4h4v2"/>
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6l-1 14H6L5 6m5 0V4h4v2" />
                             </svg>
                           </button>
                         </td>
@@ -832,7 +1280,7 @@ function AddOrderPageInner() {
                     );
                   })}
                   <tr className="border-t border-dashed border-gray-100">
-                    <td colSpan={9} className="px-6 py-3">
+                    <td colSpan={10} className="px-6 py-3">
                       <button onClick={addRow}
                         className="inline-flex items-center gap-2 text-[12px] text-gray-400 hover:text-indigo-600 transition-colors cursor-pointer">
                         <span className="w-5 h-5 rounded-md border border-gray-200 flex items-center justify-center text-sm hover:border-indigo-300 hover:bg-indigo-50 transition-colors">+</span>
@@ -844,41 +1292,76 @@ function AddOrderPageInner() {
               </table>
             </div>
 
-            {/* Totals bar */}
-            <div className={`flex items-center justify-between px-6 py-4 border-t border-gray-100 ${appliedCoupon ? "bg-violet-50/50" : "bg-gray-50"}`}>
-              <div>
-                <p className="text-[13px] text-gray-500">Order Total</p>
-                <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
-                  {arr1.reduce((a, r) => a + r.producQuanity * r.packSize, 0)} pcs. ·{" "}
-                  {arr1.filter(r => r.productname).length} product{arr1.filter(r => r.productname).length !== 1 ? "s" : ""}
-                  {appliedCoupon && <span className="ml-2 text-violet-600 font-semibold">· {appliedCoupon.code} applied</span>}
-                </p>
-                {appliedCoupon && grandTotalWithoutCoupon !== null && (
-                  <p className="text-[11px] text-violet-600 font-semibold mt-1">
-                    You save {fmt(grandTotalWithoutCoupon - grandTotal)} extra with this coupon
-                  </p>
-                )}
+            {/* Order note */}
+            <div className="px-6 py-4 border-t border-gray-100 bg-white">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Order Note</label>
+                  <span className="text-[11px] text-gray-400">{orderNote.trim().length}/1200</span>
+                </div>
+                <textarea
+                  value={orderNote}
+                  maxLength={1200}
+                  onChange={(e) => setOrderNote(e.target.value)}
+                  placeholder="Add packing, dispatch, or billing instructions for this order..."
+                  className="min-h-[82px] w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[13px] text-gray-900 outline-none transition-all placeholder:text-gray-400 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                />
               </div>
-              <div className="text-right">
-                {appliedCoupon && grandTotalWithoutCoupon !== null && (
-                  <p className="text-[13px] font-mono text-gray-400 line-through mb-0.5">{fmt(grandTotalWithoutCoupon)}</p>
-                )}
-                <p className={`text-[22px] font-bold font-mono tracking-tight ${appliedCoupon ? "text-violet-700" : "text-gray-900"}`}>
-                  {fmt(grandTotal)}
-                </p>
+            </div>
+
+            {/* Order summary */}
+            <div className={`px-6 py-5 border-t border-gray-100 ${hasAnyDiscount ? "bg-emerald-50/60" : "bg-gray-50"
+              }`}>
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-[13px] font-semibold text-gray-900">Order Summary</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                    {arr1.reduce((a, r) => a + safePositiveNumber(r.producQuanity) * (safePositiveNumber(r.packSize) || 1), 0)} pcs. ·{" "}
+                    {arr1.filter(r => r.productname).length} product{arr1.filter(r => r.productname).length !== 1 ? "s" : ""}
+                  </p>
+                  <p className={`text-[12px] font-semibold mt-2 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"
+                    }`}>
+                    Total discount: {discountPayload.discountPercent}% · Slab: {discountStatusMessage}
+                  </p>
+                </div>
+
+                <div className="w-full lg:max-w-md">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Subtotal</p>
+                      <p className="mt-1 font-mono text-[14px] font-semibold text-gray-900">{fmt(subtotalPaise)}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Discount Percentage</p>
+                      <p className={`mt-1 font-mono text-[14px] font-semibold ${hasAnyDiscount ? "text-emerald-700" : "text-gray-600"}`}>
+                        {discountPayload.discountPercent}%
+                      </p>
+                    </div>
+                    <div className={`rounded-xl border px-4 py-3 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"
+                      }`}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Discount Amount</p>
+                      <p className="mt-1 font-mono text-[15px] font-bold">
+                        {hasAnyDiscount ? `-${fmt(discountAmountPaise)}` : fmt(0)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-gray-900 bg-gray-900 px-4 py-3 text-white">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Final Payable Amount</p>
+                      <p className="mt-1 font-mono text-[17px] font-bold">{fmt(finalPayablePaise)}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Action bar */}
             <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 flex-wrap">
               <button onClick={handleSubmitProductArray}
-                className={`inline-flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-[13.5px] font-semibold transition-all shadow-sm hover:shadow-md hover:-translate-y-px cursor-pointer border-none ${
-                  appliedCoupon
-                    ? "bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-700 hover:to-violet-600"
+                className={`inline-flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-[13.5px] font-semibold transition-all shadow-sm hover:shadow-md hover:-translate-y-px cursor-pointer border-none ${hasAnyDiscount
+                    ? "bg-gradient-to-r from-emerald-700 to-emerald-500 hover:from-emerald-800 hover:to-emerald-600"
                     : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600"
-                }`}>
+                  }`}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M20 6 9 17l-5-5"/>
+                  <path d="M20 6 9 17l-5-5" />
                 </svg>
                 Place Order
               </button>
@@ -886,9 +1369,9 @@ function AddOrderPageInner() {
               <button onClick={handleSaveDraft} disabled={draftSaving}
                 className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 text-gray-600 rounded-xl text-[13.5px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
                 </svg>
                 {activeDraftId ? "Update Draft" : "Save as Draft"}
               </button>
@@ -896,7 +1379,7 @@ function AddOrderPageInner() {
               <button onClick={addRow}
                 className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-600 rounded-xl text-[13.5px] font-medium transition-all cursor-pointer">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M12 5v14M5 12h14"/>
+                  <path d="M12 5v14M5 12h14" />
                 </svg>
                 Add Row
               </button>
@@ -910,26 +1393,25 @@ function AddOrderPageInner() {
             <h3 className="text-[15px] font-semibold text-gray-900 mb-1">Upload Excel File</h3>
             <p className="text-[13px] text-gray-400 mb-6">Place orders in bulk using a formatted Excel spreadsheet.</p>
             <form onSubmit={handleSubmitFile}>
-              <label className={`block border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-200 ${
-                file ? "border-emerald-300 bg-emerald-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
-              }`}>
+              <label className={`block border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-200 ${file ? "border-emerald-300 bg-emerald-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
+                }`}>
                 <input required type="file" accept=".xlsx,.xls,.csv" className="hidden"
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
                 {file ? (
                   <><div className="text-4xl mb-3">📄</div>
-                  <p className="text-[14px] font-semibold text-emerald-700 mb-1">{file.name}</p>
-                  <p className="text-[12px] text-gray-400">{(file.size / 1024).toFixed(1)} KB · Click to change</p></>
+                    <p className="text-[14px] font-semibold text-emerald-700 mb-1">{file.name}</p>
+                    <p className="text-[12px] text-gray-400">{(file.size / 1024).toFixed(1)} KB · Click to change</p></>
                 ) : (
                   <><div className="text-4xl mb-3">📂</div>
-                  <p className="text-[14px] font-semibold text-gray-700 mb-1">Click to upload Excel file</p>
-                  <p className="text-[12px] text-gray-400">.xlsx, .xls, .csv accepted</p></>
+                    <p className="text-[14px] font-semibold text-gray-700 mb-1">Click to upload Excel file</p>
+                    <p className="text-[12px] text-gray-400">.xlsx, .xls, .csv accepted</p></>
                 )}
               </label>
               <div className="mt-5">
                 <button type="submit" disabled={!file}
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer border-none">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
                   </svg>
                   Submit via Excel
                 </button>

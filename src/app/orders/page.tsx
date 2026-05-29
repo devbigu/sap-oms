@@ -18,6 +18,10 @@ type Order = {
   orderdata_item_quantity: string;
   mtstatus: string;
   outstandingDate: string;
+  order_note?: string;
+  note?: string;
+  remark?: string;
+  remarks?: string;
   reason?: string;
 };
 type ApiResponse = { msg: string; count: number; status: boolean; data: Order[] };
@@ -26,9 +30,18 @@ const PAGE_SIZE = 10;
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
 
 const getDealerId = () => {
+  if (typeof window === "undefined") return "225";
   try { return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225"; }
   catch { return "225"; }
 };
+
+function extractOrderNote(order: Order, overlayNote?: string) {
+  if (overlayNote) return overlayNote;
+  const direct = order.order_note || order.note;
+  if (direct?.trim()) return direct.trim();
+  const remarks = [order.remark, order.remarks].filter(Boolean).join(" | ");
+  return remarks.match(/Order note:\s*([^|]+)/i)?.[1]?.trim() || "";
+}
 
 async function fetchOrders(page: number, search: string, id: string): Promise<ApiResponse> {
   const r = await fetch(`${BACKEND}/orderhispegination?page=${page}&search=${search}&id=${id}`);
@@ -37,16 +50,14 @@ async function fetchOrders(page: number, search: string, id: string): Promise<Ap
 }
 
 const statusConf: Record<string, { label: string; dot: string; text: string; bg: string }> = {
-  inprocess:  { label: "In Process", dot: "bg-amber-400",   text: "text-amber-800",   bg: "bg-amber-50 border-amber-200"   },
-  processing: { label: "Processing", dot: "bg-blue-400",    text: "text-blue-800",    bg: "bg-blue-50 border-blue-200"     },
-  dispatched: { label: "Dispatched", dot: "bg-indigo-400",  text: "text-indigo-800",  bg: "bg-indigo-50 border-indigo-200" },
-  successful: { label: "Successful", dot: "bg-emerald-400", text: "text-emerald-800", bg: "bg-emerald-50 border-emerald-200"},
-  cancelled:  { label: "Cancelled",  dot: "bg-red-400",     text: "text-red-800",     bg: "bg-red-50 border-red-200"       },
+  pending:   { label: "Pending", dot: "bg-amber-400", text: "text-amber-800", bg: "bg-amber-50 border-amber-200" },
+  inprocess: { label: "In Process", dot: "bg-amber-400", text: "text-amber-800", bg: "bg-amber-50 border-amber-200" },
+  completed: { label: "Completed", dot: "bg-emerald-400", text: "text-emerald-800", bg: "bg-emerald-50 border-emerald-200" },
 };
 
 function MtStatusBadge({ status }: { status: string }) {
-  const key = status?.toLowerCase().replace(/\s/g, "") ?? "";
-  const s = statusConf[key] ?? { label: status || "—", dot: "bg-gray-300", text: "text-gray-700", bg: "bg-gray-50 border-gray-200" };
+  const key = status?.toLowerCase().replace(/[\s_-]/g, "") ?? "";
+  const s = statusConf[key] ?? { label: "No Action Taken", dot: "bg-slate-400", text: "text-slate-700", bg: "bg-slate-50 border-slate-200" };
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${s.bg} ${s.text}`}>
       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${s.dot}`} />
@@ -91,8 +102,9 @@ function InvoiceRowButton({ order }: { order: Order }) {
       const blob = await generateOrderInvoicePDF(order);
       const res  = await uploadOrderInvoiceToSupabase(blob, order);
       showToast(res.success ? "success" : "error", res.success ? "Invoice saved to cloud" : (res.error || "Upload failed"));
-    } catch (e: any) {
-      showToast("error", e?.message || "Failed");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed";
+      showToast("error", message);
     } finally {
       setLoading(false);
     }
@@ -306,10 +318,11 @@ export default function OrderHistoryPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [dealerId, setDealerId] = useState("225");
+  const [dealerId, setDealerId] = useState(() => getDealerId());
   const [year] = useState(new Date().getFullYear());
   const [deleteOrderId, setDeleteOrderId] = useState<string | null>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [orderNotes, setOrderNotes] = useState<Record<string, string>>({});
 
   useEffect(() => { setDealerId(getDealerId()); }, []);
 
@@ -320,10 +333,27 @@ export default function OrderHistoryPage() {
     staleTime: 30_000,
     enabled: !!dealerId,
   });
+  console.log(" data", data);
 
   const orders = data?.data ?? [];
   const totalCount = data?.count ?? 0;
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const orderIdsKey = orders.map((o) => o.order_id).filter(Boolean).join(",");
+
+  useEffect(() => {
+    if (!dealerId || !orderIdsKey) { setOrderNotes({}); return; }
+    fetch(`/api/order-notes?dealer_id=${encodeURIComponent(dealerId)}&order_ids=${encodeURIComponent(orderIdsKey)}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.success) return;
+        const next: Record<string, string> = {};
+        (json.data ?? []).forEach((item: any) => {
+          if (item.orderId && item.note) next[item.orderId] = item.note;
+        });
+        setOrderNotes(next);
+      })
+      .catch(() => {});
+  }, [dealerId, orderIdsKey]);
 
   const handleSearch = (e: React.FormEvent) => { e.preventDefault(); setQuery(search); setPage(1); };
 
@@ -454,7 +484,10 @@ export default function OrderHistoryPage() {
                         )
                         : orders.map((order, idx) => {
                           const net = Number(order.order_amount) - Number(order.order_discount);
+
+                          console.log(order.order_amount, order.order_discount, net);
                           const isDeleted = !!(order.reason);
+                          const historyNote = extractOrderNote(order, orderNotes[order.order_id]);
 
                           return (
                             <tr key={order.order_id} className={`hover:bg-blue-50/30 transition-colors ${isDeleted ? "opacity-60" : ""}`}>
@@ -470,6 +503,11 @@ export default function OrderHistoryPage() {
                                     <span className="px-1.5 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded text-[10px] font-bold">DELETED</span>
                                   )}
                                 </div>
+                                {historyNote && (
+                                  <p className="mt-1 max-w-[320px] truncate text-[11px] text-gray-500" title={historyNote}>
+                                    Note: {historyNote}
+                                  </p>
+                                )}
                               </td>
                               <td className="px-4 py-3.5">
                                 <p className="text-[13px] text-gray-900 font-medium">{moment(order.order_date).format("DD MMM YYYY")}</p>

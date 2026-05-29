@@ -1,0 +1,638 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams, useRouter } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
+import axios from 'axios'
+import moment from 'moment'
+import {
+  ChevronLeft, ChevronDown, ChevronRight,
+  AlertCircle, ShieldAlert, Receipt,
+} from 'lucide-react'
+import DealerInfoCard from '@/components/ledger/DealerInfoCard'
+import LedgerSummary from '@/components/ledger/LedgerSummary'
+import TransactionTable from '@/components/ledger/TransactionTable'
+import PayMoneyModal, { PaymentData } from '@/components/ledger/PayMoneyModal'
+import { InvoiceModal } from '@/components/InvoiceModel'
+import { downloadOrderInvoice } from '@/lib/invoicegenerator'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const BACKEND_URL = 'https://mirisoft.co.in/sas/dealerapi/api'
+const YEAR = new Date().getFullYear()
+const TODAY = moment().startOf('day')
+const ORDERS_PAGE_SIZE = 20
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+type Role = 'admin' | 'dealer' | 'staff' | 'accountant'
+
+interface Dealer {
+  Dealer_Id: string
+  Dealer_Name: string
+  Dealer_Email: string
+  Dealer_Number: string
+  Dealer_Address: string
+  Dealer_City: string
+  Dealer_Pincode: string
+  walletBalance: number
+}
+
+interface LedgerSummaryData {
+  totalDebit: number
+  totalCredit: number
+  netBalance: number
+}
+
+interface Transaction {
+  id: string
+  debit: number
+  credit: number
+  narration: string
+  date: string
+  invoice: string
+  mode: string
+  type?: string
+}
+
+interface DealerLedgerResponse {
+  success: boolean
+  dealer: Dealer
+  summary: LedgerSummaryData
+  transactionCount: number
+  message?: string
+}
+
+interface TransactionsResponse {
+  success: boolean
+  data: Transaction[]
+  count: number
+  message?: string
+}
+
+type RawOrder = {
+  order_id: string
+  order_date: string
+  order_amount: string
+  order_discount: string
+  Dealer_Name: string
+  orderdata_item_quantity: string
+  mtstatus: string
+  outstandingDate: string
+  reason?: string
+  product_name?: string
+}
+
+type PayStatus = 'Paid' | 'Partial' | 'Unpaid' | 'Overdue'
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function resolveRole(): { role: Role; dealerId?: string; staffId?: string } {
+  if (typeof window === 'undefined') return { role: 'admin' }
+  try {
+    if (localStorage.getItem('accountant_token')) return { role: 'accountant' }
+    const userData = localStorage.getItem('UserData')
+    if (userData) {
+      const p = JSON.parse(userData)
+      if (p?.Dealer_Id) return { role: 'dealer', dealerId: p.Dealer_Id }
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+      if (localStorage.getItem('roletype') === '3') return { role: 'admin' }
+    }
+    const staffRaw = localStorage.getItem('staffData')
+    if (staffRaw) {
+      const p = JSON.parse(staffRaw)
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+    }
+    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
+    if (adminRaw) return { role: 'admin' }
+  } catch (_) {}
+  return { role: 'admin' }
+}
+
+function getPayStatus(o: RawOrder): PayStatus {
+  const ms = Number(o.mtstatus ?? 0)
+  if (ms >= 2) return 'Paid'
+  if (
+    o.outstandingDate &&
+    moment(o.outstandingDate, 'YYYY-MM-DD', true).isValid() &&
+    moment(o.outstandingDate).isBefore(TODAY)
+  )
+    return 'Overdue'
+  if (ms === 1) return 'Partial'
+  return 'Unpaid'
+}
+
+function fmt(n: number) {
+  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+// ─── StatusBadge ──────────────────────────────────────────────────────────────
+function StatusBadge({ status }: { status: PayStatus }) {
+  const cls: Record<PayStatus, string> = {
+    Paid:    'bg-emerald-50 border-emerald-200 text-emerald-700',
+    Partial: 'bg-blue-50 border-blue-200 text-blue-700',
+    Unpaid:  'bg-amber-50 border-amber-200 text-amber-700',
+    Overdue: 'bg-red-50 border-red-200 text-red-700',
+  }
+  const dot: Record<PayStatus, string> = {
+    Paid: 'bg-emerald-400', Partial: 'bg-blue-400', Unpaid: 'bg-amber-400', Overdue: 'bg-red-500',
+  }
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-bold border whitespace-nowrap ${cls[status]}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot[status]}`} />
+      {status}
+    </span>
+  )
+}
+
+// ─── Invoice download button ─────────────────────────────────────────────────
+function InvoiceBtn({ order }: { order: RawOrder }) {
+  const [loading, setLoading] = useState(false)
+  const handle = async () => {
+    setLoading(true)
+    await downloadOrderInvoice(order as any)
+    setLoading(false)
+  }
+  return (
+    <button onClick={handle} disabled={loading}
+      className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-600 hover:text-indigo-700 rounded-lg transition-all shadow-sm disabled:opacity-50 whitespace-nowrap">
+      {loading
+        ? <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+        : <Receipt size={10} />}
+      PDF
+    </button>
+  )
+}
+
+// ─── Aging Panel (scoped to single dealer) ───────────────────────────────────
+function DealerAgingPanel({ orders }: { orders: RawOrder[] }) {
+  const [open, setOpen] = useState(true)
+
+  const aging = useMemo(() => {
+    const unpaid = orders.filter(o => {
+      const ps = getPayStatus(o)
+      return ps === 'Unpaid' || ps === 'Partial' || ps === 'Overdue'
+    })
+
+    let current = 0, d31 = 0, d61 = 0, d90 = 0
+
+    for (const o of unpaid) {
+      const net  = Number(o.order_amount) - Number(o.order_discount)
+      const ref  = o.outstandingDate || o.order_date
+      const days = ref ? TODAY.diff(moment(ref).startOf('day'), 'days') : 0
+
+      if      (days <= 30) current += net
+      else if (days <= 60) d31     += net
+      else if (days <= 90) d61     += net
+      else                 d90     += net
+    }
+
+    const total = current + d31 + d61 + d90
+    return { current, d31, d61, d90, total, count: unpaid.length }
+  }, [orders])
+
+  if (aging.count === 0) return null
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm mb-6">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 border-b border-gray-100 hover:bg-gray-50/60 transition-colors"
+      >
+        <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900">
+          {open ? <ChevronDown size={15} className="text-indigo-500" /> : <ChevronRight size={15} className="text-indigo-500" />}
+          Outstanding Balance
+          <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded-full text-[10px] font-bold">
+            {fmt(aging.total)}
+          </span>
+        </div>
+        <span className="text-[11.5px] text-gray-400">{aging.count} outstanding order{aging.count !== 1 ? 's' : ''}</span>
+      </button>
+
+      {open && (
+        <div className="p-5">
+          {/* Outstanding total card */}
+          <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-xl p-4 mb-4">
+            <p className="text-xs font-semibold text-red-500 uppercase tracking-wide mb-1">Total Outstanding</p>
+            <p className="text-2xl font-bold text-red-700">{fmt(aging.total)}</p>
+          </div>
+
+          {/* Aging buckets */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: '0–30 Days', value: aging.current, color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+              { label: '31–60 Days', value: aging.d31, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
+              { label: '61–90 Days', value: aging.d61, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-200' },
+              { label: '90+ Days', value: aging.d90, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200' },
+            ].map(bucket => (
+              <div key={bucket.label} className={`${bucket.bg} border ${bucket.border} rounded-xl p-3`}>
+                <p className="text-[10.5px] font-bold text-gray-500 uppercase tracking-wider mb-1">{bucket.label}</p>
+                <p className={`text-lg font-bold font-mono ${bucket.color}`}>
+                  {bucket.value > 0 ? fmt(bucket.value) : '—'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Orders skeleton ─────────────────────────────────────────────────────────
+function OrdersSkeleton() {
+  return (
+    <>{Array.from({ length: 5 }).map((_, i) => (
+      <tr key={i} className="border-b border-gray-50">
+        {Array.from({ length: 8 }).map((_, j) => (
+          <td key={j} className="px-3 py-3">
+            <div className="h-3 bg-gray-100 rounded animate-pulse" style={{ width: j === 1 ? 100 : j === 0 ? 24 : 60 }} />
+          </td>
+        ))}
+      </tr>
+    ))}</>
+  )
+}
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+export default function DealerLedgerPage() {
+  const params = useParams()
+  const router = useRouter()
+  const dealerId = params.dealerId as string
+
+  const [payModalOpen, setPayModalOpen] = useState(false)
+  const [payLoading, setPayLoading] = useState(false)
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false)
+  const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [accessDenied, setAccessDenied] = useState(false)
+  const [userRole, setUserRole] = useState<Role>('admin')
+  const [staffId, setStaffId] = useState<string | undefined>()
+  const [ordersPage, setOrdersPage] = useState(1)
+
+  // ── Access control: dealers can only see their own ledger ──
+  useEffect(() => {
+    const { role, dealerId: ownDealerId, staffId: sid } = resolveRole()
+    setUserRole(role)
+    setStaffId(sid)
+    if (role === 'dealer' && ownDealerId && ownDealerId !== dealerId) {
+      setAccessDenied(true)
+    }
+  }, [dealerId])
+
+  // ── Staff access check: verify dealer is assigned to this staff ──
+  const { data: staffAssignedDealers } = useQuery<{ data: { Dealer_Id: string }[] }>({
+    queryKey: ['staff-assigned-dealers-check', staffId],
+    queryFn: async () => {
+      const res = await fetch(`${BACKEND_URL}/staffDealers?id=${staffId}`)
+      return res.json()
+    },
+    enabled: userRole === 'staff' && !!staffId && !!dealerId,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Deny access if staff and dealer not in assigned list
+  useEffect(() => {
+    if (userRole !== 'staff' || !staffAssignedDealers?.data) return
+    const isAssigned = staffAssignedDealers.data.some(d => d.Dealer_Id === dealerId)
+    if (!isAssigned) setAccessDenied(true)
+  }, [userRole, staffAssignedDealers, dealerId])
+
+  // ── Fetch dealer info and summary ──
+  const {
+    data: ledgerData,
+    isLoading: isLedgerLoading,
+    error: ledgerError,
+    refetch: refetchLedger,
+  } = useQuery<DealerLedgerResponse>({
+    queryKey: ['dealer-ledger', dealerId],
+    queryFn: async () => {
+      const res = await axios.get(`/api/ledger/${dealerId}`)
+      return res.data
+    },
+    enabled: !!dealerId && !accessDenied,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // ── Fetch transactions ──
+  const {
+    data: transactionsData,
+    isLoading: isTransactionsLoading,
+    refetch: refetchTransactions,
+  } = useQuery<TransactionsResponse>({
+    queryKey: ['dealer-transactions', dealerId],
+    queryFn: async () => {
+      const res = await axios.get(`/api/ledger/${dealerId}/transactions`)
+      return res.data
+    },
+    enabled: !!dealerId && !accessDenied,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // ── Fetch all orders (for orders list + aging) ──
+  const {
+    data: allOrdersRaw,
+    isLoading: isOrdersLoading,
+  } = useQuery<RawOrder[]>({
+    queryKey: ['all-orders-for-ledger'],
+    queryFn: async () => {
+      const res = await fetch(`${BACKEND_URL}/orderpegination?page=1&limit=1000&search=`)
+      const json = await res.json()
+      return Array.isArray(json.data) ? json.data : []
+    },
+    enabled: !!dealerId && !accessDenied,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Filter orders for this dealer
+  const dealerOrders = useMemo(() => {
+    if (!allOrdersRaw || !ledgerData?.dealer?.Dealer_Name) return []
+    const dealerName = ledgerData.dealer.Dealer_Name.toLowerCase()
+    return allOrdersRaw
+      .filter(o => o.Dealer_Name?.toLowerCase() === dealerName)
+      .sort((a, b) => moment(b.order_date).valueOf() - moment(a.order_date).valueOf())
+  }, [allOrdersRaw, ledgerData?.dealer?.Dealer_Name])
+
+  // Paginate orders
+  const ordersTotalPages = Math.max(1, Math.ceil(dealerOrders.length / ORDERS_PAGE_SIZE))
+  const ordersSlice = dealerOrders.slice((ordersPage - 1) * ORDERS_PAGE_SIZE, ordersPage * ORDERS_PAGE_SIZE)
+
+  // ── Toast auto-dismiss ──
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 3000)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  // ── Pay money handler ──
+  const handlePayMoney = async (data: PaymentData) => {
+    setPayLoading(true)
+    try {
+      const response = await axios.post(`/api/ledger/${dealerId}/pay`, data)
+      if (response.data.success) {
+        setToast({ text: 'Payment recorded successfully', type: 'success' })
+        await Promise.all([refetchLedger(), refetchTransactions()])
+      }
+    } catch (error: any) {
+      setToast({
+        text: error.response?.data?.message || 'Failed to record payment',
+        type: 'error',
+      })
+    } finally {
+      setPayLoading(false)
+    }
+  }
+
+  // ── Access denied view ──
+  if (accessDenied) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        <div className="p-6 max-w-7xl mx-auto">
+          <div className="flex items-center gap-3 p-6 bg-amber-50 rounded-xl border border-amber-200">
+            <ShieldAlert className="w-6 h-6 text-amber-600 shrink-0" />
+            <div>
+              <p className="font-semibold text-amber-900">Access Denied</p>
+              <p className="text-sm text-amber-700 mt-1">
+                You can only view your own ledger account.
+              </p>
+              <button
+                onClick={() => router.replace('/Pages/ledger')}
+                className="mt-3 text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors"
+              >
+                ← Go to My Ledger
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Error state ──
+  if (ledgerError) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        <div className="p-6 max-w-7xl mx-auto">
+          <div className="flex items-center gap-3 p-4 bg-red-50 rounded-lg border border-red-200">
+            <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+            <div>
+              <p className="font-semibold text-red-900">Error Loading Ledger</p>
+              <p className="text-sm text-red-700 mt-1">
+                {(ledgerError as any)?.message || 'Dealer not found'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const dealer = ledgerData?.dealer
+  const summary = ledgerData?.summary || { totalDebit: 0, totalCredit: 0, netBalance: 0 }
+  const transactions = transactionsData?.data || []
+  const transactionCount = transactionsData?.count || 0
+
+  // Hide pay button for dealers
+  const showPayButton = userRole !== 'dealer'
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-5 right-5 z-50 text-sm px-4 py-3 rounded-lg shadow-lg transition-all flex items-center gap-2 ${
+            toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4m0 4h.01" />
+            </svg>
+          )}
+          {toast.text}
+        </div>
+      )}
+
+      {/* Pay Money Modal */}
+      <PayMoneyModal
+        isOpen={payModalOpen}
+        onClose={() => setPayModalOpen(false)}
+        onSubmit={handlePayMoney}
+        dealerName={dealer?.Dealer_Name || 'Dealer'}
+        isLoading={payLoading}
+      />
+
+      {/* Invoice Modal */}
+      <InvoiceModal
+        isOpen={invoiceModalOpen}
+        onClose={() => setInvoiceModalOpen(false)}
+        dealerId={dealerId}
+      />
+
+      <div className="p-6 max-w-7xl mx-auto">
+        {/* Back button */}
+        <button
+          onClick={() => router.push('/Pages/ledger')}
+          className="flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors mb-6"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Dealer Ledger
+        </button>
+
+        {/* Dealer Info Card */}
+        <DealerInfoCard
+          dealer={dealer || null}
+          isLoading={isLedgerLoading}
+          onPayMoneyClick={() => setPayModalOpen(true)}
+        />
+
+        {/* Summary Cards */}
+        <LedgerSummary
+          totalDebit={summary.totalDebit}
+          totalCredit={summary.totalCredit}
+          netBalance={summary.netBalance}
+          isLoading={isLedgerLoading}
+        />
+
+        {/* ── Outstanding / Aging Panel ── */}
+        {!isOrdersLoading && dealerOrders.length > 0 && (
+          <DealerAgingPanel orders={dealerOrders} />
+        )}
+
+        {/* ── Orders List ── */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm mb-6">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2 text-[13.5px] font-semibold text-gray-900">
+              <Receipt size={14} className="text-indigo-500" />
+              Orders
+              <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold">
+                {dealerOrders.length} order{dealerOrders.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+
+            {dealerOrders.length > ORDERS_PAGE_SIZE && (
+              <div className="flex items-center gap-2 text-[11.5px] text-gray-400">
+                Page {ordersPage} of {ordersTotalPages}
+                <button
+                  disabled={ordersPage <= 1}
+                  onClick={() => setOrdersPage(p => p - 1)}
+                  className="px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-30 text-gray-600 text-[12px]"
+                >
+                  ‹
+                </button>
+                <button
+                  disabled={ordersPage >= ordersTotalPages}
+                  onClick={() => setOrdersPage(p => p + 1)}
+                  className="px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-30 text-gray-600 text-[12px]"
+                >
+                  ›
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  {['#', 'Order No.', 'Date', 'Gross', 'Discount', 'Net', 'Units', 'Payment Status', 'Action'].map(h => (
+                    <th key={h} className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-gray-50">
+                {isOrdersLoading ? (
+                  <OrdersSkeleton />
+                ) : ordersSlice.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-14 text-center text-[13px] text-gray-400">
+                      No orders found for this dealer
+                    </td>
+                  </tr>
+                ) : ordersSlice.map((order, i) => {
+                  const gross    = Number(order.order_amount)
+                  const discount = Number(order.order_discount)
+                  const net      = gross - discount
+                  const ps       = getPayStatus(order)
+                  const rowN     = (ordersPage - 1) * ORDERS_PAGE_SIZE + i + 1
+
+                  return (
+                    <tr key={order.order_id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-3 text-[11px] text-gray-400 font-mono">
+                        {String(rowN).padStart(2, '0')}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="font-mono text-[11.5px] font-bold text-indigo-700">
+                          OM/{YEAR}/{order.order_id}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap">
+                        <div className="text-[12px] text-gray-800">{moment(order.order_date).format('DD MMM YYYY')}</div>
+                        <div className="text-[10px] text-gray-400 font-mono">{moment(order.order_date).format('hh:mm A')}</div>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-[12px] text-gray-700">{fmt(gross)}</td>
+                      <td className="px-3 py-3 font-mono text-[12px] text-gray-500">
+                        {discount > 0 ? <span className="text-orange-600">−{fmt(discount)}</span> : '—'}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-[13px] font-bold text-gray-900">{fmt(net)}</td>
+                      <td className="px-3 py-3 text-[12px] text-gray-600 text-center">{order.orderdata_item_quantity || '—'}</td>
+                      <td className="px-3 py-3">
+                        <StatusBadge status={ps} />
+                      </td>
+                      <td className="px-3 py-3">
+                        <InvoiceBtn order={order} />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Orders pagination footer */}
+          {!isOrdersLoading && dealerOrders.length > ORDERS_PAGE_SIZE && (
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
+              <span className="text-[11.5px] text-gray-400">
+                Showing {(ordersPage - 1) * ORDERS_PAGE_SIZE + 1}–{Math.min(ordersPage * ORDERS_PAGE_SIZE, dealerOrders.length)} of {dealerOrders.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  disabled={ordersPage <= 1}
+                  onClick={() => setOrdersPage(p => p - 1)}
+                  className="px-3 py-1 rounded-lg border border-gray-200 hover:bg-white disabled:opacity-30 text-gray-600 text-[12px] font-medium transition-colors"
+                >
+                  Previous
+                </button>
+                <button
+                  disabled={ordersPage >= ordersTotalPages}
+                  onClick={() => setOrdersPage(p => p + 1)}
+                  className="px-3 py-1 rounded-lg border border-gray-200 hover:bg-white disabled:opacity-30 text-gray-600 text-[12px] font-medium transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Transaction Table */}
+        <TransactionTable
+          transactions={transactions}
+          isLoading={isTransactionsLoading}
+          count={transactionCount}
+          onInvoiceClick={() => setInvoiceModalOpen(true)}
+        />
+      </div>
+    </div>
+  )
+}

@@ -343,7 +343,9 @@ export default function ProductListPage() {
 
                     <td className="px-4 py-[14px]">
                       <span className="text-[12px] font-semibold text-[#374151]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                        {product.product_quantity || "—"}
+                        {product.product_quantity
+                          ? `${product.product_quantity} pcs`
+                          : "—"}
                       </span>
                     </td>
 

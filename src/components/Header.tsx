@@ -70,17 +70,15 @@ export function storeCategoryFilter(value: string) {
     }
   } catch { /* ignore */ }
 }
- 
 
 export function userName() {
- const [value, setValue] = useState(null);
+  const [value, setValue] = useState(null);
   useEffect(() => {
     try {
       const raw = localStorage.getItem("UserData")
       if (!raw) return
       const data = JSON.parse(raw)
       setValue(data?.Dealer_Name ?? data?.city ?? data?.District ?? data?.district ?? null)
-
     } catch { /* ignore */ }
   }, [])
   return <div className='font-bold uppercase'>{value}</div>;
@@ -92,7 +90,6 @@ export function userName() {
 function useLocationFromStorage() {
   const [city, setCity] = useState<string | null>(null)
   const [pincode, setPincode] = useState<string | null>(null)
-  
 
   useEffect(() => {
     try {
@@ -108,6 +105,21 @@ function useLocationFromStorage() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// SCORE helper — ranks how well a product matches a query
+// ─────────────────────────────────────────────────────────────
+function scoreProduct(product: Product, q: string): number {
+  const sku = product.SKU.toLowerCase()
+  const name = product.Name.toLowerCase()
+
+  if (sku === q) return 100   // exact SKU
+  if (sku.startsWith(q)) return 80    // SKU prefix
+  if (sku.includes(q)) return 60    // SKU substring
+  if (name.startsWith(q)) return 40    // name prefix
+  if (name.includes(q)) return 20    // name substring
+  return 0
+}
+
+// ─────────────────────────────────────────────────────────────
 // HEADER
 // ─────────────────────────────────────────────────────────────
 const Header = () => {
@@ -118,7 +130,6 @@ const Header = () => {
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [query, setQuery] = useState("")
 
-  
   const [allProducts, setAllProducts] = useState<Product[]>([])
   const [suggestions, setSuggestions] = useState<Product[]>([])
   const [showDropdown, setShowDropdown] = useState(false)
@@ -131,7 +142,6 @@ const Header = () => {
 
   const { city, pincode } = useLocationFromStorage()
 
-
   // ── Load products once ──────────────────────────────────────
   useEffect(() => {
     fetch("/data/products.json")
@@ -140,20 +150,26 @@ const Header = () => {
       .catch(console.error)
   }, [])
 
-  // ── Filter suggestions ──────────────────────────────────────
+  // ── Filter & rank suggestions ───────────────────────────────
   useEffect(() => {
     const q = query.trim().toLowerCase()
     if (!q) { setSuggestions([]); setShowDropdown(false); return }
 
     let pool = allProducts
     if (selectedCategory !== "all") {
-       pool = pool.filter(p =>
+      pool = pool.filter(p =>
         p.Name.toLowerCase().includes(selectedCategory.toLowerCase()) ||
         (p.Description ?? "").toLowerCase().includes(selectedCategory.toLowerCase())
       )
     }
 
-    const matched = pool.filter(p => p.Name.toLowerCase().includes(q)).slice(0, 8)
+    const matched = pool
+      .map(p => ({ product: p, score: scoreProduct(p, q) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map(({ product }) => product)
+
     setSuggestions(matched)
     setShowDropdown(matched.length > 0)
     setActiveIndex(-1)
@@ -194,7 +210,6 @@ const Header = () => {
   const goToProduct = (product: Product) => {
     setShowDropdown(false)
     setQuery(product.Name)
-    // Persist to recently viewed
     pushRecentlyViewed({ SKU: product.SKU, Name: product.Name, image: product.image })
     router.push(`/Products/${product.SKU}`)
   }
@@ -204,7 +219,8 @@ const Header = () => {
     const q = query.trim()
     if (!q) return
     setShowDropdown(false)
-    router.push(`/Pages/products?q=${encodeURIComponent(q)}`)  }
+    router.push(`/Pages/products?q=${encodeURIComponent(q)}`)
+  }
 
   // ── Category change → store filter + navigate ───────────────
   const handleCategoryChange = (value: string) => {
@@ -221,7 +237,7 @@ const Header = () => {
 
   return (
     <div>
-      <div className="w-full h-16 bg-[#4040df] text-white flex items-center px-2 py-2 gap-2">
+      <div className="w-full h-16 bg-linear-to-r from-[#1F4B8D] to-slate-950 text-white flex items-center px-2 py-2 gap-2">
 
         {/* LOGO */}
         <div className="flex items-center border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer">
@@ -266,7 +282,7 @@ const Header = () => {
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search products…"
+            placeholder="Search by name or SKU…"
             className="flex-1 px-3 text-black text-sm outline-none bg-white"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -307,10 +323,7 @@ const Header = () => {
                 >
                   <FaMagnifyingGlass style={{ color: "#94a3b8", flexShrink: 0, fontSize: 12 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <HighlightMatch text={product.Name} query={query} />
-                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      SKU: {product.SKU}
-                    </div>
+                    <HighlightMatch text={product.Name} sku={product.SKU} query={query} />
                   </div>
                   <span style={{ fontSize: 11, color: "#f59e0b", fontWeight: 600, flexShrink: 0 }}>
                     View →
@@ -363,33 +376,68 @@ const Header = () => {
               </span>
             )}
           </Link>
-          {/* Cart preview — appears on hover, click the icon to go to full cart page */}
           <div className="absolute right-0 top-full mt-1 w-[440px] hidden group-hover:block z-[60] bg-white shadow-2xl border border-gray-200 rounded-xl text-black overflow-hidden">
             <Cart />
           </div>
         </div>
       </div>
-
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────
 // HIGHLIGHT MATCH
+// Highlights the matched portion in both name and SKU.
+// SKU row is bold/dark when the query matched the SKU.
 // ─────────────────────────────────────────────────────────────
-function HighlightMatch({ text, query }: { text: string; query: string }) {
+function HighlightMatch({ text, sku, query }: { text: string; sku: string; query: string }) {
   const q = query.trim()
-  if (!q) return <span style={{ fontSize: 13, color: "#0f172a" }}>{text}</span>
-  const idx = text.toLowerCase().indexOf(q.toLowerCase())
-  if (idx === -1) return <span style={{ fontSize: 13, color: "#0f172a" }}>{text}</span>
+
+  const highlight = (str: string) => {
+    if (!q) return <span>{str}</span>
+    const idx = str.toLowerCase().indexOf(q.toLowerCase())
+    if (idx === -1) return <span>{str}</span>
+    return (
+      <span>
+        {str.slice(0, idx)}
+        <strong style={{ color: "#1e3a5f" }}>{str.slice(idx, idx + q.length)}</strong>
+        {str.slice(idx + q.length)}
+      </span>
+    )
+  }
+
+  const skuMatched = q ? sku.toLowerCase().includes(q.toLowerCase()) : false
+
   return (
-    <span style={{ fontSize: 13, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
-      
-      {text.slice(0, idx)}
-      <strong style={{ color: "#1e3a5f" }}>{text.slice(idx, idx + q.length)}</strong>
-      {text.slice(idx + q.length)} 
-    </span> 
-    
+    <div style={{ overflow: "hidden" }}>
+      {/* Product name row */}
+      <div style={{
+        fontSize: 13,
+        color: "#0f172a",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        display: "block",
+      }}>
+        {highlight(text)}
+      </div>
+      {/* SKU row — highlighted when the query matched the SKU */}
+      <div style={{
+        fontSize: 11,
+        marginTop: 1,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>
+        <span style={{ color: skuMatched ? "#1e3a5f" : "#94a3b8" }}>SKU: </span>
+        <span style={{
+          color: skuMatched ? "#1e3a5f" : "#94a3b8",
+          fontWeight: skuMatched ? 700 : 400,
+        }}>
+          {highlight(sku)}
+        </span>
+      </div>
+    </div>
   )
 }
 

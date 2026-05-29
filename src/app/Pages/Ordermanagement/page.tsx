@@ -95,10 +95,21 @@ function acceptBadge(a: string) {
     ? { cls: 'badge-accepted', label: 'Accepted', dot: '#1d4ed8' }
     : { cls: 'badge-awaiting', label: 'Awaiting',  dot: '#f59e0b' }
 }
+
+function mtStatusValue(s: string) {
+  const key = (s || '').trim().toLowerCase().replace(/[\s_-]/g, '')
+  if (key === 'pending') return 'Pending'
+  if (key === 'inprocess') return 'InProcess'
+  if (key === 'completed') return 'Completed'
+  return 'NoActionTaken'
+}
+
 function mtBadge(s: string) {
-  if (s === 'Completed') return { cls: 'badge-approved',  dot: '#10b981', label: 'Completed'  }
-  if (s === 'InProcess') return { cls: 'badge-inprocess', dot: '#ef4444', label: 'In Process' }
-  return                        { cls: 'badge-pending',   dot: '#f59e0b', label: 'Pending'    }
+  const value = mtStatusValue(s)
+  if (value === 'Completed') return { value, cls: 'badge-approved',  dot: '#10b981', label: 'Completed' }
+  if (value === 'InProcess') return { value, cls: 'badge-inprocess', dot: '#ef4444', label: 'In Process' }
+  if (value === 'Pending') return { value, cls: 'badge-pending', dot: '#f59e0b', label: 'Pending' }
+  return { value, cls: 'badge-noaction', dot: '#94a3b8', label: 'No Action Taken' }
 }
 function highlight(text: string, query: string) {
   if (!query || !text) return text
@@ -385,7 +396,7 @@ export default function OrdersPage() {
     if (orderIdInput.trim() && !o.order_id.startsWith(orderIdInput.trim())) return false
     if (dealerInput.trim()  && !(o.Dealer_Name || '').toLowerCase().includes(dealerInput.trim().toLowerCase())) return false
     if (statusSearch !== '' && o.accept_order !== statusSearch) return false
-    if (mtFilter     !== '' && o.mtstatus     !== mtFilter)     return false
+    if (mtFilter     !== '' && mtStatusValue(o.mtstatus) !== mtFilter) return false
     if (amountMin    !== '' && Number(o.order_amount || 0) < Number(amountMin)) return false
     if (amountMax    !== '' && Number(o.order_amount || 0) > Number(amountMax)) return false
     if (dateFrom !== '') { const d = (o.orderDate || o.order_date || '').slice(0, 10); if (d < dateFrom) return false }
@@ -421,7 +432,7 @@ export default function OrdersPage() {
         'Net (₹)':      Number(o.order_amount || 0) - Number(o.order_discount || 0),
         'Qty':          o.orderdata_item_quantity || '',
         'Confirmation': o.accept_order === '1' ? 'Accepted' : 'Awaiting',
-        'MT Status':    o.mtstatus || 'Pending',
+        'MT Status':    mtBadge(o.mtstatus).label,
       }
       if (cfg?.showDealerCol) base['Dealer'] = o.Dealer_Name || ''
       return base
@@ -446,7 +457,7 @@ export default function OrdersPage() {
     if (orderIdInput) parts.push(`id-${orderIdInput}`)
     if (dateFrom || dateTo) parts.push(`${dateFrom || 'start'}-to-${dateTo || 'now'}`)
     if (statusSearch) parts.push(statusSearch === '1' ? 'accepted' : 'awaiting')
-    if (mtFilter)     parts.push(mtFilter.toLowerCase().replace(/\s/g, '-'))
+    if (mtFilter)     parts.push(mtBadge(mtFilter).label.toLowerCase().replace(/\s+/g, '-'))
     if (amountMin || amountMax) parts.push(`amt-${amountMin || '0'}-${amountMax || 'max'}`)
     parts.push(new Date().toISOString().slice(0, 10))
 
@@ -557,6 +568,7 @@ export default function OrdersPage() {
         .badge-accepted  { background: #eff6ff; color: #1d4ed8; }
         .badge-awaiting  { background: #fffbeb; color: #92400e; }
         .badge-inprocess { background: #fff1f2; color: #be123c; }
+        .badge-noaction  { background: #f8fafc; color: #475569; }
         .empty-row td { padding: 52px 20px; text-align: center; color: #9ca3af; font-size: 13px; }
         .pagination { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-top: 1px solid #f1f3f9; flex-wrap: wrap; gap: 12px; }
         .pagination-info { font-size: 12px; color: #94a3b8; }
@@ -651,7 +663,7 @@ export default function OrdersPage() {
               {orderIdInput  && <FilterTag label={`ID: ${orderIdInput}…`} color="#4338ca" bg="#eef2ff" onRemove={() => setOrderIdInput('')} />}
               {dealerInput   && <FilterTag label={`Dealer: ${dealerInput}`} color="#065f46" bg="#ecfdf5" onRemove={() => setDealerInput('')} />}
               {statusSearch  && <FilterTag label={statusSearch === '1' ? 'Accepted' : 'Awaiting'} color={statusSearch === '1' ? '#1d4ed8' : '#92400e'} bg={statusSearch === '1' ? '#eff6ff' : '#fffbeb'} onRemove={() => setStatusSearch('')} />}
-              {mtFilter      && <FilterTag label={mtFilter} color="#92400e" bg="#fffbeb" onRemove={() => setMtFilter('')} />}
+              {mtFilter      && <FilterTag label={mtBadge(mtFilter).label} color="#92400e" bg="#fffbeb" onRemove={() => setMtFilter('')} />}
               {(amountMin || amountMax) && <FilterTag label={`₹${amountMin||'0'}–₹${amountMax||'∞'}`} color="#065f46" bg="#ecfdf5" onRemove={() => { setAmountMin(''); setAmountMax('') }} />}
               {(dateFrom || dateTo) && <FilterTag label={`${dateFrom||'…'} → ${dateTo||'…'}`} color="#7c3aed" bg="#ede9fe" onRemove={() => { setDateFrom(''); setDateTo('') }} />}
               <button onClick={() => { clearSearch(); clearAllFilters() }} className="text-[11px] text-slate-400 underline cursor-pointer bg-transparent border-none font-[inherit] px-2">
@@ -727,11 +739,12 @@ export default function OrdersPage() {
                     <th>
                       MT Status
                       <div className="th-filter relative">
-                        <select value={mtFilter} onChange={e => setMtFilter(e.target.value)} className={`w-[110px] ${selectCls(!!mtFilter)}`}>
+                        <select value={mtFilter} onChange={e => setMtFilter(e.target.value)} className={`w-[145px] ${selectCls(!!mtFilter)}`}>
                           <option value="">Any</option>
                           <option value="Pending">Pending</option>
                           <option value="InProcess">In Process</option>
                           <option value="Completed">Completed</option>
+                          <option value="NoActionTaken">No Action Taken</option>
                         </select>
                       </div>
                     </th>
@@ -802,7 +815,7 @@ export default function OrdersPage() {
                         <td>
                           <span className={`badge ${mtb.cls}`}>
                             <span className="badge-dot" style={{ background: mtb.dot }} />
-                            {order.mtstatus || 'Pending'}
+                            {mtb.label}
                           </span>
                           <div className="qty-info">Total: {order.orderdata_item_quantity} · Dispatch: {order.readyquantity}</div>
                           {order.reason && <div className="reason-tag">⚠ {order.reason}</div>}

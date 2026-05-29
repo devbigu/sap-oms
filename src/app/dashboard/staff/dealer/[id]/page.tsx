@@ -6,6 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import axios from 'axios'
 import { ArrowLeft, Package, Search, Download } from 'lucide-react'
 import moment from 'moment'
+import { hasPriorityTag } from '@/lib/orderPriority'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const YEAR        = new Date().getFullYear()
@@ -51,6 +52,10 @@ type OrderItem = {
   orderdata_afterDisPrice: string
   orderdata_totalprice: string
   remark: string
+  remarks?: string
+  priority?: string | boolean
+  isPriority?: string | boolean
+  is_priority?: string | boolean
   orderdata_status: string
   orderdata_datetime: string
   orderdata_orderid: string
@@ -241,11 +246,11 @@ export default function StaffDealerViewPage() {
   // CSV export for order items
   const exportItemsCSV = () => {
     if (!items.length) return
-    const headers = ["S.No.", "Order ID", "Cat. No.", "Description", "Qty", "Price", "Discount", "After Disc.", "Total", "Status", "Date"]
+    const headers = ["S.No.", "Order ID", "Cat. No.", "Description", "Qty", "Priority", "Price", "Discount", "After Disc.", "Total", "Status", "Date"]
     const rows = items.map((o, i) => [
       (itemPage - 1) * ITEM_PAGE_SIZE + i + 1,
       o.orderdata_orderid, o.orderdata_cat_no, o.order_item_description,
-      o.orderdata_item_quantity, o.orderdata_price, o.orderdata_discount,
+      o.orderdata_item_quantity, hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks) ? 'Priority' : '', o.orderdata_price, o.orderdata_discount,
       o.orderdata_afterDisPrice, o.orderdata_totalprice,
       dispatchBadge(o.orderdata_status).label,
       o.orderdata_datetime?.slice(0, 16) ?? "",
@@ -568,7 +573,14 @@ export default function StaffDealerViewPage() {
                             </span>
                           </td>
                           <td className="px-4 py-3.5 text-xs text-gray-700 max-w-[180px] truncate">
-                            {item.order_item_description || "—"}
+                            <div className="flex items-center gap-2">
+                              <span className="truncate">{item.order_item_description || "—"}</span>
+                              {hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks) && (
+                                <span className="bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">
+                                  Priority
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3.5 text-xs text-gray-600 text-center">
                             {item.orderdata_item_quantity || "—"}

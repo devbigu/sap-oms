@@ -601,7 +601,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                               )}
                             </div>
                             {packSize > 1 && (
-                              <span style={{ fontSize: 10, color: "#94a3b8", marginTop: 3, display: "block" }}>
+                              <span style={{ fontSize: 10, color: "#1e1e1e", marginTop: 3, display: "block" }}>
                                 = {numPacks * packSize} Pcs.
                               </span>
                             )}
@@ -611,7 +611,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                             {packPaise ? fmt(packPaise) : "—"}
                           </td>
 
-                          <td style={{ padding: "11px 16px", color: "#94a3b8", fontSize: 12 }}>
+                          <td style={{ padding: "11px 16px", color: "#1e1e1e", fontSize: 12 }}>
                             {unitPaise ? fmt(unitPaise) : "—"}
                           </td>
 

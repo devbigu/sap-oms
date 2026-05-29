@@ -55,55 +55,21 @@ export default function CartPage() {
   const increment = useCartStore(s => s.incrementQty);
   const decrement = useCartStore(s => s.decrementQty);
   const remove    = useCartStore(s => s.removeFromCart);
+  const togglePriority = useCartStore(s => s.togglePriority);
   const clearCart = useCartStore(s => s.clearCart);
 
   const [lookup,    setLookup]    = useState<Record<string, ProductMeta>>({});
   const [removed,   setRemoved]   = useState<string[]>([]);
-  const [dealerId,  setDealerId]  = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     axios.get("/data/products.json")
       .then(res => setLookup(buildVariantLookup(res.data)))
       .catch(() => {});
-    try {
-      const raw = localStorage.getItem("UserData");
-      if (raw) setDealerId(JSON.parse(raw)?.Dealer_Id ?? null);
-    } catch { /* ignore */ }
   }, []);
 
-  const handleImportToOrder = async () => {
-    if (cart.length === 0 || !dealerId) return;
-    setImporting(true);
-    try {
-      const items = cart.map(item => {
-        const nameParts   = item.name.split(" - ");
-        const productName = nameParts[0] ?? item.name;
-        const variantCode = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
-        const meta        = lookup[item.id];
-        return {
-          productName:  meta?.productName ?? productName,
-          variantCode:  item.id,               // item.id = product_cat / SKU
-          quantity:     item.quantity,
-          unitPrice:    item.price,             // paise per pack
-          packSize:     meta?.packSize ?? item.packSize ?? 1,
-          displayName:  item.name,
-        };
-      });
-
-      const res = await fetch("/api/draft-cart", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ dealer_id: dealerId, items }),
-      });
-      if (!res.ok) throw new Error("Save failed");
-
-      router.push("/dashboard/dealer/AddOrderForm?from=cart");
-    } catch {
-      alert("Could not save cart. Please try again.");
-    } finally {
-      setImporting(false);
-    }
+  const handlePurchase = () => {
+    if (cart.length === 0) return;
+    router.push("/dashboard/dealer/AddOrderForm");
   };
 
   const totalPacks    = cart.reduce((acc, item) => acc + item.quantity, 0);
@@ -246,6 +212,11 @@ export default function CartPage() {
                           Pack of {packSize}
                         </span>
                       )}
+                      {item.isPriority && (
+                        <span style={{ fontSize: 11, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca", borderRadius: 6, padding: "2px 8px", fontWeight: 700 }}>
+                          Priority
+                        </span>
+                      )}
                     </div>
 
                     {/* Quantity controls */}
@@ -275,6 +246,23 @@ export default function CartPage() {
                         style={{ fontSize: 13, color: "#ef4444", background: "none", border: "none", cursor: "pointer", fontWeight: 500, padding: 0 }}
                       >
                         Remove
+                      </button>
+
+                      <button
+                        onClick={() => togglePriority(item.id)}
+                        title="Mark this product as priority"
+                        style={{
+                          fontSize: 12,
+                          color: item.isPriority ? "#b91c1c" : "#4b5563",
+                          background: item.isPriority ? "#fee2e2" : "#fff",
+                          border: item.isPriority ? "1px solid #fecaca" : "1px solid #e5e7eb",
+                          borderRadius: 999,
+                          cursor: "pointer",
+                          fontWeight: 700,
+                          padding: "5px 10px",
+                        }}
+                      >
+                        {item.isPriority ? "Priority on" : "Priority"}
                       </button>
                     </div>
 
@@ -343,35 +331,24 @@ export default function CartPage() {
             </div>
 
             <button
-              onClick={handleImportToOrder}
-              disabled={cart.length === 0 || importing || !dealerId}
+              onClick={handlePurchase}
+              disabled={cart.length === 0}
               style={{
                 width: "100%", padding: "12px 0", borderRadius: 12, border: "none",
-                cursor: (cart.length === 0 || importing) ? "not-allowed" : "pointer",
-                background: (cart.length === 0 || importing) ? "#e5e7eb" : "linear-gradient(135deg,#6366f1,#8b5cf6)",
-                color: (cart.length === 0 || importing) ? "#9ca3af" : "#fff",
+                cursor: cart.length === 0 ? "not-allowed" : "pointer",
+                background: cart.length === 0 ? "#e5e7eb" : "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                color: cart.length === 0 ? "#9ca3af" : "#fff",
                 fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                 transition: "opacity .15s",
               }}
-              onMouseEnter={e => !importing && cart.length > 0 && (e.currentTarget.style.opacity = "0.9")}
+              onMouseEnter={e => cart.length > 0 && (e.currentTarget.style.opacity = "0.9")}
               onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
             >
-              {importing ? (
-                <>
-                  <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin .7s linear infinite" }} />
-                  Saving…
-                </>
-              ) : (
-                <>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <path d="M5 12h14M12 5l7 7-7 7"/>
-                  </svg>
-                  Import to Order
-                </>
-              )}
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M5 12h14M12 5l7 7-7 7"/>
+              </svg>
+              Purchase
             </button>
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-
             <Link
               href="/Pages/products"
               style={{ display: "block", textAlign: "center", marginTop: 12, fontSize: 13, color: "#6366f1", textDecoration: "none", fontWeight: 500 }}

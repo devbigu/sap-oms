@@ -20,6 +20,7 @@ export type DraftProductRow = {
   producQuanity: number;
   price: number;
   packSize: number;
+  isPriority?: boolean;
 };
 
 export type OrderDraft = {
@@ -28,6 +29,7 @@ export type OrderDraft = {
   name: string;
   shipto: string | null;
   refno: string | null;
+  order_note: string | null;
   coupon_code: string | null;
   coupon_pct: number | null;
   rows: DraftProductRow[];
@@ -40,6 +42,7 @@ export type DraftPayload = {
   name: string;
   shipto?: string;
   refno?: string;
+  order_note?: string | null;
   coupon_code?: string | null;
   coupon_pct?: number | null;
   rows: DraftProductRow[];

@@ -28,18 +28,18 @@ type SliderManagerProps = {
 };
 
 export default function SliderManager({
-  title  = "Slider Images",
+  title = "Slider Images",
   bucket = "slider",
-  table  = "slider_images",
+  table = "slider_images",
 }: SliderManagerProps) {
-  const [images,    setImages]    = useState<SliderImage[]>([]);
-  const [loading,   setLoading]   = useState(true);
+  const [images, setImages] = useState<SliderImage[]>([]);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [deleting,  setDeleting]  = useState<string | null>(null);
-  const [toast,     setToast]     = useState<{ msg: string; ok: boolean } | null>(null);
-  const [preview,   setPreview]   = useState<string | null>(null);
-  const [file,      setFile]      = useState<File | null>(null);
-  const [label,     setLabel]     = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [label, setLabel] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const showToast = (msg: string, ok: boolean) => {
@@ -79,13 +79,16 @@ export default function SliderManager({
     if (!file) return;
     setUploading(true);
     try {
-      const ext      = file.name.split(".").pop();
+      const ext = file.name.split(".").pop();
       const fileName = `${Date.now()}.${ext}`;
 
       const { error: storageErr } = await supabase.storage
         .from(bucket)
         .upload(fileName, file, { cacheControl: "3600", upsert: false });
-      if (storageErr) throw storageErr;
+      if (storageErr) {
+        console.error("STORAGE ERROR:", storageErr);
+        throw storageErr;
+      }
 
       const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(fileName);
 
@@ -129,12 +132,11 @@ export default function SliderManager({
 
       {/* Toast */}
       {toast && (
-        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-lg text-[13px] font-semibold flex items-center gap-2 transition-all ${
-          toast.ok ? "bg-emerald-600 text-white" : "bg-red-500 text-white"
-        }`}>
+        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-lg text-[13px] font-semibold flex items-center gap-2 transition-all ${toast.ok ? "bg-emerald-600 text-white" : "bg-red-500 text-white"
+          }`}>
           {toast.ok
-            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5"/></svg>
-            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6 9 17l-5-5" /></svg>
+            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" /></svg>
           }
           {toast.msg}
         </div>
@@ -147,7 +149,7 @@ export default function SliderManager({
             onClick={() => router.back()}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] text-[12.5px] font-medium text-[#374151] cursor-pointer transition-all hover:bg-[#f1f5f9] hover:-translate-x-px"
           >Back</button>
-        <h2 className="text-[15px] font-bold text-gray-900">{title}</h2>
+          <h2 className="text-[15px] font-bold text-gray-900">{title}</h2>
         </div>
         <p className="text-[12px] text-gray-500 mt-0.5">Changes go live on the homepage instantly.</p>
       </div>
@@ -157,11 +159,10 @@ export default function SliderManager({
         <p className="text-[12px] font-bold text-gray-500 uppercase tracking-widest mb-3">Add Image</p>
 
         {/* Drop zone */}
-        <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-          preview
-            ? "border-indigo-300 bg-indigo-50/30"
-            : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/20"
-        }`}>
+        <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${preview
+          ? "border-indigo-300 bg-indigo-50/30"
+          : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/20"
+          }`}>
           <input
             ref={fileRef}
             type="file"
@@ -182,9 +183,9 @@ export default function SliderManager({
             <>
               <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center mb-2">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="1.5" strokeLinecap="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2"/>
-                  <circle cx="8.5" cy="8.5" r="1.5"/>
-                  <polyline points="21 15 16 10 5 21"/>
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
                 </svg>
               </div>
               <p className="text-[13px] font-semibold text-gray-700">Click to choose image</p>
@@ -213,7 +214,7 @@ export default function SliderManager({
               <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Uploading…</>
             ) : (
               <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
               </svg>Upload</>
             )}
           </button>
@@ -244,9 +245,9 @@ export default function SliderManager({
         ) : images.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 gap-2 text-gray-400">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-              <rect x="3" y="3" width="18" height="18" rx="2"/>
-              <circle cx="8.5" cy="8.5" r="1.5"/>
-              <polyline points="21 15 16 10 5 21"/>
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <polyline points="21 15 16 10 5 21" />
             </svg>
             <p className="text-[13px]">No images yet — upload one above.</p>
           </div>
@@ -276,8 +277,8 @@ export default function SliderManager({
                     {deleting === img.id
                       ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6m5 0V4h4v2"/>
-                        </svg>
+                        <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6m5 0V4h4v2" />
+                      </svg>
                     }
                     {deleting === img.id ? "Removing…" : "Remove"}
                   </button>

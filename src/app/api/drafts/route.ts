@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { dealer_id, name, rows, shipto, refno, coupon_code, coupon_pct } = body;
+    const { dealer_id, name, rows, shipto, refno, order_note, coupon_code, coupon_pct } = body;
 
     if (!dealer_id || !name || !Array.isArray(rows))
       return NextResponse.json(
@@ -60,6 +60,7 @@ export async function POST(req: NextRequest) {
       rows,
       shipto:      shipto      ?? null,
       refno:       refno       ?? null,
+      order_note:  order_note  ?? null,
       coupon_code: coupon_code ?? null,
       coupon_pct:  coupon_pct  ?? null,
       createdAt: now,

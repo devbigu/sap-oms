@@ -32,15 +32,22 @@ const DEMO = {
 export async function POST(req: NextRequest) {
   try {
     const { email, password } = await req.json();
-    if (!email || !password) {
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+
+    if (!normalizedEmail || !password) {
       return NextResponse.json({ success: false, message: "Email and password are required" }, { status: 400 });
     }
 
-    const secret = process.env.JWT_SECRET!;
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      console.error("[POST /api/auth/accountant] Missing JWT_SECRET");
+      return NextResponse.json({ success: false, message: "Authentication is not configured" }, { status: 500 });
+    }
+
     const exp    = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
 
     // Demo account — no DB needed
-    if (email === DEMO.email && password === DEMO.password) {
+    if (normalizedEmail === DEMO.email && password === DEMO.password) {
       const token = createJWT({ sub: DEMO._id, email: DEMO.email, role: "accountant", exp }, secret);
       return NextResponse.json({
         success: true,
@@ -50,7 +57,7 @@ export async function POST(req: NextRequest) {
     }
 
     const db         = await getDb();
-    const accountant = await db.collection("accountants").findOne({ email });
+    const accountant = await db.collection("accountants").findOne({ email: normalizedEmail });
 
     if (!accountant || !verifyPassword(password, accountant.password as string)) {
       return NextResponse.json({ success: false, message: "Invalid email or password" }, { status: 401 });
@@ -65,7 +72,7 @@ export async function POST(req: NextRequest) {
       success: true,
       token,
       data: {
-        _id:   accountant._id,
+        _id:   accountant._id.toString(),
         name:  accountant.name,
         email: accountant.email,
         phone: accountant.phone,
@@ -73,6 +80,14 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e: any) {
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+    console.error("[POST /api/auth/accountant]", e);
+    if (e?.name === "MongoServerSelectionError") {
+      return NextResponse.json(
+        { success: false, message: "Unable to connect to the accountant database" },
+        { status: 503 },
+      );
+    }
+
+    return NextResponse.json({ success: false, message: e.message || "Login failed" }, { status: 500 });
   }
 }

@@ -7,6 +7,7 @@ export type CartItem = {
   quantity: number;  // number of packs
   packSize?: number;  // units per pack
   stock?: number;
+  isPriority?: boolean;
 };
 
 type CartStore = {
@@ -15,6 +16,7 @@ type CartStore = {
   removeFromCart: (id: string) => void;
   incrementQty: (id: string) => void;
   decrementQty: (id: string) => void;
+  togglePriority: (id: string) => void;
   clearCart: () => void;
 };
 
@@ -52,6 +54,7 @@ export const useCartStore = create<CartStore>((set) => ({
             price: item.price,
             packSize: item.packSize,
             stock: item.stock,
+            isPriority: item.isPriority ?? false,
             quantity: item.stock ? Math.min(addQty, item.stock) : addQty,
           },
         ],
@@ -76,6 +79,13 @@ export const useCartStore = create<CartStore>((set) => ({
 
   removeFromCart: (id) =>
     set((state) => ({ cart: state.cart.filter((i) => i.id !== id) })),
+
+  togglePriority: (id) =>
+    set((state) => ({
+      cart: state.cart.map((i) =>
+        i.id === id ? { ...i, isPriority: !i.isPriority } : i
+      ),
+    })),
 
   clearCart: () => set({ cart: [] }),
 }));

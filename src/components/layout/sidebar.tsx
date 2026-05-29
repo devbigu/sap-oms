@@ -7,6 +7,7 @@ import {
   LayoutDashboard, UserRoundPlus, Users, SquareUser,
   Plus, ClipboardList, Home, LogOut, Package, Images,
   ShieldCheck, Gift, Receipt, TrendingUp, BookOpen, FileText,
+  Wallet,
 } from "lucide-react";
 
 type Role    = "admin" | "dealer" | "staff" | "accountant";
@@ -16,6 +17,7 @@ const NAV: Record<Role, NavItem[]> = {
   admin: [
     { section: "Overview",    label: "Dashboard",          href: "/dashboard/admin",                                 icon: <LayoutDashboard size={15} /> },
     { section: "Dealers",     label: "Dealer List",        href: "/dashboard/admin/dealer/DealerList",               icon: <Users size={15} />           },
+    {                         label: "Dealer Ledger",       href: "/dashboard/admin/ledger",                          icon: <BookOpen size={15} />        },
     {                         label: "Add Dealer",          href: "/dashboard/admin/dealer/AddDealerForm",            icon: <UserRoundPlus size={15} />   },
     { section: "Staff",       label: "Staff List",         href: "/dashboard/admin/staff/stafflist",                 icon: <Users size={15} />           },
     {                         label: "Add Staff",           href: "/dashboard/admin/staff/addstaff",                  icon: <SquareUser size={15} />      },
@@ -23,17 +25,20 @@ const NAV: Record<Role, NavItem[]> = {
     {                         label: "Add Product",         href: "/Pages/products/addproducts",                      icon: <Plus size={15} />            },
     { section: "Orders",      label: "Order List",         href: "/Pages/Ordermanagement",                           icon: <ClipboardList size={15} />   },
     {                         label: "Pending Orders",      href: "/Pages/Ordermanagement/outstandingorders",         icon: <ClipboardList size={15} />   },
+    {                         label: "Discount Approvals",  href: "/dashboard/admin/custom-discount-approvals",       icon: <Receipt size={15} />         },
     { section: "Content",     label: "Slider Images",      href: "/dashboard/admin/slider",                          icon: <Images size={15} />          },
     {                         label: "Hot Items",           href: "/dashboard/admin/hot-items",                       icon: <Images size={15} />          },
     { section: "Accountants", label: "Manage Accountants", href: "/dashboard/admin/manageAccountants/add-account",   icon: <ShieldCheck size={15} />     },
     { section: "Rewards",     label: "Dealer Rewards",     href: "/dashboard/admin/rewards",                         icon: <Gift size={15} />            },
   ],
   dealer: [
-    { section: "Home",     label: "Dashboard",        href: "/dashboard/dealer",              icon: <Home size={15} />          },
+    { section: "Home",     label: "Home",             href: "/home",                          icon: <Home size={15} />          },
+    {                      label: "Dashboard",         href: "/dashboard/dealer",              icon: <LayoutDashboard size={15} /> },
     { section: "Orders",   label: "My Order Status",  href: "/Pages/Ordermanagement",         icon: <ClipboardList size={15} /> },
     {                      label: "My Order History",  href: "/orders",                        icon: <ClipboardList size={15} /> },
     {                      label: "Add Order",         href: "/dashboard/dealer/AddOrderForm", icon: <Plus size={15} />          },
     {                      label: "Saved Drafts",      href: "/drafts",                        icon: <FileText size={15} />      },
+    { section: "Finance",  label: "My Ledger",         href: "/Pages/ledger",                  icon: <Wallet size={15} />        },
     { section: "Products", label: "Products",         href: "/Pages/products",                icon: <Package size={15} />       },
   ],
   staff: [
@@ -41,13 +46,15 @@ const NAV: Record<Role, NavItem[]> = {
     { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
     { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },
+    {                      label: "Dealer Ledger",  href: "/dashboard/admin/ledger",                         icon: <BookOpen size={15} />        },
   ],
   accountant: [
     { section: "Overview",  label: "Dashboard",      href: "/dashboard/accountant",                         icon: <LayoutDashboard size={15} /> },
     { section: "Orders",    label: "All Orders",     href: "/Pages/Ordermanagement",                        icon: <ClipboardList size={15} />   },
     {                       label: "Pending Orders",  href: "/Pages/Ordermanagement/outstandingorders",      icon: <Receipt size={15} />         },
     { section: "Finance",   label: "Order Book",     href: "/dashboard/accountant/order-book",              icon: <BookOpen size={15} />        },
-    {                       label: "Reports",        href: "/dashboard/accountant",                         icon: <TrendingUp size={15} />      },
+    {                       label: "Dealer Ledger",   href: "/dashboard/admin/ledger",                       icon: <Wallet size={15} />          },
+    {                       label: "Reports",        href: "/dashboard/accountant",                          icon: <TrendingUp size={15} />      },
     { section: "Dealers",   label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",             icon: <Users size={15} />           },
   ],
 };

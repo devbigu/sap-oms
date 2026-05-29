@@ -43,18 +43,11 @@ export default function Login() {
       formData.append("password", password)
       formData.append("roletype", roletype)
 
-      const res = await axios.post(
-        `${BACKEND_URL}`,
-        formData
-      )
-
+      const res = await axios.post(`${BACKEND_URL}`, formData)
       const data = res.data
 
       if (data?.status) {
-        const userData = data.data || {
-          email,
-          role: roletype,
-        }
+        const userData = data.data || { email, role: roletype }
 
         localStorage.setItem("status", "true")
         localStorage.setItem("UserData", JSON.stringify(userData))
@@ -66,26 +59,29 @@ export default function Login() {
         setEmail("")
         setPassword("")
         setRoletype("")
-        if(roletype === "1"){
-          router.push("/dashboard/staff")
-        }
-        else if(roletype === "2"){
-          router.push("/home")
-        }
-        else if(roletype === "3"){
-          router.push("/dashboard/admin")
-        }
+
+        if (roletype === "1") router.push("/dashboard/staff")
+        else if (roletype === "2") router.push("/home")
+        else if (roletype === "3") router.push("/dashboard/admin")
       } else {
         setError(data?.msg || "Login failed")
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Login error:", err)
 
-      const backendMsg =
-        err?.response?.data?.msg ||
-        err?.response?.data ||
-        err?.message ||
-        "Server error"
+      let backendMsg: unknown = "Server error"
+
+      if (axios.isAxiosError(err)) {
+        const responseData = err.response?.data
+        backendMsg =
+          responseData &&
+          typeof responseData === "object" &&
+          "msg" in responseData
+            ? responseData.msg
+            : responseData || err.message
+      } else if (err instanceof Error) {
+        backendMsg = err.message
+      }
 
       setError(typeof backendMsg === "string" ? backendMsg : "Server error")
     } finally {
@@ -94,91 +90,157 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white px-4 dark:bg-black text-gray-900 dark:text-white">
-      <form className="w-full max-w-sm" onSubmit={handleLogin}>
-        <div className="mb-10">
-          <h1 className="text-2xl font-light tracking-tight">Sign in</h1>
-        </div>
+    <main className="h-screen overflow-hidden text-slate-950">
+      <div className="flex h-full w-full">
+        <section className="grid w-full overflow-hidden bg-white lg:grid-cols-[0.86fr_1.14fr]">
 
-        <div className="space-y-4 mb-8">
-          <div className="relative">
-            <select
-              value={roletype}
-              onChange={(e) => setRoletype(e.target.value)}
-              className="w-full px-0 py-3 text-sm bg-transparent border-b border-gray-200 text-gray-900 dark:text-white focus:outline-none focus:border-gray-900 dark:focus:border-white appearance-none"
-            >
-              <option value="" disabled>
-                Role
-              </option>
-              {ROLE_OPTIONS.map((opt) => (
-                <option
-                  key={opt.value}
-                  value={opt.value}
-                  className="text-gray-900 dark:text-white dark:bg-black"
+          {/* ── Form panel ─────────────────────────────────────────────── */}
+          <form
+            className="flex min-h-0 flex-col justify-center p-0"
+            onSubmit={handleLogin}
+          >
+            <div className="mx-auto w-full max-w-[330px] px-8">
+
+              {/* Header */}
+              <div className="mb-4">
+                <div className="mb-3 flex items-center gap-3">
+                  <img
+                    src="https://omsonslabs.com/wp-content/uploads/elementor/thumbs/Logo-White-rjr8rdx3pqxz9p6ypfegb07hgtpvj3g22mnujlpa0w.png"
+                    alt="Omsons Logo"
+                    width={34}
+                    height={34}
+                    className="rounded-full bg-[#1d4ed8] p-1"
+                  />
+                  <div>
+                    <p className="text-sm font-semibold text-slate-950">Omsons</p>
+                    <p className="text-xs text-slate-400">Dealer network</p>
+                  </div>
+                </div>
+                <h1 className="text-[26px] font-black leading-tight tracking-[-0.01em] text-slate-950">
+                  Login
+                </h1>
+                <p className="mt-1 text-[13px] text-slate-500">
+                  Sign in to manage orders, products, and dispatches.
+                </p>
+              </div>
+
+              {/* Fields */}
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="mb-1.5 block text-[12px] font-semibold text-slate-700">Role</span>
+                  <div className="relative">
+                    <select
+                      value={roletype}
+                      onChange={(e) => setRoletype(e.target.value)}
+                      className="h-10 w-full appearance-none rounded-full border border-slate-200 bg-white px-5 pr-10 text-[13px] font-medium text-slate-900 shadow-sm outline-none transition focus:border-[#5b3ff2] focus:ring-4 focus:ring-[#5b3ff2]/10"
+                    >
+                      <option value="" disabled>Select your role</option>
+                      {ROLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value} className="text-slate-900">
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-slate-400">
+                      <svg width="12" height="12" viewBox="0 0 12 12">
+                        <path
+                          d="M2 4l4 4 4-4"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                        />
+                      </svg>
+                    </span>
+                  </div>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-[12px] font-semibold text-slate-700">Email</span>
+                  <input
+                    type="email"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="h-10 w-full rounded-full border border-slate-200 bg-white px-5 text-[13px] text-slate-900 shadow-sm outline-none transition placeholder:text-slate-300 focus:border-[#5b3ff2] focus:ring-4 focus:ring-[#5b3ff2]/10"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-[12px] font-semibold text-slate-700">Password</span>
+                  <input
+                    type="password"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="h-10 w-full rounded-full border border-slate-200 bg-white px-5 text-[13px] text-slate-900 shadow-sm outline-none transition placeholder:text-slate-300 focus:border-[#5b3ff2] focus:ring-4 focus:ring-[#5b3ff2]/10"
+                  />
+                </label>
+              </div>
+
+              {/* Forgot password */}
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  className="text-[11px] font-semibold text-[#4f35dc] hover:text-[#321fbd]"
                 >
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+                  Forgot Password?
+                </button>
+              </div>
 
-            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-gray-400">
-              <svg width="12" height="12" viewBox="0 0 12 12">
-                <path
-                  d="M2 4l4 4 4-4"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  fill="none"
-                />
-              </svg>
-            </span>
+              {/* Error message */}
+              {error && (
+                <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-2.5 text-[12px] font-semibold text-red-600">
+                  {error}
+                </p>
+              )}
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-4 h-10 w-full rounded-full bg-[#593df4] px-4 text-[13px] font-bold text-white shadow-[0_14px_28px_rgba(89,61,244,0.28)] transition hover:-translate-y-0.5 hover:bg-[#4b31de] active:translate-y-0 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {loading ? "Signing in..." : "Login"}
+              </button>
+
+              {/* Accountant portal — inline row */}
+              <div className="mt-4 flex items-center justify-center gap-3">
+                <p className="text-[11px] text-slate-400">Signing in as an accountant?</p>
+                <button
+                  type="button"
+                  onClick={() => router.push("/auth/accountant-login")}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-slate-200 bg-white px-4 text-[11px] font-semibold text-slate-600 transition hover:border-[#593df4] hover:text-[#593df4]"
+                >
+                  Accountant portal
+                </button>
+              </div>
+
+              {/* Footer */}
+              <p className="mt-4 text-center text-[11px] text-slate-300">
+                ©2026 Omsons. All rights reserved.
+              </p>
+            </div>
+          </form>
+
+          {/* ── Image panel ────────────────────────────────────────────── */}
+          {/*
+            overflow-hidden on the section clips the image.
+            absolute inset-0 makes the img fill the div exactly.
+            object-cover + object-left-center covers without distortion,
+            cropping from the right side while keeping the subject visible.
+          */}
+          <div className="relative hidden bg-[##0150C6] lg:block">
+            <img
+              src="/login2.png"
+              alt="Omsons laboratory glassware"
+              className="absolute inset-0 h-full w-full "
+            />
           </div>
 
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-0 py-3 text-sm bg-transparent border-b border-gray-200 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-gray-900 dark:focus:border-white"
-          />
-
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-0 py-3 text-sm bg-transparent border-b border-gray-200 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-gray-900 dark:focus:border-white"
-          />
-        </div>
-
-        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
-
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-3 px-4 bg-gray-900 text-white text-sm font-medium rounded-sm hover:bg-gray-800 active:bg-gray-900 transition-all duration-200 disabled:opacity-70"
-        >
-          {loading ? "Signing in..." : "Continue"}
-        </button>
-
-        <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-800 text-center">
-          <p className="text-xs text-gray-400 mb-3">Signing in as an accountant?</p>
-          <button
-            type="button"
-            onClick={() => router.push("/auth/accountant-login")}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-sm border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white transition-all"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-              <rect x="2" y="7" width="20" height="14" rx="2"/>
-              <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-              <line x1="12" y1="12" x2="12" y2="16"/>
-              <line x1="10" y1="14" x2="14" y2="14"/>
-            </svg>
-            Accountant portal
-          </button>
-        </div>
-      </form>
-    </div>
+        </section>
+      </div>
+    </main>
   )
 }

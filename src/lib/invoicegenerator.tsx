@@ -2,6 +2,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
 import moment from "moment";
+import { hasPriorityTag } from "@/lib/orderPriority";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -14,6 +15,8 @@ export interface OrderInvoiceData {
     mtstatus: string;
     outstandingDate?: string;
     reason?: string;
+    product_name?: string;
+    
 }
 
 export interface DealerProfile {
@@ -42,6 +45,37 @@ export interface InvoiceResult {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
+
+interface OrderItem {
+    orderdata_id: string;
+    orderdata_cat_no: string;
+    orderdata_item_quantity: string;
+    orderdata_price: string;
+    orderdata_discount: string;
+    orderdata_afterDisPrice: string;
+    product_name: string;
+    product_discription?: string;
+    product_unit?: string;
+    discount?: string;
+    remark?: string;
+    remarks?: string;
+    priority?: string | boolean;
+    isPriority?: string | boolean;
+    is_priority?: string | boolean;
+}
+
+async function fetchOrderItems(orderId: string): Promise<OrderItem[]> {
+    try {
+        const res = await fetch(`${BACKEND_URL}/orderdatalist?id=${orderId}`);
+        if (!res.ok) return [];
+        const json = await res.json();
+        return Array.isArray(json.data) ? json.data : [];
+    } catch {
+        return [];
+    }
+}
+
 function invoiceNumber(orderId: string): string {
     return `OM/${new Date().getFullYear()}/${orderId}`;
 }
@@ -110,6 +144,9 @@ function cell(
 // ─── Main PDF Generator ───────────────────────────────────────────────────────
 export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<Blob> {
     const dp = getDealerProfile();
+
+    // Fetch detailed order items (product names) from the API
+    const orderItems = await fetchOrderItems(order.order_id);
 
     const doc = new jsPDF("p", "mm", "a4");
     const PW = doc.internal.pageSize.getWidth();
@@ -262,6 +299,54 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     y += 4;
 
     // ── ITEMS TABLE ───────────────────────────────────────────────────────────
+    // Build item rows from fetched order items, or fall back to a single row
+    const itemRows: any[][] = [];
+    let totalQty = 0;
+
+    if (orderItems.length > 0) {
+        orderItems.forEach((item, idx) => {
+            const itemGross    = Number(item.orderdata_price) * Number(item.orderdata_item_quantity);
+            const itemDiscount = Number(item.orderdata_discount || 0);
+            const itemNet      = Number(item.orderdata_afterDisPrice || (itemGross - itemDiscount));
+            const qty          = Number(item.orderdata_item_quantity);
+            const isPriority   = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks);
+            const description  = `${item.product_name || item.orderdata_cat_no || "—"}${isPriority ? "\n[PRIORITY DELIVERY]" : ""}`;
+            totalQty += qty;
+
+            itemRows.push([
+                { content: String(idx + 1).padStart(2, "0"),          styles: { halign: "center" } },
+                { content: description,                                styles: { halign: "left" } },
+                { content: String(qty),                                styles: { halign: "center" } },
+                { content: item.product_unit || "Pcs",                 styles: { halign: "center" } },
+                { content: fmt(itemGross),                             styles: { halign: "right"  } },
+                { content: fmt(itemDiscount),                          styles: { halign: "right"  } },
+                { content: fmt(itemNet),                               styles: { halign: "right"  } },
+            ]);
+        });
+    } else {
+        // Fallback: single row with whatever info we have
+        totalQty = Number(order.orderdata_item_quantity);
+        itemRows.push([
+            { content: "01",                                                   styles: { halign: "center" } },
+            { content: order.product_name || "Omsons Glassware Products",       styles: { halign: "left"   } },
+            { content: order.orderdata_item_quantity,                           styles: { halign: "center" } },
+            { content: "Pcs",                                                  styles: { halign: "center" } },
+            { content: fmt(gross),                                             styles: { halign: "right"  } },
+            { content: fmt(discount),                                          styles: { halign: "right"  } },
+            { content: fmt(net),                                               styles: { halign: "right"  } },
+        ]);
+    }
+
+    // Totals row
+    itemRows.push([
+        { content: "Total", colSpan: 2,                    styles: { halign: "right", fontStyle: "bold" } },
+        { content: String(totalQty),                       styles: { halign: "center", fontStyle: "bold" } },
+        { content: "",                                     styles: {} },
+        { content: fmt(gross),                             styles: { halign: "right", fontStyle: "bold" } },
+        { content: fmt(discount),                          styles: { halign: "right", fontStyle: "bold" } },
+        { content: fmt(net),                               styles: { halign: "right", fontStyle: "bold" } },
+    ]);
+
     autoTable(doc, {
         startY: y,
         head: [[
@@ -273,25 +358,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             { content: "Discount\n(Rs.)",  styles: { halign: "right",  cellWidth: 26 } },
             { content: "Net Amt\n(Rs.)",   styles: { halign: "right",  cellWidth: 26 } },
         ]],
-        body: [
-            [
-                { content: "01",                          styles: { halign: "center" } },
-                { content: `Order Invoice – ${invNo}`,    styles: { halign: "left"   } },
-                { content: order.orderdata_item_quantity, styles: { halign: "center" } },
-                { content: "Pcs",                         styles: { halign: "center" } },
-                { content: fmt(gross),                    styles: { halign: "right"  } },
-                { content: fmt(discount),                 styles: { halign: "right"  } },
-                { content: fmt(net),                      styles: { halign: "right"  } },
-            ],
-            [
-                { content: "Total", colSpan: 2,           styles: { halign: "right", fontStyle: "bold" } },
-                { content: order.orderdata_item_quantity, styles: { halign: "center", fontStyle: "bold" } },
-                { content: "",                            styles: {} },
-                { content: fmt(gross),                    styles: { halign: "right", fontStyle: "bold" } },
-                { content: fmt(discount),                 styles: { halign: "right", fontStyle: "bold" } },
-                { content: fmt(net),                      styles: { halign: "right", fontStyle: "bold" } },
-            ],
-        ],
+        body: itemRows,
         margin: { left: ML, right: MR },
         styles: {
             font: "Helvetica", fontSize: 8,

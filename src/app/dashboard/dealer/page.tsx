@@ -398,28 +398,28 @@ export default function DealerDashboard() {
           <main className="content">
 
             {/* Info Cards */}
-            <div className="info-cards">
+            <div className="info-cards font-sans">
               <div className="icard">
                 <div className="icard-lbl">Annual Target</div>
-                <div className="icard-val">{fmtCurrency(annualTarget)}</div>
+                <div className=" font-sans font-bold">{fmtCurrency(annualTarget)}</div>
                 <div className="icard-sub">Full year goal</div>
                 <div className="icard-badge badge-purple">₹{annualTarget.toLocaleString("en-IN")}</div>
               </div>
               <div className="icard">
                 <div className="icard-lbl">Current Limit</div>
-                <div className="icard-val">{fmtCurrency(currentLimit)}</div>
+                <div className="font-sans font-bold">{fmtCurrency(currentLimit)}</div>
                 <div className="icard-sub">Credit ceiling</div>
                 <div className="icard-badge badge-blue">{usagePct}% of target</div>
               </div>
               <div className="icard">
                 <div className="icard-lbl">Credit Days</div>
-                <div className="icard-val">{creditDays}</div>
+                <div className="font-sans font-bold">{creditDays}</div>
                 <div className="icard-sub">Payment window</div>
                 <div className="icard-badge badge-amber">{creditDays} days</div>
               </div>
               <div className="icard">
                 <div className="icard-lbl">Discount</div>
-                <div className="icard-val">{discountPct}%</div>
+                <div className="font-sans font-bold">{discountPct}%</div>
                 <div className="icard-sub">Dealer discount rate</div>
                 <div className="icard-badge badge-green">Active</div>
               </div>

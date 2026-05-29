@@ -25,6 +25,7 @@ type Order = {
   order_discount: string; Dealer_Name: string;
   orderdata_item_quantity: string; mtstatus: string;
   outstandingDate: string; reason?: string;
+  product_name?: string; 
 };
 
 type PendingOrder = {
