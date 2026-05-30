@@ -33,15 +33,23 @@ type ProductRow = {
 };
 
 type OptionType = { value: string; label: string; price: number };
+type CustomDiscountScope = "order" | "product";
 
 type CustomDiscountRequest = {
   id: string;
   dealerId?: string;
   status: "pending" | "approved" | "rejected";
+  discountScope?: CustomDiscountScope;
   requestedDiscountPercent: number;
   currentDiscountPercent: number;
   orderSignature: string;
   allowReorder?: boolean;
+  targetProduct?: {
+    productKey?: string;
+    productname?: string;
+    displayName?: string;
+    variantCode?: string;
+  };
   products?: any[];
   shipto?: string;
   refno?: string;
@@ -156,6 +164,14 @@ function buildOrderSignature(rows: ProductRow[], subtotalAmount: number): string
   return hashString(JSON.stringify({ subtotal: payloadAmount(subtotalAmount), items }));
 }
 
+function getProductKey(row: ProductRow): string {
+  return String(row.variantCode || row.productname || "").trim();
+}
+
+function buildProductSignature(row: ProductRow): string {
+  return buildOrderSignature([row], rowSubtotalPaise(row) / 100);
+}
+
 function buildOrderRemarks(variantCode: string, isPriority: boolean | undefined, orderNote: string): string {
   const remarks = buildPriorityRemarks(variantCode, isPriority);
   const note = orderNote.trim();
@@ -248,6 +264,8 @@ function AddOrderPageInner() {
   const [orderNote, setOrderNote] = useState("");
   const [showCustomDiscountEditor, setShowCustomDiscountEditor] = useState(false);
   const [customDiscountInput, setCustomDiscountInput] = useState("");
+  const [customDiscountScope, setCustomDiscountScope] = useState<CustomDiscountScope>("order");
+  const [customDiscountProductKey, setCustomDiscountProductKey] = useState("");
   const [customDiscountSubmitting, setCustomDiscountSubmitting] = useState(false);
   const [customDiscountRequests, setCustomDiscountRequests] = useState<CustomDiscountRequest[]>([]);
   const [reorderRequest, setReorderRequest] = useState<CustomDiscountRequest | null>(null);
@@ -467,37 +485,81 @@ function AddOrderPageInner() {
     couponDiscountPercent: couponDiscount,
   });
   const currentOrderSignature = buildOrderSignature(arr1, subtotal);
+  const productRows = arr1.filter((r) => r.productname);
+  const selectedCustomDiscountProduct = productRows.find((r) => getProductKey(r) === customDiscountProductKey) ?? productRows[0] ?? null;
+  const selectedCustomDiscountSignature = selectedCustomDiscountProduct ? buildProductSignature(selectedCustomDiscountProduct) : "";
+  const customDiscountBaseSubtotal = customDiscountScope === "product" && selectedCustomDiscountProduct
+    ? rowSubtotalPaise(selectedCustomDiscountProduct) / 100
+    : subtotal;
   const matchingCustomRequests = customDiscountRequests.filter(
-    (r) => r.orderSignature === currentOrderSignature
+    (r) => (r.discountScope ?? "order") !== "product" && r.orderSignature === currentOrderSignature
   );
   const approvedCustomRequest = matchingCustomRequests.find((r) => r.status === "approved");
   const pendingCustomRequest = matchingCustomRequests.find((r) => r.status === "pending");
   const rejectedCustomRequest = matchingCustomRequests.find((r) => r.status === "rejected");
-  const visibleCustomRequest = approvedCustomRequest ?? pendingCustomRequest ?? rejectedCustomRequest ?? null;
-  const reorderDiscountPercent = reorderRequest
+  const matchingProductCustomRequests = selectedCustomDiscountSignature
+    ? customDiscountRequests.filter(
+      (r) => (r.discountScope ?? "order") === "product" && r.orderSignature === selectedCustomDiscountSignature
+    )
+    : [];
+  const approvedProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "approved");
+  const pendingProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "pending");
+  const rejectedProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "rejected");
+  const visibleCustomRequest = customDiscountScope === "product"
+    ? approvedProductCustomRequest ?? pendingProductCustomRequest ?? rejectedProductCustomRequest ?? null
+    : approvedCustomRequest ?? pendingCustomRequest ?? rejectedCustomRequest ?? null;
+  const reorderDiscountPercent = reorderRequest && (reorderRequest.discountScope ?? "order") !== "product"
     ? Math.min(100, Math.max(0, Number(reorderRequest.requestedDiscountPercent) || 0))
     : null;
   const approvedCustomDiscountPercent = reorderDiscountPercent ?? (approvedCustomRequest
     ? Math.min(100, Math.max(0, Number(approvedCustomRequest.requestedDiscountPercent) || 0))
     : null);
-  const discountPayload = approvedCustomDiscountPercent !== null
-    ? {
-      ...baseDiscountPayload,
-      discountPercent: approvedCustomDiscountPercent,
-      discountAmount: Number(payloadAmount(subtotal * (approvedCustomDiscountPercent / 100))),
-      finalPayableAmount: Number(payloadAmount(Math.max(0, subtotal - subtotal * (approvedCustomDiscountPercent / 100)))),
+  const getApprovedProductCustomRequest = (row: ProductRow) => {
+    const rowSignature = buildProductSignature(row);
+    if (
+      reorderRequest?.status === "approved" &&
+      (reorderRequest.discountScope ?? "order") === "product" &&
+      reorderRequest.orderSignature === rowSignature
+    ) {
+      return reorderRequest;
     }
-    : baseDiscountPayload;
+    return customDiscountRequests.find(
+      (r) => r.status === "approved" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
+    );
+  };
+  const getRowDiscountPercent = (row: ProductRow) => {
+    if (approvedCustomDiscountPercent !== null) return approvedCustomDiscountPercent;
+    const productRequest = getApprovedProductCustomRequest(row);
+    if (productRequest) return Math.min(100, Math.max(0, Number(productRequest.requestedDiscountPercent) || 0));
+    return baseDiscountPayload.discountPercent;
+  };
+  const discountAmountFromRows = productRows.reduce((acc, row) => (
+    acc + (rowSubtotalPaise(row) / 100) * (getRowDiscountPercent(row) / 100)
+  ), 0);
+  const effectiveDiscountPercent = subtotal > 0
+    ? Number(payloadAmount((discountAmountFromRows / subtotal) * 100))
+    : 0;
+  const discountPayload = {
+    ...baseDiscountPayload,
+    discountPercent: approvedCustomDiscountPercent !== null ? approvedCustomDiscountPercent : effectiveDiscountPercent,
+    discountAmount: Number(payloadAmount(discountAmountFromRows)),
+    finalPayableAmount: Number(payloadAmount(Math.max(0, subtotal - discountAmountFromRows))),
+  };
   const activeDiscount: number = discountPayload.discountPercent;
   const discountAmountPaise = toPaise(discountPayload.discountAmount);
   const finalPayablePaise = toPaise(discountPayload.finalPayableAmount);
   const discountStatusMessage = getDiscountStatusMessage(discountPayload.slabDiscountPercent);
   const hasSlabDiscount = discountPayload.slabDiscountPercent > 0;
   const hasAnyDiscount = discountPayload.discountPercent > 0;
-  const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null;
+  const approvedProductCustomRequests = approvedCustomDiscountPercent !== null
+    ? []
+    : productRows
+      .map((row) => getApprovedProductCustomRequest(row))
+      .filter((r): r is CustomDiscountRequest => !!r);
+  const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null || approvedProductCustomRequests.length > 0;
   const requestedCustomDiscountPercent = Math.min(100, Math.max(0, Number(customDiscountInput) || 0));
-  const requestedCustomDiscountAmount = subtotal * (requestedCustomDiscountPercent / 100);
-  const requestedCustomFinalPayable = Math.max(0, subtotal - requestedCustomDiscountAmount);
+  const requestedCustomDiscountAmount = customDiscountBaseSubtotal * (requestedCustomDiscountPercent / 100);
+  const requestedCustomFinalPayable = Math.max(0, customDiscountBaseSubtotal - requestedCustomDiscountAmount);
 
   // ── Coupon handlers ───────────────────────────────────────────────────────
   const handleApplyCoupon = () => {
@@ -526,6 +588,10 @@ function AddOrderPageInner() {
 
   const handleRequestCustomDiscount = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product before requesting approval."); return; }
+    if (customDiscountScope === "product" && !selectedCustomDiscountProduct) {
+      toast("Please select a product for product-level discount approval.");
+      return;
+    }
     if (requestedCustomDiscountPercent <= baseDiscountPayload.discountPercent) {
       toast(`Enter a custom discount above the current ${baseDiscountPayload.discountPercent}%.`);
       return;
@@ -533,7 +599,14 @@ function AddOrderPageInner() {
 
     setCustomDiscountSubmitting(true);
     try {
-      const requestProducts = arr1.filter(r => r.productname).map((r) => ({
+      const scopedRows = customDiscountScope === "product" && selectedCustomDiscountProduct
+        ? [selectedCustomDiscountProduct]
+        : arr1.filter(r => r.productname);
+      const scopedSubtotal = customDiscountScope === "product" ? customDiscountBaseSubtotal : subtotal;
+      const scopedSignature = customDiscountScope === "product" && selectedCustomDiscountProduct
+        ? buildProductSignature(selectedCustomDiscountProduct)
+        : currentOrderSignature;
+      const requestProducts = scopedRows.map((r) => ({
         productname: r.productname,
         displayName: r.displayName,
         variantCode: r.variantCode,
@@ -555,15 +628,22 @@ function AddOrderPageInner() {
           dealerPhone: user.Dealer_Number,
           requestedDiscountPercent: requestedCustomDiscountPercent,
           currentDiscountPercent: baseDiscountPayload.discountPercent,
-          subtotal: Number(payloadAmount(baseDiscountPayload.subtotal)),
-          currentDiscountAmount: Number(payloadAmount(baseDiscountPayload.discountAmount)),
+          subtotal: Number(payloadAmount(scopedSubtotal)),
+          currentDiscountAmount: Number(payloadAmount(scopedSubtotal * (baseDiscountPayload.discountPercent / 100))),
           requestedDiscountAmount: Number(payloadAmount(requestedCustomDiscountAmount)),
-          currentFinalPayable: Number(payloadAmount(baseDiscountPayload.finalPayableAmount)),
+          currentFinalPayable: Number(payloadAmount(Math.max(0, scopedSubtotal - scopedSubtotal * (baseDiscountPayload.discountPercent / 100)))),
           requestedFinalPayable: Number(payloadAmount(requestedCustomFinalPayable)),
+          discountScope: customDiscountScope,
+          targetProduct: selectedCustomDiscountProduct ? {
+            productKey: getProductKey(selectedCustomDiscountProduct),
+            productname: selectedCustomDiscountProduct.productname,
+            displayName: selectedCustomDiscountProduct.displayName,
+            variantCode: selectedCustomDiscountProduct.variantCode,
+          } : null,
           shipto,
           refno,
           orderNote: orderNote.trim(),
-          orderSignature: currentOrderSignature,
+          orderSignature: scopedSignature,
           discountBreakdown: {
             allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
             slabDiscountPercent: baseDiscountPayload.slabDiscountPercent,
@@ -703,14 +783,22 @@ function AddOrderPageInner() {
   const handleSubmitProductArray = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product"); return; }
     setLoading(true);
-    const payload = arr1.filter(r => r.productname).map(r => ({
-      productname: r.productname,
-      producQuanity: String(r.producQuanity),
-      price: String(r.price),
-      remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote),
-      priority: r.isPriority ? "1" : "0",
-      isPriority: !!r.isPriority,
-    }));
+    const payload = arr1.filter(r => r.productname).map(r => {
+      const rowDiscountPercent = getRowDiscountPercent(r);
+      const rowSubtotal = rowSubtotalPaise(r) / 100;
+      const rowDiscountAmount = rowSubtotal * (rowDiscountPercent / 100);
+      return {
+        productname: r.productname,
+        producQuanity: String(r.producQuanity),
+        price: String(r.price),
+        discount: payloadAmount(rowDiscountAmount),
+        discountPercent: String(rowDiscountPercent),
+        afterDiscountPrice: payloadAmount(Math.max(0, rowSubtotal - rowDiscountAmount)),
+        remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote),
+        priority: r.isPriority ? "1" : "0",
+        isPriority: !!r.isPriority,
+      };
+    });
 
     console.log(payload.map(r=>r.price))
     const fd = new FormData();
@@ -730,11 +818,20 @@ function AddOrderPageInner() {
       fd.append("order_note", orderNote.trim());
       fd.append("Dealer_note", orderNote.trim());
     }
-    const customDiscountSource = reorderRequest ?? approvedCustomRequest;
-    if (customDiscountSource) {
-      fd.append("customDiscountRequestId", customDiscountSource.id);
-      fd.append("customDiscountStatus", customDiscountSource.status);
-      fd.append("customDiscountPercent", String(customDiscountSource.requestedDiscountPercent));
+    const customDiscountSources = [
+      ...(reorderRequest ? [reorderRequest] : approvedCustomRequest ? [approvedCustomRequest] : []),
+      ...approvedProductCustomRequests,
+    ].filter((request, idx, arr) => arr.findIndex((r) => r.id === request.id) === idx);
+    if (customDiscountSources.length > 0) {
+      fd.append("customDiscountRequestId", customDiscountSources.map((r) => r.id).join(","));
+      fd.append("customDiscountStatus", customDiscountSources.every((r) => r.status === "approved") ? "approved" : customDiscountSources[0].status);
+      fd.append("customDiscountPercent", String(discountPayload.discountPercent));
+      fd.append("customDiscountRequests", JSON.stringify(customDiscountSources.map((r) => ({
+        id: r.id,
+        scope: r.discountScope ?? "order",
+        percent: r.requestedDiscountPercent,
+        product: r.targetProduct ?? null,
+      }))));
     }
     if (refno) fd.append("refno", refno);
     if (appliedCoupon) fd.append("coupon_code", appliedCoupon.code);
@@ -1087,8 +1184,13 @@ function AddOrderPageInner() {
                   )}
                 </div>
                 <p className="text-[12px] text-gray-500 mt-1">
-                  Request a one-time discount for this product list. Approved requests are applied automatically while the order stays unchanged.
+                  Request a one-time discount for this order or one selected product. Approved requests are applied automatically while the matching items stay unchanged.
                 </p>
+                {visibleCustomRequest?.discountScope === "product" && (
+                  <p className="mt-2 text-[12px] font-semibold text-indigo-700">
+                    Product: {visibleCustomRequest.targetProduct?.displayName || visibleCustomRequest.targetProduct?.variantCode || "Selected product"}
+                  </p>
+                )}
                 {visibleCustomRequest?.adminNote && (
                   <p className="mt-2 text-[12px] text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
                     Admin note: {visibleCustomRequest.adminNote}
@@ -1111,7 +1213,34 @@ function AddOrderPageInner() {
             </div>
 
             {showCustomDiscountEditor && (
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[220px_1fr_auto] lg:items-end">
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[220px_260px_1fr_auto] lg:items-end">
+                <div>
+                  <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Applies To</label>
+                  <select
+                    value={customDiscountScope}
+                    onChange={(e) => setCustomDiscountScope(e.target.value as CustomDiscountScope)}
+                    className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[13.5px] font-semibold text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="order">Entire order</option>
+                    <option value="product">Individual product</option>
+                  </select>
+                </div>
+                {customDiscountScope === "product" && (
+                  <div>
+                    <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Product</label>
+                    <select
+                      value={selectedCustomDiscountProduct ? getProductKey(selectedCustomDiscountProduct) : ""}
+                      onChange={(e) => setCustomDiscountProductKey(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[13.5px] font-semibold text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    >
+                      {productRows.map((row) => (
+                        <option key={`${row.key}-${getProductKey(row)}`} value={getProductKey(row)}>
+                          {row.variantCode || row.productname} - {row.displayName || "Product"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Custom Discount %</label>
                   <input
@@ -1261,7 +1390,7 @@ function AddOrderPageInner() {
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-24">Pieces</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">List Price</th>
                     <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-28 ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
-                      Discount ({activeDiscount}%)
+                      Discount
                     </th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Final Price</th>
                     <th className="pl-3 pr-6 py-3 w-14"></th>
@@ -1270,7 +1399,8 @@ function AddOrderPageInner() {
                 <tbody className="divide-y divide-gray-50">
                   {arr1.map((row, idx) => {
                     const listPrice = rowSubtotalPaise(row);
-                    const discAmt = Math.round(listPrice * (activeDiscount / 100));
+                    const rowDiscountPercent = getRowDiscountPercent(row);
+                    const discAmt = Math.round(listPrice * (rowDiscountPercent / 100));
                     const rowTotal = Math.max(0, listPrice - discAmt);
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
                     const meta = variantLookup[row.productname];
@@ -1389,7 +1519,7 @@ function AddOrderPageInner() {
                           <span className={`font-mono text-[12px] font-semibold ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
                             {discAmt > 0 ? `−${fmt(discAmt)}` : "—"}
                           </span>
-                          {discAmt > 0 && <p className="text-[10px] text-gray-400 mt-0.5">{activeDiscount}% off</p>}
+                          {discAmt > 0 && <p className="text-[10px] text-gray-400 mt-0.5">{rowDiscountPercent}% off</p>}
                         </td>
                         <td className="px-3 py-3">
                           {listPrice > 0 && discAmt > 0 && (

@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, BookOpen, Pencil, MoreVertical, Eye } from 'lucide-react'
+import { Search, Trash2, BookOpen, Pencil, MoreVertical, Eye, EyeOff } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -70,6 +70,7 @@ export default function DealerListPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [openMenuId,    setOpenMenuId]    = useState<string | null>(null)
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
 
   const queryClient = useQueryClient()
 
@@ -162,6 +163,15 @@ export default function DealerListPage() {
     if (newPage < 1 || newPage > totalPages) return
     setPage(newPage)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const togglePassword = (dealerId: string) => {
+    setVisiblePasswords(prev => {
+      const next = new Set(prev)
+      if (next.has(dealerId)) next.delete(dealerId)
+      else next.add(dealerId)
+      return next
+    })
   }
 
   const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
@@ -285,6 +295,7 @@ export default function DealerListPage() {
                 {!isLoading && data.map((dealer, i) => {
                   const badge  = statusBadge(dealer.status)
                   const isOpen = openMenuId === dealer.Dealer_Id
+                  const passwordVisible = visiblePasswords.has(dealer.Dealer_Id)
                   return (
                     <tr key={dealer.Dealer_Id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-4 text-gray-400 text-xs">{startIndex + i}</td>
@@ -312,8 +323,26 @@ export default function DealerListPage() {
                       <td className="px-4 py-4 text-gray-500 text-xs">{dealer.Dealer_Email || "—"}</td>
                       <td className="px-4 py-4 text-gray-600 text-xs">{dealer.Dealer_Number || "—"}</td>
 
-                      <td className="px-4 py-4 font-mono text-xs text-gray-400 tracking-widest">
-                        ••••••••
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-mono text-xs ${passwordVisible ? "text-gray-700 tracking-normal" : "text-gray-400 tracking-widest"}`}>
+                            {passwordVisible ? dealer.Dealer_Password || "—" : "••••••••"}
+                          </span>
+                          {role === "admin" && dealer.Dealer_Password && (
+                            <button
+                              type="button"
+                              onClick={() => togglePassword(dealer.Dealer_Id)}
+                              className="p-1 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition"
+                              aria-label={passwordVisible ? "Hide dealer password" : "Show dealer password"}
+                              title={passwordVisible ? "Hide password" : "Show password"}
+                            >
+                              {passwordVisible
+                                ? <EyeOff className="w-3.5 h-3.5" />
+                                : <Eye className="w-3.5 h-3.5" />
+                              }
+                            </button>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-4">

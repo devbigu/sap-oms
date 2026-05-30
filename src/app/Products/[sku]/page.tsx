@@ -419,10 +419,12 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                       <span style={{ fontWeight: 600 }}>{val}</span>
                     </div>
                   ))}
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ color: "#64748b" }}>Pack of</span>
-                    <span style={{ fontWeight: 700 }}>{selectedPackSize} Pcs.</span>
-                  </div>
+                  {selectedPackSize > 1 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ color: "#64748b" }}>Pack of</span>
+                      <span style={{ fontWeight: 700 }}>{selectedPackSize} Pcs.</span>
+                    </div>
+                  )}
                   {perUnitPaise !== null && (
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                       <span style={{ color: "#64748b" }}>Price per unit</span>
@@ -430,7 +432,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                     </div>
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ color: "#64748b" }}>Price per pack</span>
+                    <span style={{ color: "#64748b" }}>{selectedPackSize > 1 ? "Price per pack" : "Price"}</span>
                     <span style={{ fontWeight: 700, color: "#6A5ACD" }}>{fmt(packPricePaise)}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -482,7 +484,10 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                     </div>
                     {quantity > 0 && lineTotalPaise !== null && (
                       <p style={{ fontSize: 12, color: "#64748b", margin: "6px 0 0" }}>
-                        {quantity} packs × {selectedPackSize} Pcs. = <strong>{fmt(lineTotalPaise)}</strong>
+                        {selectedPackSize > 1
+                          ? `${quantity} packs × ${selectedPackSize} Pcs. = `
+                          : `${quantity} Pcs. × `}
+                        <strong>{fmt(lineTotalPaise)}</strong>
                       </p>
                     )}
                   </>
@@ -507,7 +512,9 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
               {/* Quantity spinner */}
               <div>
-                <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 8px" }}>Packs:</p>
+                <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 8px" }}>
+                  {selectedPackSize > 1 ? "Packs:" : "Quantity:"}
+                </p>
                 <div style={{ display: "flex", alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 8, width: "fit-content" }}>
                   <button onClick={() => setQuantity(q => Math.max(0, q - 1))} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>−</button>
                   <span style={{ padding: "8px 20px", fontSize: 15, fontWeight: 700, borderLeft: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0" }}>{quantity}</span>
@@ -552,8 +559,8 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                       {specKeys.map(k => (
                         <th key={k} style={{ padding: "12px 16px", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{k}</th>
                       ))}
-                      <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Qty (packs)</th>
-                      <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Price / Pack</th>
+                      <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Qty</th>
+                      <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Price</th>
                       <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Per Unit</th>
                       <th style={{ padding: "12px 16px", fontWeight: 700, color: "#374151" }}>Total</th>
                       <th style={{ padding: "12px 16px" }} />
@@ -600,11 +607,9 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                                 </span>
                               )}
                             </div>
-                            {packSize > 1 && (
-                              <span style={{ fontSize: 10, color: "#1e1e1e", marginTop: 3, display: "block" }}>
-                                = {numPacks * packSize} Pcs.
-                              </span>
-                            )}
+                            <span style={{ fontSize: 10, color: "#1e1e1e", marginTop: 3, display: "block" }}>
+                              = {numPacks * packSize} {packSize > 1 ? "Pcs." : "Pcs."}
+                            </span>
                           </td>
 
                           <td style={{ padding: "11px 16px", color: "#374151", fontWeight: 600 }}>

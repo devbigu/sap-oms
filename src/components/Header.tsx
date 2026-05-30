@@ -38,6 +38,12 @@ type Product = {
   _searchIndex?: string
 }
 
+type HeaderRole = "admin" | "dealer" | "staff" | "accountant" | "unknown"
+type ProductSuggestion = Product & {
+  _matchedSku?: string
+  _matchedName?: string
+}
+
 export type RecentlyViewedItem = {
   SKU: string
   Name: string
@@ -120,6 +126,44 @@ function useLocationFromStorage() {
   return { city, pincode }
 }
 
+function resolveHeaderRole(): HeaderRole {
+  try {
+    if (localStorage.getItem("accountant_token")) return "accountant"
+
+    const roleType = localStorage.getItem("roletype")
+    if (roleType === "3") return "admin"
+    if (roleType === "2") return "dealer"
+    if (roleType === "1") return "staff"
+
+    const raw = localStorage.getItem("UserData") || localStorage.getItem("staffData") || localStorage.getItem("admin")
+    if (!raw) return "unknown"
+
+    const data = JSON.parse(raw)
+    if (data?.Dealer_Id) return "dealer"
+    if (data?.staff_id) return data?.staff_roletype === "0" ? "admin" : "staff"
+  } catch { /* ignore */ }
+  return "unknown"
+}
+
+function variantMatchLevel(variant: Variant, q: string): number {
+  const keys = [variant.sku, variant.id].filter(Boolean).map(value => value.toLowerCase())
+
+  if (keys.some(value => value === q)) return 3
+  if (keys.some(value => value.startsWith(q))) return 2
+  if (keys.some(value => value.includes(q))) return 1
+
+  return 0
+}
+
+function findMatchingVariant(product: Product, q: string): Variant | undefined {
+  const variants = product.variants ?? []
+  return (
+    variants.find(v => variantMatchLevel(v, q) === 3) ||
+    variants.find(v => variantMatchLevel(v, q) === 2) ||
+    variants.find(v => variantMatchLevel(v, q) === 1)
+  )
+}
+
 // ─────────────────────────────────────────────────────────────
 // SCORE helper — ranks how well a product matches a query
 // Searches: SKU → variant SKUs → name → category → deep index
@@ -133,8 +177,11 @@ function scoreProduct(product: Product, q: string): number {
   if (sku.startsWith(q))    return 90   // SKU prefix
   if (sku.includes(q))      return 80   // SKU substring
 
-  // Tier 2: Check variant SKUs
-  if (product.variants?.some(v => (v.sku ?? '').toLowerCase().includes(q))) return 75
+  // Tier 2: Check variant catalogue numbers
+  const variantLevel = product.variants?.reduce((best, variant) => Math.max(best, variantMatchLevel(variant, q)), 0) ?? 0
+  if (variantLevel === 3) return 98
+  if (variantLevel === 2) return 88
+  if (variantLevel === 1) return 75
 
   // Tier 3: Name matches
   if (name.startsWith(q))   return 70   // name prefix
@@ -162,9 +209,10 @@ const Header = () => {
   const [query, setQuery] = useState("")
 
   const [allProducts, setAllProducts] = useState<Product[]>([])
-  const [suggestions, setSuggestions] = useState<Product[]>([])
+  const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([])
   const [showDropdown, setShowDropdown] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
+  const [headerRole, setHeaderRole] = useState<HeaderRole>("unknown")
 
   const searchRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -174,6 +222,10 @@ const Header = () => {
   const { city, pincode } = useLocationFromStorage()
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setHeaderRole(resolveHeaderRole())
+  }, [])
 
   // ── Load products once & build search index ─────────────────
   useEffect(() => {
@@ -189,7 +241,7 @@ const Header = () => {
             (p.descriptionHtml || '').replace(/<[^>]*>?/gm, ''),
             // Flatten all variant SKUs, names, and specsText
             ...(p.variants?.flatMap(v => [
-              v.sku ?? '', v.name ?? '', v.specsText ?? ''
+              v.sku ?? '', v.id ?? '', v.name ?? '', v.specsText ?? ''
             ]) || [])
           ]
           return { ...p, _searchIndex: parts.join(' ').toLowerCase() }
@@ -217,7 +269,17 @@ const Header = () => {
       }
 
       const matched = pool
-        .map(p => ({ product: p, score: scoreProduct(p, q) }))
+        .map(p => {
+          const matchedVariant = findMatchingVariant(p, q)
+          return {
+            product: {
+              ...p,
+              _matchedSku: matchedVariant?.sku || matchedVariant?.id,
+              _matchedName: matchedVariant?.name,
+            },
+            score: scoreProduct(p, q),
+          }
+        })
         .filter(({ score }) => score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, 8)
@@ -263,19 +325,63 @@ const Header = () => {
   }
 
   // ── Navigate to product & store in recently viewed ──────────
-  const goToProduct = (product: Product) => {
+  const goToProduct = (product: ProductSuggestion) => {
+    const targetSku = product._matchedSku || product.sku
+
     setShowDropdown(false)
-    setQuery(product.name)
-    pushRecentlyViewed({ SKU: product.sku, Name: product.name, image: product.images?.[0] })
-    router.push(`/Products/${product.sku}`)
+    setQuery(product._matchedName || product.name)
+    pushRecentlyViewed({ SKU: targetSku, Name: product._matchedName || product.name, image: product.images?.[0] })
+    router.push(`/Products/${encodeURIComponent(targetSku)}`)
   }
 
-  // ── Full search → /Products?q= ──────────────────────────────
+  const findBestSearchTarget = (q: string): ProductSuggestion | null => {
+    const lowerQ = q.toLowerCase()
+    let pool = allProducts
+
+    if (selectedCategory !== "all") {
+      const lowerCat = selectedCategory.toLowerCase()
+      pool = pool.filter(p =>
+        (p.category ?? '').toLowerCase().includes(lowerCat) ||
+        p.categories?.some(c => c.toLowerCase().includes(lowerCat))
+      )
+    }
+
+    const [best] = pool
+      .map(p => {
+        const matchedVariant = findMatchingVariant(p, lowerQ)
+        return {
+          product: {
+            ...p,
+            _matchedSku: matchedVariant?.sku || matchedVariant?.id,
+            _matchedName: matchedVariant?.name,
+          },
+          score: scoreProduct(p, lowerQ),
+        }
+      })
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+
+    return best?.product ?? null
+  }
+
+  // ── Full search → role-aware destination ────────────────────
   const commitSearch = () => {
     const q = query.trim()
     if (!q) return
     setShowDropdown(false)
-    router.push(`/Pages/products?q=${encodeURIComponent(q)}`)
+
+    if (headerRole === "admin" || headerRole === "staff") {
+      router.push(`/Pages/products?q=${encodeURIComponent(q)}`)
+      return
+    }
+
+    const bestMatch = findBestSearchTarget(q)
+    if (bestMatch) {
+      goToProduct(bestMatch)
+      return
+    }
+
+    router.push(`/Products?q=${encodeURIComponent(q)}`)
   }
 
   // ── Category change → store filter + navigate ───────────────
@@ -379,7 +485,12 @@ const Header = () => {
                 >
                   <FaMagnifyingGlass style={{ color: "#94a3b8", flexShrink: 0, fontSize: 12 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <HighlightMatch text={product.name} sku={product.sku} query={query} category={product.category} />
+                    <HighlightMatch
+                      text={product._matchedName || product.name}
+                      sku={product._matchedSku || product.sku}
+                      query={query}
+                      category={product.category}
+                    />
                   </div>
                   <span style={{ fontSize: 11, color: "#f59e0b", fontWeight: 600, flexShrink: 0 }}>
                     View →
@@ -394,7 +505,9 @@ const Header = () => {
                   fontSize: 13, color: "#1e3a5f", fontWeight: 600, textAlign: "center",
                 }}
               >
-                See all results for &ldquo;{query}&rdquo;
+                {headerRole === "admin" || headerRole === "staff"
+                  ? <>See all results for &ldquo;{query}&rdquo;</>
+                  : <>Open best match for &ldquo;{query}&rdquo;</>}
               </div>
             </div>
           )}

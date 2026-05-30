@@ -66,6 +66,7 @@ export async function POST(req: NextRequest) {
 
     const now = new Date().toISOString();
     const db = await getDb();
+    const discountScope = body.discountScope === "product" ? "product" : "order";
     const doc = {
       dealerId,
       dealerName: safeText(body.dealerName, 200),
@@ -79,6 +80,15 @@ export async function POST(req: NextRequest) {
       requestedDiscountAmount: Number(body.requestedDiscountAmount || 0),
       currentFinalPayable: Number(body.currentFinalPayable || 0),
       requestedFinalPayable: Number(body.requestedFinalPayable || 0),
+      discountScope,
+      targetProduct: discountScope === "product" && body.targetProduct && typeof body.targetProduct === "object"
+        ? {
+          productKey: safeText(body.targetProduct.productKey, 120),
+          productname: safeText(body.targetProduct.productname, 200),
+          displayName: safeText(body.targetProduct.displayName, 300),
+          variantCode: safeText(body.targetProduct.variantCode, 160),
+        }
+        : null,
       shipto: safeText(body.shipto, 1000),
       refno: safeText(body.refno, 120),
       orderNote: safeText(body.orderNote, 1500),

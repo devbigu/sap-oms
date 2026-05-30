@@ -227,18 +227,24 @@ function CategoryRow({ label, count, checked, onChange }: { label: string; count
 // ─────────────────────────────────────────────────────────────
 function ProductsContent() {
   const searchParams = useSearchParams();
+  const urlQuery = searchParams.get("q") ?? "";
 
   const [allData, setAllData]             = useState<Product[]>([]);
   const [loading, setLoading]             = useState(true);
   const [currentPage, setCurrentPage]     = useState(1);
   const [sortBy, setSortBy]               = useState("default");
-  const [searchQuery, setSearchQuery]     = useState("");
+  const [searchQuery, setSearchQuery]     = useState(urlQuery);
   const [selectedCats, setSelectedCats]   = useState<string[]>(() => {
     const cat = searchParams.get("cat");
     return cat && SIDEBAR_CATEGORIES[cat] ? [cat] : [];
   });
   const [inStockOnly, setInStockOnly]     = useState(false);
   const [catExpanded, setCatExpanded]     = useState(true);
+
+  useEffect(() => {
+    setSearchQuery(urlQuery);
+    setCurrentPage(1);
+  }, [urlQuery]);
 
   useEffect(() => {
     axios.get("/data/nested_omsons_products.json")
@@ -250,7 +256,17 @@ function ProductsContent() {
     let d = [...allData];
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      d = d.filter(p => p.name.toLowerCase().includes(q) || p.sku.includes(q) || (p.categories ?? []).some(c => c.toLowerCase().includes(q)));
+      d = d.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.categories ?? []).some(c => c.toLowerCase().includes(q)) ||
+        (p.variants ?? []).some(v =>
+          v.sku.toLowerCase().includes(q) ||
+          v.id.toLowerCase().includes(q) ||
+          v.name.toLowerCase().includes(q) ||
+          v.specsText.toLowerCase().includes(q)
+        )
+      );
     }
     if (selectedCats.length > 0) d = d.filter(p => selectedCats.some(cat => matchesSidebarCat(p, cat)));
     if (inStockOnly) d = d.filter(p => p.variants?.some(v => v.inStock) ?? false);

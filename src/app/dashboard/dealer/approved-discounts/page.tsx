@@ -19,6 +19,13 @@ type ApprovalRequest = {
   subtotal: number;
   requestedDiscountAmount: number;
   requestedFinalPayable: number;
+  discountScope?: "order" | "product";
+  targetProduct?: {
+    productKey?: string;
+    productname?: string;
+    displayName?: string;
+    variantCode?: string;
+  } | null;
   shipto?: string;
   orderNote?: string;
   products: ApprovalProduct[];
@@ -166,11 +173,19 @@ export default function ApprovedDiscountsPage() {
                         <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
                           Approved
                         </span>
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold text-indigo-700">
+                          {(request.discountScope ?? "order") === "product" ? "Product" : "Order"}
+                        </span>
                         <span className="text-[12px] text-gray-500">
                           {request.reviewedAt ? new Date(request.reviewedAt).toLocaleString("en-IN") : "Approval date unavailable"}
                         </span>
                       </div>
                       <p className="mt-2 text-[16px] font-bold text-gray-900">{request.requestedDiscountPercent}% approved discount</p>
+                      {(request.discountScope ?? "order") === "product" && (
+                        <p className="mt-1 text-[12px] font-semibold text-indigo-700">
+                          Applies to: {request.targetProduct?.displayName || request.targetProduct?.variantCode || "Selected product"}
+                        </p>
+                      )}
                       <p className="mt-1 text-[12px] text-gray-500">
                         {reordered > 0
                           ? `Reordered ${reordered}x${request.lastReorderedAt ? ` - Last: ${new Date(request.lastReorderedAt).toLocaleString("en-IN")}` : ""}`

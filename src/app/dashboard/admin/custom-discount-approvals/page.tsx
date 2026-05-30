@@ -29,6 +29,13 @@ type ApprovalRequest = {
   requestedDiscountAmount: number;
   currentFinalPayable: number;
   requestedFinalPayable: number;
+  discountScope?: "order" | "product";
+  targetProduct?: {
+    productKey?: string;
+    productname?: string;
+    displayName?: string;
+    variantCode?: string;
+  } | null;
   shipto?: string;
   refno?: string;
   orderNote?: string;
@@ -223,6 +230,9 @@ export default function CustomDiscountApprovalsPage() {
                       <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusBadge(request.status)}`}>
                         {statusLabel(request.status)}
                       </span>
+                      <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold text-indigo-700">
+                        {(request.discountScope ?? "order") === "product" ? "Product discount" : "Order discount"}
+                      </span>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-gray-500">
                       <span>ID: {request.dealerId}</span>
@@ -233,6 +243,11 @@ export default function CustomDiscountApprovalsPage() {
                     <p className="mt-2 text-[12px] text-gray-400">
                       Requested {request.createdAt ? new Date(request.createdAt).toLocaleString("en-IN") : ""}
                     </p>
+                    {(request.discountScope ?? "order") === "product" && (
+                      <p className="mt-2 text-[12px] font-semibold text-indigo-700">
+                        Applies to: {request.targetProduct?.displayName || request.targetProduct?.variantCode || "Selected product"}
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
