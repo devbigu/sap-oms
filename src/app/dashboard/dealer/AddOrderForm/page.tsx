@@ -269,6 +269,9 @@ function AddOrderPageInner() {
   const [customDiscountSubmitting, setCustomDiscountSubmitting] = useState(false);
   const [customDiscountRequests, setCustomDiscountRequests] = useState<CustomDiscountRequest[]>([]);
   const [reorderRequest, setReorderRequest] = useState<CustomDiscountRequest | null>(null);
+  const [perProductDiscountInputs, setPerProductDiscountInputs] = useState<Record<string, number>>({});
+  const [editingProductDiscountKey, setEditingProductDiscountKey] = useState<string | null>(null);
+  const [perProductSubmitting, setPerProductSubmitting] = useState<string | null>(null);
 
   const [arr1, setArr] = useState<ProductRow[]>([emptyRow()]);
 
@@ -527,11 +530,19 @@ function AddOrderPageInner() {
       (r) => r.status === "approved" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
     );
   };
+  const getProductPendingRequest = (row: ProductRow) => {
+    const rowSignature = buildProductSignature(row);
+    return customDiscountRequests.find(
+      (r) => r.status === "pending" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
+    );
+  };
   const getRowDiscountPercent = (row: ProductRow) => {
-    if (approvedCustomDiscountPercent !== null) return approvedCustomDiscountPercent;
+    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
     const productRequest = getApprovedProductCustomRequest(row);
-    if (productRequest) return Math.min(100, Math.max(0, Number(productRequest.requestedDiscountPercent) || 0));
-    return baseDiscountPayload.discountPercent;
+    if (productRequest) {
+      return Math.min(100, Math.max(globalPercent, Number(productRequest.requestedDiscountPercent) || 0));
+    }
+    return globalPercent;
   };
   const discountAmountFromRows = productRows.reduce((acc, row) => (
     acc + (rowSubtotalPaise(row) / 100) * (getRowDiscountPercent(row) / 100)
@@ -541,7 +552,7 @@ function AddOrderPageInner() {
     : 0;
   const discountPayload = {
     ...baseDiscountPayload,
-    discountPercent: approvedCustomDiscountPercent !== null ? approvedCustomDiscountPercent : effectiveDiscountPercent,
+    discountPercent: effectiveDiscountPercent,
     discountAmount: Number(payloadAmount(discountAmountFromRows)),
     finalPayableAmount: Number(payloadAmount(Math.max(0, subtotal - discountAmountFromRows))),
   };
@@ -551,11 +562,9 @@ function AddOrderPageInner() {
   const discountStatusMessage = getDiscountStatusMessage(discountPayload.slabDiscountPercent);
   const hasSlabDiscount = discountPayload.slabDiscountPercent > 0;
   const hasAnyDiscount = discountPayload.discountPercent > 0;
-  const approvedProductCustomRequests = approvedCustomDiscountPercent !== null
-    ? []
-    : productRows
-      .map((row) => getApprovedProductCustomRequest(row))
-      .filter((r): r is CustomDiscountRequest => !!r);
+  const approvedProductCustomRequests = productRows
+    .map((row) => getApprovedProductCustomRequest(row))
+    .filter((r): r is CustomDiscountRequest => !!r);
   const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null || approvedProductCustomRequests.length > 0;
   const requestedCustomDiscountPercent = Math.min(100, Math.max(0, Number(customDiscountInput) || 0));
   const requestedCustomDiscountAmount = customDiscountBaseSubtotal * (requestedCustomDiscountPercent / 100);
@@ -661,6 +670,76 @@ function AddOrderPageInner() {
       toast.error(e instanceof Error ? e.message : "Could not request custom discount.");
     } finally {
       setCustomDiscountSubmitting(false);
+    }
+  };
+
+  const handleRequestProductDiscount = async (row: ProductRow) => {
+    const key = getProductKey(row);
+    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
+    const productPercent = perProductDiscountInputs[key] ?? globalPercent;
+    if (productPercent <= globalPercent) {
+      toast(`Enter a product discount above the current ${globalPercent}%.`);
+      return;
+    }
+    setPerProductSubmitting(key);
+    try {
+      const rowSub = rowSubtotalPaise(row) / 100;
+      const res = await fetch("/api/custom-discount-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dealerId: user.Dealer_Id,
+          dealerName: user.Dealer_Name,
+          dealerCode: user.Dealer_Dealercode,
+          dealerEmail: user.Dealer_Email,
+          dealerPhone: user.Dealer_Number,
+          requestedDiscountPercent: productPercent,
+          currentDiscountPercent: globalPercent,
+          subtotal: Number(payloadAmount(rowSub)),
+          currentDiscountAmount: Number(payloadAmount(rowSub * (globalPercent / 100))),
+          requestedDiscountAmount: Number(payloadAmount(rowSub * (productPercent / 100))),
+          currentFinalPayable: Number(payloadAmount(Math.max(0, rowSub - rowSub * (globalPercent / 100)))),
+          requestedFinalPayable: Number(payloadAmount(Math.max(0, rowSub - rowSub * (productPercent / 100)))),
+          discountScope: "product",
+          targetProduct: {
+            productKey: key,
+            productname: row.productname,
+            displayName: row.displayName,
+            variantCode: row.variantCode,
+          },
+          shipto,
+          refno,
+          orderNote: orderNote.trim(),
+          orderSignature: buildProductSignature(row),
+          discountBreakdown: {
+            allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
+            slabDiscountPercent: baseDiscountPayload.slabDiscountPercent,
+            couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
+            couponCode: appliedCoupon?.code ?? "",
+            globalCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
+            productAdditionalPercent: productPercent - globalPercent,
+          },
+          products: [{
+            productname: row.productname,
+            displayName: row.displayName,
+            variantCode: row.variantCode,
+            quantity: row.producQuanity,
+            price: row.price,
+            packSize: row.packSize,
+            priority: !!row.isPriority,
+            rowSubtotal: payloadAmount(rowSub),
+          }],
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message ?? "Request failed");
+      setCustomDiscountRequests((prev) => [json.data, ...prev.filter((r) => r.id !== json.data.id)]);
+      setEditingProductDiscountKey(null);
+      toast.success(`Product discount request sent for ${row.displayName || row.variantCode}.`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not request product discount.");
+    } finally {
+      setPerProductSubmitting(null);
     }
   };
 
@@ -1389,7 +1468,7 @@ function AddOrderPageInner() {
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Pack Size</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-24">Pieces</th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">List Price</th>
-                    <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-28 ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
+                    <th className={`px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider w-44 ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
                       Discount
                     </th>
                     <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400 w-28">Final Price</th>
@@ -1404,9 +1483,17 @@ function AddOrderPageInner() {
                     const rowTotal = Math.max(0, listPrice - discAmt);
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
                     const meta = variantLookup[row.productname];
+                    const productKey = getProductKey(row);
+                    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
+                    const approvedProductReq = getApprovedProductCustomRequest(row);
+                    const approvedProductTotal = approvedProductReq ? Math.min(100, Math.max(0, Number(approvedProductReq.requestedDiscountPercent) || 0)) : 0;
+                    const productExtraPercent = approvedProductReq ? Math.max(0, approvedProductTotal - globalPercent) : 0;
+                    const pendingProductReq = getProductPendingRequest(row);
+                    const isEditingThisRow = editingProductDiscountKey === productKey;
+                    const currentProductInput = perProductDiscountInputs[productKey] ?? globalPercent;
 
                     return (
-                      <tr key={row.key} className="hover:bg-gray-50/50 transition-colors">
+                      <tr key={row.key} className={`hover:bg-gray-50/50 transition-colors${pendingProductReq ? " border-l-2 border-amber-400" : ""}`}>
                         <td className="pl-6 pr-3 py-3">
                           <span className="text-[11px] text-gray-300 font-mono">{String(idx + 1).padStart(2, "0")}</span>
                         </td>
@@ -1515,11 +1602,88 @@ function AddOrderPageInner() {
                             <p className="text-[10px] text-gray-400 mt-0.5">{totalUnits} pcs. × ₹{row.price}</p>
                           )}
                         </td>
-                        <td className="px-3 py-3">
-                          <span className={`font-mono text-[12px] font-semibold ${hasAnyDiscount ? "text-emerald-600" : "text-gray-400"}`}>
-                            {discAmt > 0 ? `−${fmt(discAmt)}` : "—"}
-                          </span>
-                          {discAmt > 0 && <p className="text-[10px] text-gray-400 mt-0.5">{rowDiscountPercent}% off</p>}
+                        <td className="px-3 py-3 min-w-[160px]">
+                          <div className="space-y-0.5">
+                            <p className="text-[10px] text-gray-400 font-mono leading-tight">
+                              Global: {globalPercent}%
+                            </p>
+                            <div className="flex items-center gap-1">
+                              <span className={`text-[10px] font-mono leading-tight ${productExtraPercent > 0 ? "text-indigo-600 font-semibold" : "text-gray-400"}`}>
+                                Product: {productExtraPercent > 0 ? `+${productExtraPercent}` : "0"}%
+                              </span>
+                              {row.productname && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isEditingThisRow) {
+                                      setEditingProductDiscountKey(null);
+                                    } else {
+                                      setEditingProductDiscountKey(productKey);
+                                      setPerProductDiscountInputs((prev) => ({
+                                        ...prev,
+                                        [productKey]: prev[productKey] ?? (approvedProductTotal || globalPercent),
+                                      }));
+                                    }
+                                  }}
+                                  className={`w-[18px] h-[18px] flex items-center justify-center rounded transition-colors ${isEditingThisRow ? "bg-indigo-100 text-indigo-700" : "text-indigo-400 hover:bg-indigo-50 hover:text-indigo-600"}`}
+                                  title="Edit product discount"
+                                >
+                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                                    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+                            <div className="border-t border-dashed border-gray-200 pt-0.5">
+                              <span className={`font-mono text-[11px] font-bold ${rowDiscountPercent > 0 ? "text-emerald-600" : "text-gray-400"}`}>
+                                {rowDiscountPercent}% off
+                              </span>
+                            </div>
+                            {discAmt > 0 && (
+                              <span className="block font-mono text-[11px] font-semibold text-emerald-600">
+                                −{fmt(discAmt)}
+                              </span>
+                            )}
+                            {isEditingThisRow && (
+                              <div className="pt-1.5 space-y-1.5">
+                                <div className="flex items-center border border-indigo-200 rounded-lg overflow-hidden w-fit bg-white shadow-sm">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPerProductDiscountInputs((prev) => ({
+                                      ...prev,
+                                      [productKey]: Math.max(globalPercent, (prev[productKey] ?? globalPercent) - 0.5),
+                                    }))}
+                                    className="w-7 h-[26px] flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold transition-colors border-none cursor-pointer"
+                                  >−</button>
+                                  <span className="w-10 h-[26px] flex items-center justify-center text-[11px] font-mono font-bold text-indigo-700 border-x border-indigo-200 bg-white">
+                                    {currentProductInput}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setPerProductDiscountInputs((prev) => ({
+                                      ...prev,
+                                      [productKey]: Math.min(100, (prev[productKey] ?? globalPercent) + 0.5),
+                                    }))}
+                                    className="w-7 h-[26px] flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold transition-colors border-none cursor-pointer"
+                                  >+</button>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRequestProductDiscount(row)}
+                                  disabled={currentProductInput <= globalPercent || perProductSubmitting === productKey}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors border-none cursor-pointer"
+                                >
+                                  {perProductSubmitting === productKey ? "Sending…" : "Request ▸"}
+                                </button>
+                              </div>
+                            )}
+                            {pendingProductReq && !isEditingThisRow && (
+                              <span className="inline-flex items-center gap-1 mt-0.5 text-[9px] font-bold text-amber-600">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                pending
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-3">
                           {listPrice > 0 && discAmt > 0 && (
