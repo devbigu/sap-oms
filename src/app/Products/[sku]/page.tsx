@@ -44,6 +44,10 @@ function getImage(product: Product, idx = 0): string | null {
   return product.images?.[idx] ?? null;
 }
 
+function getVariantImage(product: Product, variant?: Variant | null): string | undefined {
+  return (variant?.images ?? []).find(Boolean) ?? product.images?.find(Boolean) ?? undefined;
+}
+
 // All prices kept as paise internally so fmt() and the cart stay consistent.
 function variantPricePaise(v: Variant | null): number | null {
   return v ? v.price * 100 : null;
@@ -244,8 +248,8 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   const stickyInCart = cart.some(c => c.id === selectedVariantSKU);
 
   // ── Cart actions ──────────────────────────────────────────
-  const addVariant = (vSku: string, name: string, pricePaise: number, qty: number, packSize: number) => {
-    addToCart({ id: vSku, name, price: pricePaise, packSize, initialQty: qty });
+  const addVariant = (vSku: string, name: string, pricePaise: number, qty: number, packSize: number, image?: string) => {
+    addToCart({ id: vSku, name, price: pricePaise, packSize, image, initialQty: qty });
     setToast({ name, sku: vSku });
   };
 
@@ -253,21 +257,28 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     if (!product?.variants) return;
     product.variants.forEach(v => {
       const { numPacks, packSize, unitPaise } = rowCalc(v.sku);
-      addToCart({ id: v.sku, name: v.name, price: unitPaise, packSize, initialQty: numPacks });
+      addToCart({ id: v.sku, name: v.name, price: unitPaise, packSize, image: getVariantImage(product, v), initialQty: numPacks });
     });
     setToast({ name: product.name, sku: `${product.variants.length} variants`, bulk: true });
   };
 
   const handleAddSelected = () => {
     if (!selectedVariantSKU || !product || displayPricePaise === null) return;
-    addVariant(selectedVariantSKU, selectedVariant?.name ?? product.name, displayPricePaise, quantity, selectedPackSize);
+    addVariant(
+      selectedVariantSKU,
+      selectedVariant?.name ?? product.name,
+      displayPricePaise,
+      quantity,
+      selectedPackSize,
+      getVariantImage(product, selectedVariant)
+    );
   };
 
   const handleAddRow = (variantSku: string) => {
     if (!product) return;
     const vm = product.variants?.find(v => v.sku === variantSku);
     const { numPacks, packSize, unitPaise } = rowCalc(variantSku);
-    addVariant(variantSku, vm?.name ?? product.name, unitPaise, numPacks, packSize);
+    addVariant(variantSku, vm?.name ?? product.name, unitPaise, numPacks, packSize, getVariantImage(product, vm));
     setSelectedVariantSKU(variantSku);
   };
 

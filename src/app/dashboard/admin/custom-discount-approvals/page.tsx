@@ -51,6 +51,8 @@ type ApprovalRequest = {
   createdAt: string;
 };
 
+const DEFAULT_REJECTION_NOTE = "Please revise the discount percentage and resubmit.";
+
 function money(value: number) {
   return `₹${Number(value || 0).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
@@ -124,12 +126,20 @@ export default function CustomDiscountApprovalsPage() {
   const decide = async (request: ApprovalRequest, status: "approved" | "rejected") => {
     setUpdating(request.id);
     try {
+      const adminNote = status === "rejected" && !(notes[request.id] ?? "").trim()
+        ? DEFAULT_REJECTION_NOTE
+        : notes[request.id] ?? "";
+
+      if (status === "rejected" && adminNote !== (notes[request.id] ?? "")) {
+        setNotes((prev) => ({ ...prev, [request.id]: adminNote }));
+      }
+
       const res = await fetch(`/api/custom-discount-requests/${request.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status,
-          adminNote: notes[request.id] ?? "",
+          adminNote,
           reviewedBy: resolveAdminName(),
         }),
       });
@@ -318,22 +328,27 @@ export default function CustomDiscountApprovalsPage() {
                       className="mt-2 w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-100 disabled:text-gray-500"
                     />
                     {request.status === "pending" ? (
-                      <div className="mt-3 flex gap-2">
-                        <button
-                          onClick={() => decide(request, "approved")}
-                          disabled={updating === request.id}
-                          className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-                        >
-                          {updating === request.id ? "Saving..." : "Approve"}
-                        </button>
-                        <button
-                          onClick={() => decide(request, "rejected")}
-                          disabled={updating === request.id}
-                          className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-red-700 disabled:opacity-50"
-                        >
-                          Disapprove
-                        </button>
-                      </div>
+                      <>
+                        <p className="mt-2 text-[11px] font-medium text-red-600">
+                          Disapproving will save this order as a Draft for the dealer to edit.
+                        </p>
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            onClick={() => decide(request, "approved")}
+                            disabled={updating === request.id}
+                            className="flex-1 rounded-xl bg-emerald-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            {updating === request.id ? "Saving..." : "Approve"}
+                          </button>
+                          <button
+                            onClick={() => decide(request, "rejected")}
+                            disabled={updating === request.id}
+                            className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-red-700 disabled:opacity-50"
+                          >
+                            Disapprove
+                          </button>
+                        </div>
+                      </>
                     ) : (
                       <>
                         <p className="mt-3 text-[12px] text-gray-500">

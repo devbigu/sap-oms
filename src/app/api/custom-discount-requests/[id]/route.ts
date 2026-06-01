@@ -10,12 +10,59 @@ function safeText(value: unknown, max = 1000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+function safePositiveNumber(value: unknown, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function toDoc(doc: any) {
   return {
     ...doc,
     id: doc._id.toString(),
     _id: undefined,
   };
+}
+
+const DEFAULT_REJECTION_NOTE = "Please revise the discount percentage and resubmit.";
+
+function buildDraftName(now: string) {
+  return `Disapproved Request: ${new Date(now).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+}
+
+function buildDraftRows(products: any[]) {
+  return (Array.isArray(products) ? products : []).slice(0, 100).map((product, index) => {
+    const productname = safeText(product?.productname, 200);
+    const variantCode = safeText(product?.variantCode, 160);
+    const displayName = safeText(product?.displayName, 300);
+
+    return {
+      key: index + 1,
+      productname: productname || variantCode,
+      displayName: displayName || productname || variantCode,
+      variantCode: variantCode || productname,
+      producQuanity: safePositiveNumber(product?.quantity ?? product?.producQuanity, 1),
+      price: safePositiveNumber(product?.price, 0),
+      packSize: safePositiveNumber(product?.packSize, 1),
+      isPriority: !!(product?.priority || product?.isPriority),
+    };
+  });
+}
+
+function buildDraftOrderNote(orderNote: unknown, adminNote: string) {
+  const existingNote = safeText(orderNote, 1500);
+  const rejectionNote = adminNote || DEFAULT_REJECTION_NOTE;
+  return [
+    existingNote,
+    "--- ADMIN REJECTION NOTE ---",
+    rejectionNote,
+    "Please update your cart and resubmit.",
+  ].filter(Boolean).join("\n\n");
 }
 
 export async function GET(
@@ -78,6 +125,33 @@ export async function PATCH(
     }
 
     const db = await getDb();
+    const existing = await db.collection("custom_discount_requests").findOne({ _id: oid });
+    if (!existing) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+
+    if (!isToggleOnly && status === "rejected" && !existing.rejectionDraftId) {
+      const draftResult = await db.collection("order_drafts").insertOne({
+        dealer_id: existing.dealerId,
+        name: buildDraftName(now),
+        rows: buildDraftRows(
+          Array.isArray(existing.draftProducts) && existing.draftProducts.length > 0
+            ? existing.draftProducts
+            : existing.products
+        ),
+        shipto: existing.shipto ?? null,
+        refno: existing.refno ?? null,
+        order_note: buildDraftOrderNote(existing.orderNote, set.adminNote),
+        coupon_code: existing.discountBreakdown?.couponCode || null,
+        coupon_pct: existing.discountBreakdown?.couponDiscountPercent ?? null,
+        source: "custom_discount_rejection",
+        source_request_id: existing._id.toString(),
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      set.rejectionDraftId = draftResult.insertedId.toString();
+      set.rejectionDraftCreatedAt = now;
+    }
+
     const updated = await db.collection("custom_discount_requests").findOneAndUpdate(
       { _id: oid },
       { $set: set },

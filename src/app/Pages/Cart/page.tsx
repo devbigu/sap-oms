@@ -34,11 +34,13 @@ function parsePackSizes(html: string): Record<string, number> {
 function buildVariantLookup(data: any[]): Record<string, ProductMeta> {
   const map: Record<string, ProductMeta> = {};
   for (const product of data) {
-    const image = (product.Images ?? []).find(Boolean) ?? null;
-    const productName = product.Name ?? "";
+    const image = (product.images ?? product.Images ?? []).find(Boolean) ?? null;
+    const productName = product.name ?? product.Name ?? "";
     const packMap = parsePackSizes(product.Description ?? "");
     for (const variant of product.variants ?? []) {
-      map[variant.SKU] = { image, productName, packSize: packMap[variant.SKU] ?? 1 };
+      const sku = variant.SKU ?? variant.sku;
+      const variantImage = (variant.images ?? variant.Images ?? []).find(Boolean) ?? image;
+      map[sku] = { image: variantImage, productName, packSize: packMap[sku] ?? 1 };
     }
   }
   return map;
@@ -174,6 +176,7 @@ export default function CartPage() {
               const prodName   = nameParts[0] ?? item.name;
               const varCode    = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
               const isRemoving = removed.includes(item.id);
+              const image      = item.image || meta?.image;
 
               return (
                 <div
@@ -187,8 +190,8 @@ export default function CartPage() {
                 >
                   {/* Image */}
                   <div style={{ width: 88, height: 88, borderRadius: 12, border: "1px solid #f3f4f6", background: "#fafafa", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
-                    {meta?.image ? (
-                      <img src={meta.image} alt={prodName} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6 }} />
+                    {image ? (
+                      <img src={image} alt={prodName} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6 }} />
                     ) : (
                       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.2">
                         <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>

@@ -23,26 +23,24 @@ const PLACEHOLDER_IMAGE =
 
 const HOT_BADGES = ["🔥 Bestseller", "⚡ Fast moving", "🔥 Trending", "⚡ Popular", "🔥 Top rated", "⚡ Hot pick"];
 
-// ─── Hot items localStorage helper ───────────────────────────────────────────
-
-type StoredHotItem = { id: string; SKU: string; name: string; image: string; badge: string; active: boolean };
-
-function getStoredHotItems(): StoredHotItem[] {
-  try {
-    const raw = localStorage.getItem("hotItems");
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface JsonProduct {
-  SKU: number | string;
-  Name: string;
-  Images: string[];
+  SKU?: number | string;
+  Name?: string;
+  Images?: string[];
+  sku?: number | string;
+  name?: string;
+  images?: string[];
   Categories?: string[];
+  variants?: Array<{
+    SKU?: number | string;
+    sku?: number | string;
+    name?: string;
+    Name?: string;
+    images?: string[];
+    Images?: string[];
+  }>;
 }
 
 interface HotItemDisplay {
@@ -51,6 +49,8 @@ interface HotItemDisplay {
   image: string;
   badge: string;
 }
+
+type PublishedHotItem = { id: string; SKU: string; name: string; image: string; badge: string; active: boolean };
 
 type Order = {
   order_id: string;
@@ -85,6 +85,51 @@ async function fetchOrders(id: string): Promise<ApiResponse> {
   const r = await fetch(`${BACKEND}/orderhispegination?page=1&search=&id=${id}`);
   if (!r.ok) throw new Error("Failed to fetch orders");
   return r.json();
+}
+
+function firstImage(item: any): string {
+  return (item?.images ?? item?.Images ?? []).find(Boolean) ?? "";
+}
+
+function productSku(product: JsonProduct): string {
+  return String(product.sku ?? product.SKU ?? "").trim();
+}
+
+function productName(product: JsonProduct): string {
+  return String(product.name ?? product.Name ?? "").trim();
+}
+
+function buildCatalogLookups(products: JsonProduct[]) {
+  const imageMap = new Map<string, string>();
+  const nameMap = new Map<string, string>();
+  const fallbackProducts: HotItemDisplay[] = [];
+
+  for (const product of products) {
+    const sku = productSku(product);
+    const name = productName(product);
+    const image = firstImage(product);
+    if (!sku || !name) continue;
+
+    imageMap.set(sku.toLowerCase(), image);
+    nameMap.set(sku.toLowerCase(), name);
+    if (image) {
+      fallbackProducts.push({
+        SKU: sku,
+        Name: name,
+        image,
+        badge: HOT_BADGES[fallbackProducts.length % HOT_BADGES.length],
+      });
+    }
+
+    for (const variant of product.variants ?? []) {
+      const variantSku = String(variant.sku ?? variant.SKU ?? "").trim();
+      if (!variantSku) continue;
+      imageMap.set(variantSku.toLowerCase(), firstImage(variant) || image);
+      nameMap.set(variantSku.toLowerCase(), String(variant.name ?? variant.Name ?? name).trim() || name);
+    }
+  }
+
+  return { imageMap, nameMap, fallbackProducts };
 }
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
@@ -207,49 +252,37 @@ export default function Page() {
   }, []);
 
   // Fetch products for "Hot Right Now" section
-  // Priority: admin-managed localStorage hot items (with real images from products.json)
-  // Fallback: first 6 products that have images in products.json
+  // Priority: admin-managed MongoDB hot items with catalog images
+  // Fallback: first 6 products that have images in the local catalog
   useEffect(() => {
-    axios
-      .get<JsonProduct[]>("/data/products.json")
-      .then((res) => {
-        const allProducts = res.data;
-        // Build a SKU → image lookup from products.json
-        const imageMap = new Map<string, string>();
-        for (const p of allProducts) {
-          if (p.Images?.length) {
-            imageMap.set(String(p.SKU).trim(), p.Images[0]);
-          }
-        }
-
-        const adminItems = getStoredHotItems().filter((i) => i.active);
+    Promise.all([
+      axios.get<JsonProduct[]>("/data/nested_omsons_products.json"),
+      fetch("/api/hot-items", { cache: "no-store" })
+        .then((r) => r.json())
+        .catch(() => ({ success: false, data: { items: [] } })),
+    ])
+      .then(([catalogRes, hotJson]) => {
+        const { imageMap, nameMap, fallbackProducts } = buildCatalogLookups(catalogRes.data);
+        const publishedItems = ((hotJson.success ? hotJson.data?.items : []) ?? []) as PublishedHotItem[];
+        const adminItems = publishedItems.filter((item) => item.active);
+        const hasConfiguredHotItems = hotJson.success && !hotJson.data?.isDefault && publishedItems.length > 0;
 
         if (adminItems.length > 0) {
           setHotItems(
-            adminItems.slice(0, 6).map((item) => ({
-              SKU:   item.SKU,
-              Name:  item.name,
-              badge: item.badge,
-              // Use real product image from products.json when available;
-              // fall back to admin-stored image only if it isn't the placeholder
-              image:
-                imageMap.get(item.SKU.trim()) ??
-                (item.image && item.image !== PLACEHOLDER_IMAGE ? item.image : ""),
-            }))
+            adminItems.slice(0, 6).map((item: PublishedHotItem) => {
+              const key = item.SKU.trim().toLowerCase();
+              return {
+                SKU: item.SKU,
+                Name: nameMap.get(key) || item.name,
+                badge: item.badge,
+                image: imageMap.get(key) || (item.image && item.image !== PLACEHOLDER_IMAGE ? item.image : ""),
+              };
+            })
           );
+        } else if (hasConfiguredHotItems) {
+          setHotItems([]);
         } else {
-          // No admin hot items configured → show first 6 products with images
-          setHotItems(
-            allProducts
-              .filter((p) => p.Images?.length > 0)
-              .slice(0, 6)
-              .map((p, i) => ({
-                SKU:   String(p.SKU),
-                Name:  p.Name,
-                image: p.Images[0],
-                badge: HOT_BADGES[i % HOT_BADGES.length],
-              }))
-          );
+          setHotItems(fallbackProducts.slice(0, 6));
         }
         setHotLoading(false);
       })

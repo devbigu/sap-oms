@@ -8,6 +8,7 @@ type Props = {
     name: string;
     price: number;
     packSize: number;  
+    image?: string;
   };
 };
 

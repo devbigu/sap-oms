@@ -8,6 +8,7 @@ export type CartItem = {
   packSize?: number;  // units per pack
   stock?: number;
   isPriority?: boolean;
+  image?: string;
 };
 
 type CartStore = {
@@ -36,6 +37,7 @@ export const useCartStore = create<CartStore>((set) => ({
                   ...i,
                   price: item.price,
                   packSize: item.packSize,
+                  image: item.image || i.image,
                   quantity: i.stock
                     ? Math.min(i.quantity + addQty, i.stock)
                     : i.quantity + addQty,
@@ -55,6 +57,7 @@ export const useCartStore = create<CartStore>((set) => ({
             packSize: item.packSize,
             stock: item.stock,
             isPriority: item.isPriority ?? false,
+            image: item.image,
             quantity: item.stock ? Math.min(addQty, item.stock) : addQty,
           },
         ],

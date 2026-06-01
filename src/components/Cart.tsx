@@ -16,17 +16,18 @@ function buildVariantLookup(data: any[]): Record<string, ProductMeta> {
   const map: Record<string, ProductMeta> = {};
 
   for (const product of data) {
-    const image = (product.Images ?? []).find(Boolean) ?? null;
-    const productName = product.Name ?? "";
+    const image = (product.images ?? product.Images ?? []).find(Boolean) ?? null;
+    const productName = product.name ?? product.Name ?? "";
     const desc = product.Description ?? "";
 
     // Parse the description table to get per-variant pack sizes
     const packMap = parsePackSizes(desc);
 
     for (const variant of product.variants ?? []) {
-      const sku = variant.SKU;
+      const sku = variant.SKU ?? variant.sku;
+      const variantImage = (variant.images ?? variant.Images ?? []).find(Boolean) ?? image;
       map[sku] = {
-        image,
+        image: variantImage,
         productName,
         packSize: packMap[sku] ?? 1,
       };
@@ -136,6 +137,7 @@ export default function Cart() {
                   const nameParts   = item.name.split(" - ");
                   const productName = nameParts[0] ?? item.name;
                   const variantCode = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
+                  const image = item.image || meta?.image;
 
                   return (
                     <div
@@ -146,9 +148,9 @@ export default function Cart() {
                     >
                       {/* Product Image */}
                       <div className="w-20 h-20 bg-[#F0F2F2] rounded flex items-center justify-center shrink-0 overflow-hidden">
-                        {meta?.image ? (
+                        {image ? (
                           <img
-                            src={meta.image}
+                            src={image}
                             alt={productName}
                             className="w-full h-full object-contain p-1"
                           />

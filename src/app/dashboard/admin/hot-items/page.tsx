@@ -14,33 +14,61 @@ export type HotItem = {
   active: boolean;
 };
 
-// ─── Storage helpers (shared with page.tsx) ───────────────────────────────────
+type CatalogOption = {
+  sku: string;
+  name: string;
+  image: string;
+};
 
-const HOT_ITEMS_KEY = "hotItems";
+// ─── API + catalog helpers ───────────────────────────────────────────────────
 
-const DEFAULT_ITEMS: HotItem[] = [
-  { id: "1", SKU: "163",  name: "Adapters Reduction",          image: "", badge: "🔥 Bestseller",  active: true  },
-  { id: "2", SKU: "164",  name: "Adapters Cone and Cone",      image: "", badge: "⚡ Fast moving", active: true  },
-  { id: "3", SKU: "165",  name: "Adapters Socket and Socket",  image: "", badge: "🔥 Trending",   active: true  },
-  { id: "4", SKU: "144",  name: "Flask Erlenmeyer Amber",      image: "", badge: "⚡ Popular",    active: true  },
-  { id: "5", SKU: "145",  name: "Flask Erlenmeyer Narrow",     image: "", badge: "🔥 Top rated",  active: true  },
-  { id: "6", SKU: "147",  name: "Flask Iodine",                image: "", badge: "⚡ Hot pick",   active: false },
-];
-
-export function getHotItems(): HotItem[] {
-  try {
-    const raw = localStorage.getItem(HOT_ITEMS_KEY);
-    return raw ? JSON.parse(raw) : DEFAULT_ITEMS;
-  } catch {
-    return DEFAULT_ITEMS;
-  }
+async function getHotItems(): Promise<HotItem[]> {
+  const res = await fetch("/api/hot-items", { cache: "no-store" });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message ?? "Could not load hot items");
+  return json.data?.items ?? [];
 }
 
-function saveHotItems(items: HotItem[]) {
-  try {
-    localStorage.setItem(HOT_ITEMS_KEY, JSON.stringify(items));
-    window.dispatchEvent(new Event("hotItemsUpdated"));
-  } catch { /* ignore */ }
+async function saveHotItems(items: HotItem[]): Promise<HotItem[]> {
+  const res = await fetch("/api/hot-items", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message ?? "Could not publish hot items");
+  return json.data?.items ?? items;
+}
+
+function getFirstImage(item: any): string {
+  return (item?.images ?? item?.Images ?? []).find(Boolean) ?? "";
+}
+
+function buildCatalogOptions(products: any[]): CatalogOption[] {
+  const seen = new Set<string>();
+  const options: CatalogOption[] = [];
+
+  for (const product of products) {
+    const productSku = String(product.sku ?? product.SKU ?? "").trim();
+    const productName = String(product.name ?? product.Name ?? "").trim();
+    const productImage = getFirstImage(product);
+
+    if (productSku && productName && !seen.has(productSku.toLowerCase())) {
+      seen.add(productSku.toLowerCase());
+      options.push({ sku: productSku, name: productName, image: productImage });
+    }
+
+    for (const variant of product.variants ?? []) {
+      const variantSku = String(variant.sku ?? variant.SKU ?? "").trim();
+      const variantName = String(variant.name ?? variant.Name ?? productName).trim();
+      const variantImage = getFirstImage(variant) || productImage;
+      if (!variantSku || seen.has(variantSku.toLowerCase())) continue;
+      seen.add(variantSku.toLowerCase());
+      options.push({ sku: variantSku, name: variantName || productName, image: variantImage });
+    }
+  }
+
+  return options;
 }
 
 // ─── Badge presets ────────────────────────────────────────────────────────────
@@ -86,9 +114,31 @@ export default function AdminHotItemsPage() {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogOption[]>([]);
 
-  // Load from localStorage
-  useEffect(() => { setItems(getHotItems()); }, []);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    Promise.all([
+      getHotItems(),
+      fetch("/data/nested_omsons_products.json").then((r) => r.json()),
+    ])
+      .then(([hotItems, catalogData]) => {
+        if (!active) return;
+        setItems(hotItems);
+        setCatalog(buildCatalogOptions(catalogData));
+      })
+      .catch((e) => {
+        if (!active) return;
+        show(e instanceof Error ? e.message : "Could not load hot items.", "error");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -105,6 +155,26 @@ export default function AdminHotItemsPage() {
   };
 
   const closeForm = () => { setShowForm(false); setEditId(null); setForm(emptyForm()); };
+
+  const findCatalogOption = (sku: string) => {
+    const needle = sku.trim().toLowerCase();
+    if (!needle) return null;
+    return catalog.find((option) => option.sku.toLowerCase() === needle) ?? null;
+  };
+
+  const applyCatalogOption = (option: CatalogOption) => {
+    setForm((f) => ({
+      ...f,
+      SKU: option.sku,
+      name: option.name,
+      image: option.image || f.image,
+    }));
+  };
+
+  const syncCatalogMatch = (sku: string) => {
+    const match = findCatalogOption(sku);
+    if (match) applyCatalogOption(match);
+  };
 
   const submitForm = () => {
     if (!form.SKU.trim() || !form.name.trim()) { show("SKU and name are required.", "error"); return; }
@@ -132,11 +202,19 @@ export default function AdminHotItemsPage() {
     show("Item removed.");
   };
 
-  const persist = () => {
-    saveHotItems(items);
-    setSaved(true);
-    show("Changes published to homepage.");
-    setTimeout(() => setSaved(false), 2000);
+  const persist = async () => {
+    setSaving(true);
+    try {
+      const savedItems = await saveHotItems(items);
+      setItems(savedItems);
+      setSaved(true);
+      show("Changes published to homepage.");
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      show(e instanceof Error ? e.message : "Could not publish hot items.", "error");
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Drag-to-reorder ────────────────────────────────────────────────────────
@@ -236,11 +314,32 @@ export default function AdminHotItemsPage() {
                   SKU <span className="text-red-500">*</span>
                 </label>
                 <input
+                  list="hot-item-catalog"
                   value={form.SKU}
                   onChange={e => setForm(f => ({ ...f, SKU: e.target.value }))}
+                  onBlur={e => syncCatalogMatch(e.target.value)}
                   placeholder="e.g. PYC-25-A"
                   className="w-full px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
                 />
+                <datalist id="hot-item-catalog">
+                  {catalog.slice(0, 2500).map((option) => (
+                    <option key={option.sku} value={option.sku}>
+                      {option.name}
+                    </option>
+                  ))}
+                </datalist>
+                {findCatalogOption(form.SKU) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const match = findCatalogOption(form.SKU);
+                      if (match) applyCatalogOption(match);
+                    }}
+                    className="mt-2 text-[11px] font-bold text-indigo-600 hover:text-indigo-800"
+                  >
+                    Use catalog name and image
+                  </button>
+                )}
               </div>
 
               {/* Name */}
@@ -348,13 +447,15 @@ export default function AdminHotItemsPage() {
                 </svg>
                 Add item
               </button>
-              <button onClick={persist}
+              <button onClick={persist} disabled={saving || loading}
                 className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-semibold transition-all ${
                   saved
                     ? "bg-emerald-500 text-white"
-                    : "bg-gray-900 hover:bg-gray-700 text-white"
+                    : "bg-gray-900 hover:bg-gray-700 text-white disabled:cursor-not-allowed disabled:opacity-50"
                 }`}>
-                {saved
+                {saving
+                  ? "Publishing..."
+                  : saved
                   ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg> Published!</>
                   : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M5 12h14M12 5l7 7-7 7" /></svg> Publish changes</>
                 }
@@ -376,14 +477,21 @@ export default function AdminHotItemsPage() {
                 ))}
               </div>
 
-              {items.length === 0 && (
+              {loading && (
+                <div className="flex flex-col items-center justify-center py-20 gap-3">
+                  <div className="h-8 w-8 rounded-full border-2 border-gray-200 border-t-indigo-500 animate-spin" />
+                  <p className="text-sm text-gray-500">Loading hot items...</p>
+                </div>
+              )}
+
+              {!loading && items.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 gap-3">
                   <span className="text-4xl">🔥</span>
                   <p className="text-sm text-gray-500">No hot items yet. Add your first one.</p>
                 </div>
               )}
 
-              {items.map((item, idx) => (
+              {!loading && items.map((item, idx) => (
                 <div
                   key={item.id}
                   draggable
@@ -454,7 +562,7 @@ export default function AdminHotItemsPage() {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" />
               </svg>
-              Changes are local until you click <strong className="ml-1">Publish changes</strong>. This writes to localStorage and updates the homepage instantly.
+              Changes are staged until you click <strong className="ml-1">Publish changes</strong>. This saves to the shared homepage database for every dealer.
             </div>
           </div>
 

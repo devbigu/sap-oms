@@ -65,11 +65,13 @@ type ProductMeta = { image: string | null; productName: string; packSize: number
 function buildVariantLookup(data: any[]): Record<string, ProductMeta> {
   const map: Record<string, ProductMeta> = {};
   for (const product of data) {
-    const image = (product.Images ?? []).find(Boolean) ?? null;
-    const desc = product.Description ?? "";
+    const image = (product.images ?? product.Images ?? []).find(Boolean) ?? null;
+    const desc = product.Description ?? product.descriptionHtml ?? "";
     const packMap = parsePackSizes(desc);
     for (const variant of product.variants ?? []) {
-      map[variant.SKU] = { image, productName: product.Name, packSize: packMap[variant.SKU] ?? 1 };
+      const sku = variant.SKU ?? variant.sku;
+      const variantImage = (variant.images ?? variant.Images ?? []).find(Boolean) ?? image;
+      map[sku] = { image: variantImage, productName: product.name ?? product.Name, packSize: packMap[sku] ?? variant.pack ?? 1 };
     }
   }
   return map;
@@ -176,6 +178,19 @@ function buildOrderRemarks(variantCode: string, isPriority: boolean | undefined,
   const remarks = buildPriorityRemarks(variantCode, isPriority);
   const note = orderNote.trim();
   return [remarks, note ? `Order note: ${note}` : ""].filter(Boolean).join(" | ");
+}
+
+function toDiscountRequestProduct(row: ProductRow) {
+  return {
+    productname: row.productname,
+    displayName: row.displayName,
+    variantCode: row.variantCode,
+    quantity: row.producQuanity,
+    price: row.price,
+    packSize: row.packSize,
+    priority: !!row.isPriority,
+    rowSubtotal: payloadAmount(rowSubtotalPaise(row) / 100),
+  };
 }
 
 function extractOrderIdFromResponse(data: any): string {
@@ -566,6 +581,8 @@ function AddOrderPageInner() {
     .map((row) => getApprovedProductCustomRequest(row))
     .filter((r): r is CustomDiscountRequest => !!r);
   const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null || approvedProductCustomRequests.length > 0;
+  const rejectedCustomDiscountRequests = customDiscountRequests.filter((r) => r.status === "rejected");
+  const latestRejectedCustomDiscountRequest = rejectedCustomDiscountRequests[0] ?? null;
   const requestedCustomDiscountPercent = Math.min(100, Math.max(0, Number(customDiscountInput) || 0));
   const requestedCustomDiscountAmount = customDiscountBaseSubtotal * (requestedCustomDiscountPercent / 100);
   const requestedCustomFinalPayable = Math.max(0, customDiscountBaseSubtotal - requestedCustomDiscountAmount);
@@ -615,16 +632,8 @@ function AddOrderPageInner() {
       const scopedSignature = customDiscountScope === "product" && selectedCustomDiscountProduct
         ? buildProductSignature(selectedCustomDiscountProduct)
         : currentOrderSignature;
-      const requestProducts = scopedRows.map((r) => ({
-        productname: r.productname,
-        displayName: r.displayName,
-        variantCode: r.variantCode,
-        quantity: r.producQuanity,
-        price: r.price,
-        packSize: r.packSize,
-        priority: !!r.isPriority,
-        rowSubtotal: payloadAmount(rowSubtotalPaise(r) / 100),
-      }));
+      const requestProducts = scopedRows.map(toDiscountRequestProduct);
+      const draftProducts = arr1.filter(r => r.productname).map(toDiscountRequestProduct);
 
       const res = await fetch("/api/custom-discount-requests", {
         method: "POST",
@@ -660,6 +669,7 @@ function AddOrderPageInner() {
             couponCode: appliedCoupon?.code ?? "",
           },
           products: requestProducts,
+          draftProducts,
         }),
       });
       const json = await res.json();
@@ -684,6 +694,8 @@ function AddOrderPageInner() {
     setPerProductSubmitting(key);
     try {
       const rowSub = rowSubtotalPaise(row) / 100;
+      const requestProduct = toDiscountRequestProduct(row);
+      const draftProducts = arr1.filter(r => r.productname).map(toDiscountRequestProduct);
       const res = await fetch("/api/custom-discount-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -719,16 +731,8 @@ function AddOrderPageInner() {
             globalCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
             productAdditionalPercent: productPercent - globalPercent,
           },
-          products: [{
-            productname: row.productname,
-            displayName: row.displayName,
-            variantCode: row.variantCode,
-            quantity: row.producQuanity,
-            price: row.price,
-            packSize: row.packSize,
-            priority: !!row.isPriority,
-            rowSubtotal: payloadAmount(rowSub),
-          }],
+          products: [requestProduct],
+          draftProducts,
         }),
       });
       const json = await res.json();
@@ -1070,6 +1074,35 @@ function AddOrderPageInner() {
                 </svg>
               </button>
             </div>
+          </div>
+        )}
+
+        {latestRejectedCustomDiscountRequest && (
+          <div className="flex flex-col gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-5 text-[12.5px] text-red-700 font-medium lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-2">
+              <svg className="mt-0.5 flex-shrink-0 text-red-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <div>
+                <p>
+                  A custom discount request was disapproved. An order draft has been saved so you can edit and resubmit it.
+                </p>
+                {latestRejectedCustomDiscountRequest.adminNote && (
+                  <p className="mt-1 text-[11.5px] text-red-600">
+                    Admin note: {latestRejectedCustomDiscountRequest.adminNote}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/drafts")}
+              className="w-fit rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[11.5px] font-bold text-red-600 hover:bg-red-100"
+            >
+              View Drafts
+            </button>
           </div>
         )}
 

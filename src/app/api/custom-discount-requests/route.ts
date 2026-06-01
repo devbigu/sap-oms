@@ -97,6 +97,7 @@ export async function POST(req: NextRequest) {
         ? body.discountBreakdown
         : {},
       products: Array.isArray(body.products) ? body.products.slice(0, 100) : [],
+      draftProducts: Array.isArray(body.draftProducts) ? body.draftProducts.slice(0, 100) : [],
       status: "pending",
       allowReorder: false,
       reorderCount: 0,
