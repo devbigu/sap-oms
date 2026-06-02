@@ -16,6 +16,7 @@ type NavItem = { label: string; href: string; icon: React.ReactNode; section?: s
 const NAV: Record<Role, NavItem[]> = {
   admin: [
     { section: "Overview",    label: "Dashboard",          href: "/dashboard/admin",                                 icon: <LayoutDashboard size={15} /> },
+    {                         label: "Profile",            href: "/dashboard/admin/profile",                         icon: <SquareUser size={15} />      },
     { section: "Dealers",     label: "Dealer List",        href: "/dashboard/admin/dealer/DealerList",               icon: <Users size={15} />           },
     {                         label: "Dealer Ledger",       href: "/dashboard/admin/ledger",                          icon: <BookOpen size={15} />        },
     {                         label: "Add Dealer",          href: "/dashboard/admin/dealer/AddDealerForm",            icon: <UserRoundPlus size={15} />   },
@@ -34,6 +35,7 @@ const NAV: Record<Role, NavItem[]> = {
   dealer: [
     { section: "Home",     label: "Home",             href: "/home",                          icon: <Home size={15} />          },
     {                      label: "Dashboard",         href: "/dashboard/dealer",              icon: <LayoutDashboard size={15} /> },
+    {                      label: "Profile",           href: "/dashboard/dealer/profile",      icon: <SquareUser size={15} />      },
     { section: "Orders",   label: "My Order Status",  href: "/Pages/Ordermanagement",         icon: <ClipboardList size={15} /> },
     {                      label: "My Order History",  href: "/orders",                        icon: <ClipboardList size={15} /> },
     {                      label: "Add Order",         href: "/dashboard/dealer/AddOrderForm", icon: <Plus size={15} />          },
@@ -44,6 +46,7 @@ const NAV: Record<Role, NavItem[]> = {
   ],
   staff: [
     { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                                icon: <LayoutDashboard size={15} /> },
+    {                     label: "Profile",       href: "/dashboard/staff/profile",                        icon: <SquareUser size={15} />      },
     { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
     { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },

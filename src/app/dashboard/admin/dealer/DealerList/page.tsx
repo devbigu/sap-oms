@@ -2,10 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, BookOpen, Pencil, MoreVertical, Eye, EyeOff } from 'lucide-react'
+import { Search, Trash2, BookOpen, Pencil, Eye, EyeOff } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -41,6 +40,9 @@ type AppRole = "admin" | "staff" | "accountant"
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
+const getDealerEditRoute = (dealerId: string) => `/dashboard/admin/dealer/${encodeURIComponent(dealerId)}`
+const getDealerLedgerRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/ledger`
+const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
 
 function initials(name: string) {
   return name?.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?"
@@ -61,27 +63,17 @@ function getRole(): AppRole {
 }
 
 export default function DealerListPage() {
-  const router = useRouter()
-
   const [role,          setRole]          = useState<AppRole>("admin")
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-  const [openMenuId,    setOpenMenuId]    = useState<string | null>(null)
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
 
   const queryClient = useQueryClient()
 
   useEffect(() => { setRole(getRole()) }, [])
-
-  // Close menu on outside click
-  useEffect(() => {
-    const handler = () => setOpenMenuId(null)
-    document.addEventListener("click", handler)
-    return () => document.removeEventListener("click", handler)
-  }, [])
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -145,15 +137,15 @@ export default function DealerListPage() {
     }
   }
 
-  function pageNumbers(): (number | "…")[] {
-    const pages: (number | "…")[] = []
+  function pageNumbers(): (number | "...")[] {
+    const pages: (number | "...")[] = []
     if (totalPages <= 7) {
       for (let i = 1; i <= totalPages; i++) pages.push(i)
     } else {
       pages.push(1)
-      if (page > 3) pages.push("…")
+      if (page > 3) pages.push("...")
       for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
-      if (page < totalPages - 2) pages.push("…")
+      if (page < totalPages - 2) pages.push("...")
       pages.push(totalPages)
     }
     return pages
@@ -174,6 +166,7 @@ export default function DealerListPage() {
     })
   }
 
+  const canManageDealers = role === "admin" || role === "staff"
   const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
   const endIndex   = Math.min(page * ITEMS_PER_PAGE, total)
 
@@ -239,7 +232,7 @@ export default function DealerListPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search dealers…"
+              placeholder="Search dealers..."
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition w-full"
@@ -266,7 +259,7 @@ export default function DealerListPage() {
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Phone</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Password</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-4 w-12" />
+                  <th className="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
 
@@ -294,7 +287,6 @@ export default function DealerListPage() {
                 {/* Rows */}
                 {!isLoading && data.map((dealer, i) => {
                   const badge  = statusBadge(dealer.status)
-                  const isOpen = openMenuId === dealer.Dealer_Id
                   const passwordVisible = visiblePasswords.has(dealer.Dealer_Id)
                   return (
                     <tr key={dealer.Dealer_Id} className="hover:bg-gray-50 transition-colors">
@@ -306,27 +298,27 @@ export default function DealerListPage() {
                             {initials(dealer.Dealer_Name)}
                           </div>
                           <Link
-                            href={`/dashboard/admin/dealer/${dealer.Dealer_Id}/ledger`}
+                            href={getDealerLedgerRoute(dealer.Dealer_Id)}
                             className="font-medium text-gray-800 hover:text-indigo-700 transition-colors"
                           >
-                            {dealer.Dealer_Name || "—"}
+                            {dealer.Dealer_Name || "-"}
                           </Link>
                         </div>
                       </td>
 
                       <td className="px-4 py-4">
                         <span className="bg-blue-50 text-blue-600 text-xs font-medium px-2.5 py-1 rounded-full">
-                          {dealer.Dealer_City || "—"}
+                          {dealer.Dealer_City || "-"}
                         </span>
                       </td>
 
-                      <td className="px-4 py-4 text-gray-500 text-xs">{dealer.Dealer_Email || "—"}</td>
-                      <td className="px-4 py-4 text-gray-600 text-xs">{dealer.Dealer_Number || "—"}</td>
+                      <td className="px-4 py-4 text-gray-500 text-xs">{dealer.Dealer_Email || "-"}</td>
+                      <td className="px-4 py-4 text-gray-600 text-xs">{dealer.Dealer_Number || "-"}</td>
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2">
                           <span className={`font-mono text-xs ${passwordVisible ? "text-gray-700 tracking-normal" : "text-gray-400 tracking-widest"}`}>
-                            {passwordVisible ? dealer.Dealer_Password || "—" : "••••••••"}
+                            {passwordVisible ? dealer.Dealer_Password || "-" : "********"}
                           </span>
                           {role === "admin" && dealer.Dealer_Password && (
                             <button
@@ -351,75 +343,44 @@ export default function DealerListPage() {
                         </span>
                       </td>
 
-                      {/* 3-dot action menu */}
                       <td className="px-4 py-4">
-                        <div className="relative flex justify-end">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setOpenMenuId(isOpen ? null : dealer.Dealer_Id)
-                            }}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition"
-                            aria-label="Actions"
+                        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <Link
+                            href={getDealerLedgerRoute(dealer.Dealer_Id)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition"
                           >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
+                            <BookOpen className="w-3.5 h-3.5" />
+                            Ledger
+                          </Link>
 
-                          {isOpen && (
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              className="absolute right-0 top-8 z-20 bg-white rounded-xl border border-gray-200 shadow-xl py-1 min-w-[152px]"
+                          {role === "staff" && (
+                            <Link
+                              href={getStaffDealerRoute(dealer.Dealer_Id)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
                             >
-                              {/* View Ledger — all roles */}
-                              <button
-                                onClick={() => {
-                                  router.push(`/dashboard/admin/dealer/${dealer.Dealer_Id}/ledger`)
-                                  setOpenMenuId(null)
-                                }}
-                                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
-                              >
-                                <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                                View Ledger
-                              </button>
+                              <Eye className="w-3.5 h-3.5" />
+                              View
+                            </Link>
+                          )}
 
-                              {/* View & Edit & Delete — staff only */}
-                              {role === "staff" && (
-                                <>
-                                  <div className="my-1 h-px bg-gray-100 mx-2" />
-                                  <button
-                                    onClick={() => {
-                                      router.push(`/dashboard/staff/dealer/${dealer.Dealer_Id}`)
-                                      setOpenMenuId(null)
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
-                                  >
-                                    <Eye className="w-3.5 h-3.5 shrink-0" />
-                                    View
-                                  </button>
-                                  <div className="my-1 h-px bg-gray-100 mx-2" />
-                                  <button
-                                    onClick={() => {
-                                      router.push(`/dashboard/admin/dealer/${dealer.Dealer_Id}`)
-                                      setOpenMenuId(null)
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-gray-700 hover:bg-gray-50 text-left transition-colors"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5 shrink-0" />
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setDeleteConfirm(dealer.Dealer_Id)
-                                      setOpenMenuId(null)
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-red-600 hover:bg-red-50 text-left transition-colors"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                                    Delete
-                                  </button>
-                                </>
-                              )}
-                            </div>
+                          {canManageDealers && (
+                            <>
+                              <Link
+                                href={getDealerEditRoute(dealer.Dealer_Id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                Edit
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() => setDeleteConfirm(dealer.Dealer_Id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Delete
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -441,12 +402,12 @@ export default function DealerListPage() {
                 disabled={page === 1}
                 className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
-                ← Prev
+                Prev
               </button>
 
               {pageNumbers().map((p, idx) =>
-                p === "…" ? (
-                  <span key={`ellipsis-${idx}`} className="px-2 text-gray-400 text-sm">…</span>
+                p === "..." ? (
+                  <span key={`ellipsis-${idx}`} className="px-2 text-gray-400 text-sm">...</span>
                 ) : (
                   <button
                     key={p}
@@ -467,7 +428,7 @@ export default function DealerListPage() {
                 disabled={page === totalPages}
                 className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
-                Next →
+                Next
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import axios from 'axios'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
+const STAFF_LIST_ROUTE = "/dashboard/admin/staff/stafflist"
 
 function InputField({
   label, value, onChange, type = "text", placeholder, required = true,
@@ -37,7 +38,7 @@ function InputField({
 export default function EditStaffPage() {
   const router = useRouter()
   const params = useParams()
-  const id     = params.id as string
+  const id = String(params.id || "")
 
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving,  setIsSaving]  = useState(false)
@@ -64,7 +65,7 @@ export default function EditStaffPage() {
     const fetchStaff = async () => {
       setIsLoading(true)
       try {
-        const res  = await fetch(`${BACKEND_URL}/getstaff?id=${id}`, {
+        const res  = await fetch(`${BACKEND_URL}/getstaff?id=${encodeURIComponent(id)}`, {
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ type: 'type' }),
@@ -92,8 +93,13 @@ export default function EditStaffPage() {
     fetchStaff()
   }, [id])
 
-  const handleSubmit = async (e: { preventDefault(): void }) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    const resolvedStaffId = staffid || id
+    if (!resolvedStaffId) {
+      setToastMsg({ text: "Missing staff id", type: 'error' })
+      return
+    }
     setIsSaving(true)
     try {
       const fd = new FormData()
@@ -104,10 +110,11 @@ export default function EditStaffPage() {
       fd.append("staff_password",    password)
       fd.append("staff_username",    username)
       fd.append("staff_roletype",    role)
-      fd.append("staff_id",          staffid)
+      fd.append("staff_id",          resolvedStaffId)
 
       const res = await axios.post(`${BACKEND_URL}/editstaff`, fd)
       setToastMsg({ text: res.data.msg || "Staff updated successfully", type: 'success' })
+      setTimeout(() => router.push(STAFF_LIST_ROUTE), 700)
     } catch {
       setToastMsg({ text: "Failed to update staff", type: 'error' })
     } finally {
@@ -120,7 +127,7 @@ export default function EditStaffPage() {
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">Loading staff data…</p>
+          <p className="text-sm text-gray-500">Loading staff data...</p>
         </div>
       </div>
     )
@@ -147,7 +154,7 @@ export default function EditStaffPage() {
         {/* Header */}
         <div className="mb-8">
           <button
-            onClick={() => router.back()}
+            onClick={() => router.push(STAFF_LIST_ROUTE)}
             className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-4 transition"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -181,7 +188,7 @@ export default function EditStaffPage() {
                 Account &amp; Credentials
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <InputField label="Username" value={username} onChange={setUsername} placeholder="Login username" />
+                <InputField label="Username" value={username} onChange={setUsername} placeholder="Login username" required={false} />
                 <InputField label="Password" value={password} onChange={setPassword} type="password" placeholder="Update password" />
 
                 <div className="flex flex-col gap-1.5">
@@ -207,7 +214,7 @@ export default function EditStaffPage() {
             <div className="flex items-center justify-end gap-3 pb-6">
               <button
                 type="button"
-                onClick={() => router.back()}
+                onClick={() => router.push(STAFF_LIST_ROUTE)}
                 className="px-5 py-2.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition"
               >
                 Cancel
@@ -220,7 +227,7 @@ export default function EditStaffPage() {
                 {isSaving && (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 )}
-                {isSaving ? "Saving…" : "Save Changes"}
+                {isSaving ? "Saving..." : "Save Changes"}
               </button>
             </div>
 

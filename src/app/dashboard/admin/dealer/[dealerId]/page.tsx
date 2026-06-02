@@ -11,6 +11,12 @@ type StaffOption = {
 }
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
+const DEALER_LIST_ROUTE = "/dashboard/admin/dealer/DealerList"
+
+function splitCsv(value: unknown) {
+  if (Array.isArray(value)) return value.map(String).map(s => s.trim()).filter(Boolean)
+  return String(value || "").split(",").map(s => s.trim()).filter(Boolean)
+}
 
 function InputField({
   label, value, onChange, type = "text", placeholder, required = true, hint,
@@ -45,7 +51,7 @@ function InputField({
 export default function EditDealerPage() {
   const router = useRouter()
   const params = useParams()
-  const dealerId = params.dealerId as string
+  const dealerId = String(params.dealerId || "")
 
   const [isLoading,  setIsLoading]  = useState(false)
   const [isSaving,   setIsSaving]   = useState(false)
@@ -70,6 +76,7 @@ export default function EditDealerPage() {
   const [notes,          setNotes]          = useState("")
   const [dealerid,       setDealerid]       = useState("")
   const [assignedStaffIds, setAssignedStaffIds] = useState<string[]>([])
+  const [existingStaffNames, setExistingStaffNames] = useState("")
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -82,7 +89,7 @@ export default function EditDealerPage() {
     if (!dealerId) return
     setIsLoading(true)
     try {
-      const res  = await fetch(`${BACKEND_URL}/getdealer?id=${dealerId}`, {
+      const res  = await fetch(`${BACKEND_URL}/getdealer?id=${encodeURIComponent(dealerId)}`, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ type: 'type' }),
@@ -106,9 +113,8 @@ export default function EditDealerPage() {
         setDealerid(d.Dealer_Id       || "")
         setAnnualtarget(d.annualtarget || "")
         setCurrentlimit(d.currentlimit || "")
-        setAssignedStaffIds(
-          d.assignedstaff ? d.assignedstaff.split(',').map((s: string) => s.trim()).filter(Boolean) : []
-        )
+        setExistingStaffNames(d.staffname || "")
+        setAssignedStaffIds(splitCsv(d.assignedstaff))
       } else {
         setToastMsg({ text: json.msz || "Failed to load dealer", type: 'error' })
       }
@@ -132,7 +138,7 @@ export default function EditDealerPage() {
   useEffect(() => {
     fetchDealer()
     fetchStaff()
-  }, [])
+  }, [dealerId])
 
   const handleStaffSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setAssignedStaffIds(Array.from(e.target.selectedOptions, o => o.value))
@@ -143,12 +149,17 @@ export default function EditDealerPage() {
     assignedStaffIds
       .map(id => staffOptions.find(s => s.staff_id === id)?.staff_name ?? "")
       .filter(Boolean)
-      .join(",")
+      .join(",") || existingStaffNames
 
-  const handleSubmit = async (e: { preventDefault(): void }) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!assignedStaffIds.length) {
       setToastMsg({ text: "Please assign at least one staff member", type: 'error' })
+      return
+    }
+    const resolvedDealerId = dealerid || dealerId
+    if (!resolvedDealerId) {
+      setToastMsg({ text: "Missing dealer id", type: 'error' })
       return
     }
     setIsSaving(true)
@@ -171,10 +182,12 @@ export default function EditDealerPage() {
       fd.append("creditdays",       creditdays)
       fd.append("annualtarget",     annualtarget)
       fd.append("currentlimit",     currentlimit)
-      fd.append("id",               dealerid)
+      fd.append("id",               resolvedDealerId)
+      fd.append("Dealer_Id",        resolvedDealerId)
 
       const res = await axios.post(`${BACKEND_URL}/updateDealer`, fd)
       setToastMsg({ text: res.data.msg || "Dealer updated successfully", type: 'success' })
+      setTimeout(() => router.push(DEALER_LIST_ROUTE), 700)
     } catch {
       setToastMsg({ text: "Failed to update dealer", type: 'error' })
     } finally {
@@ -187,7 +200,7 @@ export default function EditDealerPage() {
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">Loading dealer data…</p>
+          <p className="text-sm text-gray-500">Loading dealer data...</p>
         </div>
       </div>
     )
@@ -214,7 +227,7 @@ export default function EditDealerPage() {
         {/* Header */}
         <div className="mb-8">
           <button
-            onClick={() => router.back()}
+            onClick={() => router.push(DEALER_LIST_ROUTE)}
             className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 mb-4 transition"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -265,8 +278,8 @@ export default function EditDealerPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <InputField label="Discount %"     value={discount}     onChange={setDiscount}     type="number" placeholder="e.g. 10" />
                 <InputField label="Credit Days"    value={creditdays}   onChange={setCreditdays}   type="number" placeholder="e.g. 30" />
-                <InputField label="Annual Target"  value={annualtarget} onChange={setAnnualtarget} type="number" placeholder="Amount in ₹" />
-                <InputField label="Current Limit"  value={currentlimit} onChange={setCurrentlimit} type="number" placeholder="Credit limit in ₹" />
+                <InputField label="Annual Target"  value={annualtarget} onChange={setAnnualtarget} type="number" placeholder="Amount in Rs" />
+                <InputField label="Current Limit"  value={currentlimit} onChange={setCurrentlimit} type="number" placeholder="Credit limit in Rs" />
               </div>
             </div>
 
@@ -289,7 +302,7 @@ export default function EditDealerPage() {
                 >
                   {staffOptions.map(staff => (
                     <option key={staff.staff_id} value={staff.staff_id}>
-                      {staff.staff_name} {staff.staff_roletype === "1" ? "(Exe)" : "(Fie-Exe)"}
+                      {staff.staff_name} {String(staff.staff_roletype) === "1" ? "(Exe)" : "(Fie-Exe)"}
                     </option>
                   ))}
                 </select>
@@ -330,7 +343,7 @@ export default function EditDealerPage() {
                   value={notes}
                   onChange={e => setNotes(e.target.value)}
                   rows={4}
-                  placeholder="Add any notes about this dealer…"
+                  placeholder="Add any notes about this dealer..."
                   className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition resize-none"
                 />
               </div>
@@ -340,7 +353,7 @@ export default function EditDealerPage() {
             <div className="flex items-center justify-end gap-3 pb-6">
               <button
                 type="button"
-                onClick={() => router.back()}
+                onClick={() => router.push(DEALER_LIST_ROUTE)}
                 className="px-5 py-2.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition"
               >
                 Cancel
@@ -353,7 +366,7 @@ export default function EditDealerPage() {
                 {isSaving && (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 )}
-                {isSaving ? "Saving…" : "Save Changes"}
+                {isSaving ? "Saving..." : "Save Changes"}
               </button>
             </div>
 

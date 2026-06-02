@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Pencil, Trash2, Download, Search, Users, Eye, EyeOff } from 'lucide-react'
@@ -26,6 +26,7 @@ type StaffResponse = {
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 20
+const getStaffEditRoute = (staffId: string) => `/dashboard/admin/staff/${encodeURIComponent(staffId)}`
 
 function roleBadge(role: string) {
   switch (role) {
@@ -40,8 +41,6 @@ function initials(name: string) {
 }
 
 export default function StaffListPage() {
-  const router = useRouter()
-
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
@@ -133,15 +132,15 @@ export default function StaffListPage() {
     URL.revokeObjectURL(url)
   }
 
-  function pageNumbers(): (number | "…")[] {
-    const pages: (number | "…")[] = []
+  function pageNumbers(): (number | "...")[] {
+    const pages: (number | "...")[] = []
     if (totalPages <= 7) {
       for (let i = 1; i <= totalPages; i++) pages.push(i)
     } else {
       pages.push(1)
-      if (page > 3) pages.push("…")
+      if (page > 3) pages.push("...")
       for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) pages.push(i)
-      if (page < totalPages - 2) pages.push("…")
+      if (page < totalPages - 2) pages.push("...")
       pages.push(totalPages)
     }
     return pages
@@ -240,7 +239,7 @@ export default function StaffListPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search by name…"
+              placeholder="Search by name..."
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition w-full"
@@ -314,11 +313,11 @@ export default function StaffListPage() {
                           <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold flex-shrink-0">
                             {initials(staff.staff_name)}
                           </div>
-                          <span className="font-medium text-gray-800">{staff.staff_name || "—"}</span>
+                          <span className="font-medium text-gray-800">{staff.staff_name || "-"}</span>
                         </div>
                       </td>
 
-                      <td className="px-4 py-4 text-gray-500 text-xs">{staff.staff_email || "—"}</td>
+                      <td className="px-4 py-4 text-gray-500 text-xs">{staff.staff_email || "-"}</td>
 
                       <td className="px-4 py-4">
                         <span className={`${badge.bg} ${badge.text} text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap`}>
@@ -328,20 +327,20 @@ export default function StaffListPage() {
 
                       <td className="px-4 py-4 font-mono text-xs tracking-widest">
                         {showPasswords
-                          ? <span className="text-gray-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-100 select-all">{staff.staff_password || "—"}</span>
-                          : <span className="text-gray-300">••••••••</span>
+                          ? <span className="text-gray-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-100 select-all">{staff.staff_password || "-"}</span>
+                          : <span className="text-gray-300">********</span>
                         }
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => router.push(`/dashboard/admin/staff/${staff.staff_id}`)}
+                          <Link
+                            href={getStaffEditRoute(staff.staff_id)}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
                           >
                             <Pencil className="w-3 h-3" />
                             Edit
-                          </button>
+                          </Link>
                           <button
                             onClick={() => setDeleteConfirm(staff.staff_id)}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition"
@@ -371,12 +370,12 @@ export default function StaffListPage() {
                 disabled={page === 1}
                 className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
-                ← Prev
+                Prev
               </button>
 
               {pageNumbers().map((p, idx) =>
-                p === "…" ? (
-                  <span key={`ellipsis-${idx}`} className="px-2 text-gray-400 text-sm">…</span>
+                p === "..." ? (
+                  <span key={`ellipsis-${idx}`} className="px-2 text-gray-400 text-sm">...</span>
                 ) : (
                   <button
                     key={p}
@@ -397,7 +396,7 @@ export default function StaffListPage() {
                 disabled={page >= totalPages}
                 className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
               >
-                Next →
+                Next
               </button>
             </div>
           </div>
