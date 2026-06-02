@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Pencil, Trash2, Download, Search, Users, Eye, EyeOff } from 'lucide-react'
+import { Pencil, Trash2, Download, Search, Users, Eye, EyeOff, MoreVertical } from 'lucide-react'
 
 type StaffData = {
   staff_id: string
@@ -25,7 +25,7 @@ type StaffResponse = {
 
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
-const ITEMS_PER_PAGE = 20
+const ITEMS_PER_PAGE = 10
 const getStaffEditRoute = (staffId: string) => `/dashboard/admin/staff/${encodeURIComponent(staffId)}`
 
 function roleBadge(role: string) {
@@ -40,13 +40,25 @@ function initials(name: string) {
   return name?.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?"
 }
 
+type AppRole = "admin" | "staff" | "accountant"
+
+function getRole(): AppRole {
+  if (typeof window === 'undefined') return 'admin'
+  if (localStorage.getItem('accountant_token')) return 'accountant'
+  const rt = localStorage.getItem('roletype')
+  if (rt === '1') return 'staff'
+  return 'admin'
+}
+
 export default function StaffListPage() {
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-  const [showPasswords, setShowPasswords] = useState(false)
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [role, setRole] = useState<AppRole>('admin')
 
   const queryClient = useQueryClient()
 
@@ -57,24 +69,80 @@ export default function StaffListPage() {
     return () => clearTimeout(t)
   }, [toastMsg])
 
+  useEffect(() => { setRole(getRole()) }, [])
+
+  useEffect(() => {
+    const handleDocClick = (e: any) => {
+      const path = (e?.composedPath && e.composedPath()) || e?.path || []
+      if (Array.isArray(path) && path.some((el: any) => el?.dataset?.menuId)) return
+      let node = e?.target
+      while (node) {
+        if (node?.dataset && node.dataset.menuId) return
+        node = node.parentNode
+      }
+      setOpenMenu(null)
+    }
+    document.addEventListener('click', handleDocClick)
+    return () => document.removeEventListener('click', handleDocClick)
+  }, [])
+
   const { data: response, isLoading, isError, refetch } = useQuery<StaffResponse>({
-    queryKey: ['stafflist', page, search],
+    queryKey: search ? ['stafflist', page, search] : ['stafflist', 'all'],
     queryFn: async () => {
-      const res = await axios.get(
-        `${BACKEND_URL}/staffpegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}`
-      )
-      return res.data
+      // If user is searching, use normal paginated endpoint.
+      if (search) {
+        const res = await axios.get(
+          `${BACKEND_URL}/staffpegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}`
+        )
+        return res.data
+      }
+
+      // No search -> fetch all pages from server and combine results so UI can display full list.
+      const first = await axios.get(`${BACKEND_URL}/staffpegination?page=1&limit=${ITEMS_PER_PAGE}&search=`)
+      const firstRaw = first.data || {}
+      const firstData: StaffResponse = {
+        data: firstRaw.data || [],
+        count: firstRaw.count ?? firstRaw.total ?? firstRaw.totalRecords ?? 0,
+        last_page: firstRaw.last_page ?? firstRaw.lastpage ?? firstRaw.lastPage ?? undefined,
+      }
+      // Derive last page: prefer explicit last_page, else compute from total count.
+      // If server ignores our `limit` value, infer the server page size from firstData.length.
+      const perPageUsed = (firstData.data && firstData.data.length > 0) ? firstData.data.length : ITEMS_PER_PAGE
+      const derivedLast = firstData.last_page ?? (firstData.count ? Math.ceil(firstData.count / perPageUsed) : 1)
+      const lastPage = Math.max(1, derivedLast || 1)
+      let allData: StaffData[] = firstData.data || []
+
+      if (lastPage > 1) {
+        const requests: Promise<any>[] = []
+        for (let p = 2; p <= lastPage; p++) {
+          requests.push(axios.get(`${BACKEND_URL}/staffpegination?page=${p}&limit=${ITEMS_PER_PAGE}&search=`))
+        }
+        const pages = await Promise.all(requests)
+        for (const r of pages) {
+          const d = r.data
+          if (d?.data) allData = allData.concat(d.data)
+        }
+      }
+
+      return { data: allData, count: firstData.count || allData.length, last_page: 1 }
     },
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
   const data: StaffData[] = response?.data || []
-  const total      = response?.count    ?? 0
-  const totalPages = response?.last_page ?? 1
+  const totalFromServer = response?.count ?? 0
+  const total = totalFromServer || data.length
+  const serverLastPage = response?.last_page ?? 0
+  const totalPages = serverLastPage > 1 ? serverLastPage : Math.max(1, Math.ceil(total / ITEMS_PER_PAGE))
 
-  // Prefetch next page
+  // If server returns a full dataset (no server-side pagination), paginate on the client
+  const serverPaging = serverLastPage > 1
+  const displayedData: StaffData[] = serverPaging ? data : data.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
+
+  // Prefetch next page (only when searching / using server pagination)
   useEffect(() => {
+    if (!search) return
     if (page >= totalPages) return
     queryClient.prefetchQuery({
       queryKey: ['stafflist', page + 1, search],
@@ -153,7 +221,7 @@ export default function StaffListPage() {
   }
 
   const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
-  const endIndex   = startIndex + data.length - 1
+  const endIndex = Math.min(page * ITEMS_PER_PAGE, total)
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -210,19 +278,6 @@ export default function StaffListPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {/* Password visibility toggle */}
-              <button
-                onClick={() => setShowPasswords(v => !v)}
-                className={`flex items-center gap-2 px-4 py-2 text-sm border rounded-lg transition shadow-sm ${
-                  showPasswords
-                    ? "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
-                    : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-                }`}
-              >
-                {showPasswords ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                {showPasswords ? "Hide Passwords" : "Show Passwords"}
-              </button>
-
               <button
                 onClick={handleDownloadCSV}
                 disabled={!data.length}
@@ -263,16 +318,7 @@ export default function StaffListPage() {
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Name</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Email</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Role</th>
-                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                    <div className="flex items-center gap-2">
-                      Password
-                      {showPasswords && (
-                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold uppercase tracking-wider">
-                          Visible
-                        </span>
-                      )}
-                    </div>
-                  </th>
+                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Password</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
@@ -302,7 +348,7 @@ export default function StaffListPage() {
                 )}
 
                 {/* Rows */}
-                {!isLoading && data.map((staff, i) => {
+                {!isLoading && displayedData.map((staff, i) => {
                   const badge = roleBadge(staff.staff_roletype)
                   return (
                     <tr key={staff.staff_id} className="hover:bg-gray-50 transition-colors">
@@ -310,9 +356,9 @@ export default function StaffListPage() {
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold flex-shrink-0">
+                          {/* <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold flex-shrink-0">
                             {initials(staff.staff_name)}
-                          </div>
+                          </div> */}
                           <span className="font-medium text-gray-800">{staff.staff_name || "-"}</span>
                         </div>
                       </td>
@@ -326,28 +372,52 @@ export default function StaffListPage() {
                       </td>
 
                       <td className="px-4 py-4 font-mono text-xs tracking-widest">
-                        {showPasswords
-                          ? <span className="text-gray-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-100 select-all">{staff.staff_password || "-"}</span>
-                          : <span className="text-gray-300">********</span>
-                        }
+                        {(() => {
+                          const visible = visiblePasswords.has(staff.staff_id)
+                          return (
+                            <div className="flex items-center gap-2">
+                              <span className={`${visible ? 'text-gray-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-100 select-all' : 'text-gray-300'}`}>
+                                {visible ? staff.staff_password || "-" : "********"}
+                              </span>
+                              {role === 'admin' && staff.staff_password && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setVisiblePasswords(prev => {
+                                    const next = new Set(prev)
+                                    if (next.has(staff.staff_id)) next.delete(staff.staff_id)
+                                    else next.add(staff.staff_id)
+                                    return next
+                                  })}}
+                                  className="p-1 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition"
+                                  aria-label={visible ? 'Hide staff password' : 'Show staff password'}
+                                  title={visible ? 'Hide password' : 'Show password'}
+                                >
+                                  {visible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </td>
 
                       <td className="px-4 py-4">
-                        <div className="flex items-center gap-2">
-                          <Link
-                            href={getStaffEditRoute(staff.staff_id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
-                          >
-                            <Pencil className="w-3 h-3" />
-                            Edit
-                          </Link>
-                          <button
-                            onClick={() => setDeleteConfirm(staff.staff_id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            Delete
-                          </button>
+                        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <div className="relative">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setOpenMenu(prev => prev === staff.staff_id ? null : staff.staff_id) }}
+                              data-menu-id={staff.staff_id}
+                              className="p-2 rounded-md text-gray-600 hover:bg-gray-50 transition"
+                              aria-label="Open actions"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+                            {openMenu === staff.staff_id && (
+                              <div onClick={(e) => e.stopPropagation()} data-menu-id={staff.staff_id} className="absolute right-0 mt-2 w-40 bg-white border border-gray-200 rounded-md shadow-lg z-10 py-1">
+                                <Link href={getStaffEditRoute(staff.staff_id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>
+                                <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(staff.staff_id); setOpenMenu(null) }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">Delete</button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>

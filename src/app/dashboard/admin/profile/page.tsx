@@ -17,6 +17,8 @@ type AdminSession = {
   admin_id?: string;
   name?: string;
   email?: string;
+  ADMIN_IMAGE?: string;
+  image?: string;
 };
 
 function getAdminId(admin: AdminSession | null) {
@@ -93,7 +95,8 @@ export default function AdminProfilePage() {
       try {
         const response = await fetch(`${BACKEND_URL}/admininfo?id=${encodeURIComponent(id)}`);
         const json = await response.json();
-        const data = json.data || admin || {};
+        // Prefer session/localStorage values first so recent client-side updates show immediately
+        const data = admin || json.data || {};
         setName(data.ADMIN_NAME || data.name || "");
         setPhone(data.ADMIN_PHONE || "");
         setEmail(data.ADMIN_EMAIL || data.email || "");
@@ -128,14 +131,23 @@ export default function AdminProfilePage() {
       if (image) formData.append("ADMIN_IMAGE", image);
 
       const response = await axios.post(`${BACKEND_URL}/updateadmin?id=${encodeURIComponent(adminId)}`, formData);
-      const payload = response.data;
-      const updated = payload?.data || {
+      const payload = response.data || {};
+      const previous = readAdminSession() || {};
+      const payloadData = payload?.data || {};
+
+      const updated = {
+        ...previous,
+        ...payloadData,
         ADMIN_ID: adminId,
         ADMIN_NAME: name,
         ADMIN_EMAIL: email,
         ADMIN_PHONE: phone,
         ADMIN_PASSWORD: password,
+        name: payloadData.name || previous.name || name,
+        email: payloadData.email || previous.email || email,
+        image: payloadData.ADMIN_IMAGE || payloadData.image || previous.image || previous.ADMIN_IMAGE || undefined,
       };
+
       localStorage.setItem("status", "true");
       localStorage.setItem("UserData", JSON.stringify(updated));
       localStorage.setItem("AdminData", JSON.stringify(updated));

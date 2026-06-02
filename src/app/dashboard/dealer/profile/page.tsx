@@ -16,6 +16,10 @@ type DealerSession = {
   Dealer_Address?: string;
   Dealer_Pincode?: string;
   Dealer_Password?: string;
+  Dealer_Image?: string;
+  image?: string;
+  name?: string;
+  email?: string;
 };
 
 function readDealerSession(): DealerSession | null {
@@ -86,7 +90,8 @@ export default function DealerProfilePage() {
       try {
         const response = await fetch(`${BACKEND_URL}/dealerinfo?id=${encodeURIComponent(id)}`);
         const json = await response.json();
-        const data = json.data || session || {};
+        // Prefer session/localStorage values first so recent client-side updates show immediately
+        const data = session || json.data || {};
         setName(data.Dealer_Name || "");
         setEmail(data.Dealer_Email || "");
         setNumber(data.Dealer_Number || "");
@@ -127,10 +132,12 @@ export default function DealerProfilePage() {
       if (image) formData.append("Dealer_Image", image);
 
       const response = await axios.post(`${BACKEND_URL}/updateDealer?id=${encodeURIComponent(dealerId)}`, formData);
-      const payload = response.data;
+      const payload = response.data || {};
       const previous = readDealerSession() || {};
-      const updated = payload?.data || {
+      const payloadData = payload?.data || {};
+      const updated = {
         ...previous,
+        ...payloadData,
         Dealer_Id: dealerId,
         Dealer_Name: name,
         Dealer_Email: email,
@@ -139,6 +146,9 @@ export default function DealerProfilePage() {
         Dealer_Address: address,
         Dealer_Pincode: pincode,
         Dealer_Password: password,
+        name: payloadData.name || previous.name || name,
+        email: payloadData.email || previous.email || email,
+        image: payloadData.Dealer_Image || payloadData.image || previous.image || undefined,
       };
       localStorage.setItem("status", "true");
       localStorage.setItem("UserData", JSON.stringify(updated));

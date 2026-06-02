@@ -15,6 +15,9 @@ type StaffSession = {
   staff_password?: string;
   staff_email?: string;
   staff_roletype?: string;
+  image?: string;
+  name?: string;
+  staff_image?: string;
 };
 
 function readStaffSession(): StaffSession | null {
@@ -81,7 +84,8 @@ export default function StaffProfilePage() {
       try {
         const response = await fetch(`${BACKEND_URL}/staffinfo?id=${encodeURIComponent(id)}`);
         const json = await response.json();
-        const data = json.data || session || {};
+        // Prefer session/localStorage values first so recent client-side updates show immediately
+        const data = session || json.data || {};
         setName(data.staff_name || "");
         setDesignation(data.staff_designation || "");
         setLocation(data.staff_location || "");
@@ -115,15 +119,19 @@ export default function StaffProfilePage() {
       formData.append("staff_password", password);
 
       const response = await axios.post(`${BACKEND_URL}/staffUpdate?id=${encodeURIComponent(staffId)}`, formData);
-      const payload = response.data;
+      const payload = response.data || {};
       const previous = readStaffSession() || {};
-      const updated = payload?.data || {
+      const payloadData = payload?.data || {};
+      const updated = {
         ...previous,
+        ...payloadData,
         staff_id: staffId,
         staff_name: name,
         staff_designation: designation,
         staff_location: location,
         staff_password: password,
+        name: payloadData.name || previous.name || name,
+        image: payloadData.image || previous.image || undefined,
       };
       localStorage.setItem("status", "true");
       localStorage.setItem("UserData", JSON.stringify(updated));

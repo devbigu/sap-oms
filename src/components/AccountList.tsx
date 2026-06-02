@@ -21,12 +21,17 @@ type UserData = {
   username?: string
   email?: string
   name?: string
+  image?: string
+  Dealer_Image?: string
+  ADMIN_IMAGE?: string
+  imageUrl?: string
 }
 
 function AccountList() {
   const [user, setUser]       = useState<UserData>({})
   const [role, setRole]       = useState<string | null>(null)
   const [mounted, setMounted] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string>("https://i.sstatic.net/l60Hf.png")
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -35,13 +40,16 @@ function AccountList() {
       const userData = JSON.parse(localStorage.getItem("UserData") || "{}")
       setRole(roleType)
       setUser(userData)
+      // derive image src from stored user data, add timestamp to bust cache after updates
+      const candidate = userData?.image || userData?.Dealer_Image || userData?.ADMIN_IMAGE || userData?.imageUrl || null
+      if (candidate) setImageSrc(`${candidate}?t=${Date.now()}`)
     } catch { /* ignore */ }
     setMounted(true)
   }, [])
 
   if (!mounted) return null
 
-  const image = "https://i.sstatic.net/l60Hf.png"
+  
 
   const userName =
     role === "3" ? user.name || user.username || "Administrator"
@@ -88,7 +96,7 @@ function AccountList() {
       <div className="w-full bg-gradient-to-r from-indigo-50 to-purple-50 p-3 border-b border-indigo-100">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 flex-1">
-            <img src={image} alt="profile" className="w-10 h-10 rounded-full object-cover border-2 border-indigo-200" />
+            <img src={imageSrc} alt="profile" className="w-10 h-10 rounded-full object-cover border-2 border-indigo-200" />
             <div className="flex flex-col min-w-0">
               <span className="text-sm font-semibold text-gray-900 truncate">{userName}</span>
               <span className="text-xs text-gray-500 truncate">{userEmail}</span>

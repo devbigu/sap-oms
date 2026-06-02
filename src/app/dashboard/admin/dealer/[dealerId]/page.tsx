@@ -57,6 +57,7 @@ export default function EditDealerPage() {
   const [isSaving,   setIsSaving]   = useState(false)
   const [toastMsg,   setToastMsg]   = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [staffOptions, setStaffOptions] = useState<StaffOption[]>([])
+  const [selectedStaffToAdd, setSelectedStaffToAdd] = useState("")
 
   // Form fields
   const [name,           setName]           = useState("")
@@ -294,6 +295,31 @@ export default function EditDealerPage() {
                   <span className="text-orange-500 ml-0.5">*</span>
                   <span className="ml-2 text-gray-400 normal-case font-normal">(hold Ctrl / Cmd to select multiple)</span>
                 </label>
+                <div className="mt-2 flex gap-2 items-center">
+                  <select
+                    value={selectedStaffToAdd}
+                    onChange={(e) => setSelectedStaffToAdd(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 bg-white focus:outline-none"
+                  >
+                    <option value="">Select staff to add</option>
+                    {staffOptions.map(staff => (
+                      <option key={staff.staff_id} value={staff.staff_id}>
+                        {staff.staff_name} {String(staff.staff_roletype) === "1" ? "(Exe)" : "(Fie-Exe)"}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedStaffToAdd) return
+                      setAssignedStaffIds(prev => prev.includes(selectedStaffToAdd) ? prev : [...prev, selectedStaffToAdd])
+                      setSelectedStaffToAdd("")
+                    }}
+                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700"
+                  >
+                    Add
+                  </button>
+                </div>
                 <select
                   multiple
                   value={assignedStaffIds}

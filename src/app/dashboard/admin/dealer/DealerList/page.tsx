@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, BookOpen, Pencil, Eye, EyeOff } from 'lucide-react'
+import { Search, Trash2, BookOpen, Pencil, Eye, EyeOff, MoreVertical } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -42,6 +42,7 @@ const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 const getDealerEditRoute = (dealerId: string) => `/dashboard/admin/dealer/${encodeURIComponent(dealerId)}`
 const getDealerLedgerRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/ledger`
+const getDealerViewRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/view`
 const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
 
 function initials(name: string) {
@@ -70,6 +71,7 @@ export default function DealerListPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
 
   const queryClient = useQueryClient()
 
@@ -81,6 +83,21 @@ export default function DealerListPage() {
     const t = setTimeout(() => setToastMsg(null), 3000)
     return () => clearTimeout(t)
   }, [toastMsg])
+
+  useEffect(() => {
+    const handleDocClick = (e: any) => {
+      const path = (e?.composedPath && e.composedPath()) || e?.path || []
+      if (Array.isArray(path) && path.some((el: any) => el?.dataset?.menuId)) return
+      let node = e?.target
+      while (node) {
+        if (node?.dataset && node.dataset.menuId) return
+        node = node.parentNode
+      }
+      setOpenMenu(null)
+    }
+    document.addEventListener('click', handleDocClick)
+    return () => document.removeEventListener('click', handleDocClick)
+  }, [])
 
   const { data: response, isLoading, isError, refetch } = useQuery<DealerResponse>({
     queryKey: ['dealers', page, search],
@@ -294,11 +311,11 @@ export default function DealerListPage() {
 
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold shrink-0">
+                          {/* <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-semibold shrink-0">
                             {initials(dealer.Dealer_Name)}
-                          </div>
+                          </div> */}
                           <Link
-                            href={getDealerLedgerRoute(dealer.Dealer_Id)}
+                            href={getDealerEditRoute(dealer.Dealer_Id)}
                             className="font-medium text-gray-800 hover:text-indigo-700 transition-colors"
                           >
                             {dealer.Dealer_Name || "-"}
@@ -345,43 +362,28 @@ export default function DealerListPage() {
 
                       <td className="px-4 py-4">
                         <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-                          <Link
-                            href={getDealerLedgerRoute(dealer.Dealer_Id)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            Ledger
-                          </Link>
-
-                          {role === "staff" && (
-                            <Link
-                              href={getStaffDealerRoute(dealer.Dealer_Id)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
+                          <div className="relative">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setOpenMenu(prev => prev === dealer.Dealer_Id ? null : dealer.Dealer_Id) }}
+                              data-menu-id={dealer.Dealer_Id}
+                              className="p-2 rounded-md text-gray-600 hover:bg-gray-50 transition"
+                              aria-label="Open actions"
                             >
-                              <Eye className="w-3.5 h-3.5" />
-                              View
-                            </Link>
-                          )}
-
-                          {canManageDealers && (
-                            <>
-                              <Link
-                                href={getDealerEditRoute(dealer.Dealer_Id)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-600 transition"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                                Edit
-                              </Link>
-                              <button
-                                type="button"
-                                onClick={() => setDeleteConfirm(dealer.Dealer_Id)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                Delete
-                              </button>
-                            </>
-                          )}
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+                            {openMenu === dealer.Dealer_Id && (
+                              <div onClick={(e) => e.stopPropagation()} data-menu-id={dealer.Dealer_Id} className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded-md shadow-lg z-10 py-1">
+                                <Link href={getDealerViewRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">View</Link>
+                                {role === 'staff' && <Link href={getStaffDealerRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">View (staff)</Link>}
+                                {canManageDealers && (
+                                  <>
+                                    <Link href={getDealerEditRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>
+                                    <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(dealer.Dealer_Id); setOpenMenu(null) }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">Delete</button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>
