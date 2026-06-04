@@ -15,6 +15,18 @@ type OrderData = {
   orderdata_datetime: string; staffid: string
 }
 type OrderResponse = { data: OrderData[]; total?: number; count?: number; last_page?: number }
+type OrderSummaryOverride = {
+  grossAmount?: number | string
+  discountAmount?: number | string
+  netPayableAmount?: number | string
+  gross_amount?: number | string
+  discount_amount?: number | string
+  net_payable_amount?: number | string
+  order_amount?: number | string
+  order_discount?: number | string
+  order_discount_amount?: number | string
+  order_net_amount?: number | string
+}
 
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
@@ -110,6 +122,30 @@ function mtBadge(s: string) {
   if (value === 'InProcess') return { value, cls: 'badge-inprocess', dot: '#ef4444', label: 'In Process' }
   if (value === 'Pending') return { value, cls: 'badge-pending', dot: '#f59e0b', label: 'Pending' }
   return { value, cls: 'badge-noaction', dot: '#94a3b8', label: 'No Action Taken' }
+}
+function moneyValue(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const text = String(value).replace(/,/g, '').trim()
+  if (!text) return null
+  const amount = Number(text)
+  return Number.isFinite(amount) ? amount : null
+}
+function getOrderAmounts(order: OrderData, override?: OrderSummaryOverride) {
+  const gross = moneyValue(override?.grossAmount ?? override?.gross_amount ?? override?.order_amount ?? order.order_amount) ?? 0
+  const net = moneyValue(
+    override?.netPayableAmount ??
+    override?.net_payable_amount ??
+    override?.order_net_amount ??
+    override?.order_discount ??
+    order.order_discount
+  ) ?? gross
+  const discount = moneyValue(
+    override?.discountAmount ??
+    override?.discount_amount ??
+    override?.order_discount_amount
+  ) ?? Math.max(0, gross - net)
+
+  return { gross, discount, net }
 }
 function highlight(text: string, query: string) {
   if (!query || !text) return text
@@ -365,6 +401,7 @@ export default function OrdersPage() {
   const [amountMax,    setAmountMax   ] = useState('')
   const [dateFrom,     setDateFrom    ] = useState('')
   const [dateTo,       setDateTo      ] = useState('')
+  const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({})
 
   useEffect(() => {
     const s = resolveSession()
@@ -391,14 +428,31 @@ export default function OrdersPage() {
   })
 
   const allData: OrderData[] = response?.data || []
+  const allOrderIdsKey = allData.map(o => o.order_id).filter(Boolean).join(',')
+
+  useEffect(() => {
+    if (!allOrderIdsKey) { setSummaryOverrides({}); return }
+    fetch(`/api/order-summary-overrides?order_ids=${encodeURIComponent(allOrderIdsKey)}`)
+      .then(r => r.json())
+      .then(json => {
+        if (!json.success) return
+        const next: Record<string, OrderSummaryOverride> = {}
+        ;(json.data ?? []).forEach((item: any) => {
+          if (item.orderId) next[item.orderId] = item
+        })
+        setSummaryOverrides(next)
+      })
+      .catch(() => {})
+  }, [allOrderIdsKey])
 
   const filteredAll = allData.filter(o => {
+    const amounts = getOrderAmounts(o, summaryOverrides[o.order_id])
     if (orderIdInput.trim() && !o.order_id.startsWith(orderIdInput.trim())) return false
     if (dealerInput.trim()  && !(o.Dealer_Name || '').toLowerCase().includes(dealerInput.trim().toLowerCase())) return false
     if (statusSearch !== '' && o.accept_order !== statusSearch) return false
     if (mtFilter     !== '' && mtStatusValue(o.mtstatus) !== mtFilter) return false
-    if (amountMin    !== '' && Number(o.order_amount || 0) < Number(amountMin)) return false
-    if (amountMax    !== '' && Number(o.order_amount || 0) > Number(amountMax)) return false
+    if (amountMin    !== '' && amounts.gross < Number(amountMin)) return false
+    if (amountMax    !== '' && amounts.gross > Number(amountMax)) return false
     if (dateFrom !== '') { const d = (o.orderDate || o.order_date || '').slice(0, 10); if (d < dateFrom) return false }
     if (dateTo   !== '') { const d = (o.orderDate || o.order_date || '').slice(0, 10); if (d > dateTo)   return false }
     return true
@@ -422,14 +476,15 @@ export default function OrdersPage() {
 
   const exportCSV = () => {
     const rows = (hasClientFilters ? filteredAll : allData).map((o, i) => {
+      const amounts = getOrderAmounts(o, summaryOverrides[o.order_id])
       const base: Record<string, string | number> = {
         'S.No.':        i + 1,
         'Order No':     `OM/${YEAR}/${o.order_id}`,
         'Date':         (o.orderDate || o.order_date || '').slice(0, 10),
         'Due Date':     o.outstandingDate || '',
-        'Amount (₹)':   Number(o.order_amount  || 0),
-        'Discount (₹)': Number(o.order_discount || 0),
-        'Net (₹)':      Number(o.order_amount || 0) - Number(o.order_discount || 0),
+        'Amount (₹)':   amounts.gross,
+        'Discount (₹)': amounts.discount,
+        'Net (₹)':      amounts.net,
         'Qty':          o.orderdata_item_quantity || '',
         'Confirmation': o.accept_order === '1' ? 'Accepted' : 'Awaiting',
         'MT Status':    mtBadge(o.mtstatus).label,
@@ -779,6 +834,7 @@ export default function OrdersPage() {
                     const showAccept = cfg.canAccept(session, order)
                     const hlId       = orderIdInput ? highlight(order.order_id ?? '', orderIdInput) : (order.order_id ?? '')
                     const hlDealer   = dealerInput  ? highlight(order.Dealer_Name || '—', dealerInput) : (order.Dealer_Name || '—')
+                    const amounts    = getOrderAmounts(order, summaryOverrides[order.order_id])
 
                     return (
                       <tr key={order.order_id ?? i}>
@@ -798,8 +854,8 @@ export default function OrdersPage() {
                         <td className="mono-sm">{(order.orderDate || order.order_date || '—').slice(0, 10)}</td>
                         <td className="mono-sm">{order.outstandingDate || '—'}</td>
 
-                        <td><span className="amount-pill">₹{Number(order.order_amount || 0).toLocaleString('en-IN')}</span></td>
-                        <td className="mono-sm">₹{Number(order.order_discount || 0).toLocaleString('en-IN')}</td>
+                        <td><span className="amount-pill">₹{amounts.gross.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
+                        <td className="mono-sm">₹{amounts.discount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
 
                         <td style={{ textAlign: 'center', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: '#374151' }}>
                           {order.orderdata_item_quantity || '—'}

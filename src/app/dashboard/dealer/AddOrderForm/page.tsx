@@ -215,6 +215,18 @@ function extractOrderIdFromResponse(data: any): string {
   return msg.match(/OM\/\d{4}\/(\d+)/i)?.[1] || msg.match(/order\s*(?:id|no\.?)?\s*#?\s*(\d+)/i)?.[1] || "";
 }
 
+function buildExpectedOrderNumber(lastOrderId: string | undefined | null): string {
+  const year = new Date().getFullYear();
+  const raw = String(lastOrderId ?? "").trim();
+  const lastPart = raw.split("/").pop() ?? "";
+  const digits = (lastPart.match(/\d+/g)?.join("") ?? "").trim();
+  const lastNumber = digits ? parseInt(digits, 10) : 0;
+  const nextNumber = (Number.isFinite(lastNumber) ? lastNumber : 0) + 1;
+  const padding = Math.max(4, digits.length);
+
+  return `OM/${year}/${String(nextNumber).padStart(padding, "0")}`;
+}
+
 // ─── Coupons ──────────────────────────────────────────────────────────────────
 const COUPONS: Record<string, number> = {
   "test60": 60,
@@ -329,6 +341,8 @@ function AddOrderPageInner() {
   const [file, setFile] = useState<File | null>(null);
   const [tab, setTab] = useState<"manual" | "excel">("manual");
   const [mounted, setMounted] = useState(false);
+  const [expectedOrderNumber, setExpectedOrderNumber] = useState("");
+  const [expectedOrderLoading, setExpectedOrderLoading] = useState(false);
   const seededRef = useRef(false);
 
   // ── Draft state ───────────────────────────────────────────────────────────
@@ -926,6 +940,24 @@ function AddOrderPageInner() {
     }
   };
 
+  useEffect(() => {
+    if (!user?.Dealer_Id) return;
+    let active = true;
+
+    setExpectedOrderLoading(true);
+    fetchLatestOrderId()
+      .then((latestId) => {
+        if (active) setExpectedOrderNumber(buildExpectedOrderNumber(latestId));
+      })
+      .finally(() => {
+        if (active) setExpectedOrderLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [user?.Dealer_Id]);
+
   const saveOrderNoteForHistory = async (orderId: string) => {
     const note = orderNote.trim();
     if (!orderId || !note || !user?.Dealer_Id) return;
@@ -1072,6 +1104,7 @@ function AddOrderPageInner() {
         saveOrderNoteForHistory(placedOrderId),
         saveOrderSummaryOverride(placedOrderId),
       ]);
+      if (placedOrderId) setExpectedOrderNumber(buildExpectedOrderNumber(placedOrderId));
       if (reorderRequest) {
         fetch(`/api/custom-discount-requests/${reorderRequest.id}/reorder-log`, {
           method: "POST",
@@ -1303,7 +1336,13 @@ function AddOrderPageInner() {
         {/* Page heading */}
         <div className="mb-6 flex items-start justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Place Order</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Place Order</h1>
+              <span className="inline-flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-1.5 font-mono text-[12px] font-bold text-indigo-700">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Order No.</span>
+                {expectedOrderLoading ? "Loading..." : expectedOrderNumber || "OM/..."}
+              </span>
+            </div>
             <p className="text-sm text-gray-500 mt-1">{docDate} · {user.Dealer_Name}</p>
           </div>
           <button onClick={() => router.push("/drafts")}
