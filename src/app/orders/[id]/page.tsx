@@ -179,7 +179,7 @@ function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMe
   const quantityGross = orderedQuantity * unitPrice;
   const packGross = quantityGross * packSize;
 
-  let pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity;
+  let pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity * packSize;
   let packs = explicitPacks > 0 ? explicitPacks : orderedQuantity;
 
   if (explicitPieces <= 0 && storedGross > 0 && unitPrice > 0 && packSize > 1 && !closeTo(quantityGross, storedGross) && closeTo(packGross, storedGross)) {
@@ -367,7 +367,7 @@ function ItemCard({ o, idx, year, packLookup, orderMeta, onTrack }: { o: OrderDa
       </div>
       <div className="grid grid-cols-3 gap-3 border-t border-gray-100 pt-4">
         {[
-          { label: "Ordered",    val: `${pricing.pieces}`, sub: "pcs", cls: "text-gray-900" },
+          { label: "Ordered",    val: `${pricing.packs}`, sub: "packs", cls: "text-gray-900" },
           { label: "Price",      val: `₹${pricing.unitPrice.toLocaleString("en-IN")}`, cls: "text-gray-900" },
           { label: "Discount",   val: `${pricing.pct}%`,          cls: "text-amber-700" },
           { label: "Gross",      val: `₹${pricing.gross.toLocaleString("en-IN")}`, cls: "text-gray-500 line-through" },
@@ -606,7 +606,7 @@ export default function ViewOrderDealerPage() {
     Dealer_Address: dealer?.Dealer_Address || firstOrder?.Dealer_Address || displayOrderMeta?.Dealer_Address || "",
     Dealer_Number: dealer?.Dealer_Number || firstOrder?.Dealer_Number || displayOrderMeta?.Dealer_Number || "",
     gst: dealer?.gst || firstOrder?.gst || displayOrderMeta?.gst || "",
-    orderdata_item_quantity: String(totals.pieces),
+    orderdata_item_quantity: String(totals.qty),
     mtstatus: displayOrderMeta?.mtstatus || firstOrder?.orderdata_status || "",
     outstandingDate: displayOrderMeta?.outstandingDate || "",
     items: orders.map((o) => {
@@ -767,8 +767,8 @@ export default function ViewOrderDealerPage() {
           {!loading && orders.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {[
-                { label: "Total Qty",     value: `${totals.pieces}`,                          sub: "pieces",          color: "text-gray-900"    },
-                { label: "Total Packs",   value: `${totals.qty}`,                             sub: "packs",           color: "text-gray-900"    },
+                { label: "Total Qty",     value: `${totals.qty}`,                             sub: "packs",           color: "text-gray-900"    },
+                { label: "Total Pieces",  value: `${totals.pieces}`,                          sub: "pcs",             color: "text-gray-900"    },
                 { label: "Gross",         value: `₹${totals.gross.toLocaleString("en-IN")}`, sub: "before discount", color: "text-gray-900"    },
                 { label: "Saved",         value: `₹${totals.discount.toLocaleString("en-IN")}`, sub: "total discount",  color: "text-amber-700"   },
                 { label: "Net Payable",   value: `₹${totals.final.toLocaleString("en-IN")}`,  sub: "after discount",  color: "text-emerald-700" },
@@ -821,7 +821,7 @@ export default function ViewOrderDealerPage() {
                 <table ref={tableRef} className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-gray-100">
-                      {["#","Order No","Cat No.","Product","Description","Qty (Pcs)","Packs","Dispatched","Left","Unit","Price","Disc %","Amount","Discount","Final","Status","Date",""].map(h => (
+                      {["#","Order No","Cat No.","Product","Description","Qty","Pack Size","Pieces","Dispatched","Left","Unit","Price","Disc %","Amount","Discount","Final","Status","Date",""].map(h => (
                         <th key={h} className="px-4 py-3.5 text-left text-[10px] font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap bg-gray-50/80">{h}</th>
                       ))}
                     </tr>
@@ -854,8 +854,9 @@ export default function ViewOrderDealerPage() {
                           <td className="px-4 py-3.5 max-w-[140px]">
                             <span className="block truncate text-[12px] text-gray-600">{o.product_discription || "—"}</span>
                           </td>
-                          <td className="px-4 py-3.5 font-mono font-bold text-gray-900">{pricing.pieces}</td>
                           <td className="px-4 py-3.5 font-mono font-bold text-gray-900">{pricing.packs}</td>
+                          <td className="px-4 py-3.5 font-mono font-bold text-amber-700">{pricing.packs} × {pricing.packSize}</td>
+                          <td className="px-4 py-3.5 font-mono font-bold text-gray-900">{pricing.pieces}</td>
                           <td className="px-4 py-3.5 font-mono font-semibold text-emerald-600">{pricing.ready}</td>
                           <td className="px-4 py-3.5 font-mono font-bold" style={{ color: left > 0 ? "#dc2626" : "#9ca3af" }}>{left}</td>
                           <td className="px-4 py-3.5 text-[12px] text-gray-600">{o.product_unit || "—"}</td>

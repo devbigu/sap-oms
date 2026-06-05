@@ -480,8 +480,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             itemRows.push([
                 { content: String(idx + 1).padStart(2, "0"),          styles: { halign: "center" } },
                 { content: description,                                styles: { halign: "left" } },
-                { content: String(pieces),                             styles: { halign: "center" } },
                 { content: String(qty),                                styles: { halign: "center" } },
+                { content: `${qty} x ${pack}`,                         styles: { halign: "center" } },
+                { content: String(pieces),                             styles: { halign: "center" } },
                 { content: item.product_unit || "Pcs",                 styles: { halign: "center" } },
                 { content: fmt(rowGross),                              styles: { halign: "right"  } },
                 { content: fmt(rowDiscount),                           styles: { halign: "right"  } },
@@ -491,8 +492,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         // After iterating, append totals row using sums
         itemRows.push([
             { content: "Total", colSpan: 2,                    styles: { halign: "right", fontStyle: "bold" } },
-            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
             { content: String(totalQty),                        styles: { halign: "center", fontStyle: "bold" } },
+            { content: "",                                     styles: {} },
+            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
             { content: "",                                     styles: {} },
             { content: fmt(sumGross),                           styles: { halign: "right", fontStyle: "bold" } },
             { content: fmt(sumDiscount),                        styles: { halign: "right", fontStyle: "bold" } },
@@ -507,8 +509,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         itemRows.push([
             { content: "01",                                                   styles: { halign: "center" } },
             { content: displayOrder.product_name || "Omsons Glassware Products",       styles: { halign: "left"   } },
-            { content: String(fpieces),                                          styles: { halign: "center" } },
             { content: String(totalQty),                                         styles: { halign: "center" } },
+            { content: `${totalQty} x ${fpack}`,                                 styles: { halign: "center" } },
+            { content: String(fpieces),                                          styles: { halign: "center" } },
             { content: "Pcs",                                                  styles: { halign: "center" } },
             { content: fmt(gross),                                               styles: { halign: "right"  } },
             { content: fmt(discount),                                            styles: { halign: "right"  } },
@@ -520,8 +523,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     if (orderItems.length === 0) {
         itemRows.push([
             { content: "Total", colSpan: 2,                    styles: { halign: "right", fontStyle: "bold" } },
-            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
             { content: String(totalQty),                        styles: { halign: "center", fontStyle: "bold" } },
+            { content: "",                                     styles: {} },
+            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
             { content: "",                                     styles: {} },
             { content: fmt(gross),                              styles: { halign: "right", fontStyle: "bold" } },
             { content: fmt(discount),                           styles: { halign: "right", fontStyle: "bold" } },
@@ -532,14 +536,15 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     autoTable(doc, {
         startY: y,
         head: [[
-            { content: "Sr\nNo",          styles: { halign: "center", cellWidth: 10 } },
+            { content: "Sr\nNo",          styles: { halign: "center", cellWidth: 9 } },
             { content: "Description",      styles: { halign: "left",   cellWidth: "auto" as const } },
-            { content: "Qty\n(Pcs)",        styles: { halign: "center", cellWidth: 14 } },
-            { content: "Packs",            styles: { halign: "center", cellWidth: 14 } },
-            { content: "UOM",              styles: { halign: "center", cellWidth: 13 } },
-            { content: "Gross Amt\n(Rs.)", styles: { halign: "right",  cellWidth: 24 } },
-            { content: "Discount\n(Rs.)",  styles: { halign: "right",  cellWidth: 22 } },
-            { content: "Net Amt\n(Rs.)",   styles: { halign: "right",  cellWidth: 22 } },
+            { content: "Qty",              styles: { halign: "center", cellWidth: 12 } },
+            { content: "Pack\nSize",        styles: { halign: "center", cellWidth: 17 } },
+            { content: "Pieces",           styles: { halign: "center", cellWidth: 13 } },
+            { content: "UOM",              styles: { halign: "center", cellWidth: 11 } },
+            { content: "Gross Amt\n(Rs.)", styles: { halign: "right",  cellWidth: 23 } },
+            { content: "Discount\n(Rs.)",  styles: { halign: "right",  cellWidth: 21 } },
+            { content: "Net Amt\n(Rs.)",   styles: { halign: "right",  cellWidth: 21 } },
         ]],
         body: itemRows,
         margin: { left: ML, right: MR },
