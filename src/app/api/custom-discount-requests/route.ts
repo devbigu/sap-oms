@@ -22,6 +22,7 @@ function toDoc(doc: any) {
 export async function GET(req: NextRequest) {
   try {
     const dealerId = req.nextUrl.searchParams.get("dealer_id");
+    const staffId = req.nextUrl.searchParams.get("staff_id");
     const status = req.nextUrl.searchParams.get("status");
     const reorderable = req.nextUrl.searchParams.get("reorderable");
     const limitParam = Number(req.nextUrl.searchParams.get("limit") || 100);
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
 
     const query: Record<string, any> = {};
     if (dealerId) query.dealerId = dealerId;
+    if (staffId) query.staffId = staffId;
     if (status) query.status = status;
     if (reorderable === "true") {
       query.status = "approved";
@@ -69,6 +71,7 @@ export async function POST(req: NextRequest) {
     const discountScope = body.discountScope === "product" ? "product" : "order";
     const doc = {
       dealerId,
+      staffId: safeText(body.staffId || body.staff_id, 80),
       dealerName: safeText(body.dealerName, 200),
       dealerCode: safeText(body.dealerCode, 80),
       dealerEmail: safeText(body.dealerEmail, 160),

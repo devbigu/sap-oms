@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { LayoutDashboard, UserRoundPlus, Users, SquareUser, Plus, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, UserRoundPlus, Users, SquareUser, Plus, ClipboardList, Search } from 'lucide-react';
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   QueryClient,
   QueryClientProvider,
+  keepPreviousData,
+  useQuery,
   useQueries,
 } from "@tanstack/react-query";
 import {
@@ -50,8 +52,18 @@ type DealerSummary = {
   Dealer_Id: string;
   Dealer_Name: string;
   Dealer_City: string;
+  Dealer_Number?: string;
+  Dealer_Dealercode?: string;
   status: string;
+  assignedstaff?: string;
+  staffname?: string;
   currentlimit: string;
+};
+
+type DealerPaginationResponse = {
+  data: DealerSummary[];
+  total?: number;
+  last_page?: number;
 };
 
 type StaffSummary = {
@@ -115,7 +127,7 @@ const NAV_ITEMS = [
 
 const STAT_CONFIG = [
   { key: "PorderCount", label: "Pending Orders", color: "#f59e0b" },
-  { key: "dealerCount", label: "Total Dealers", color: "#10b981" },
+  { key: "dealerCount", label: "Total Distributors", color: "#10b981" },
   { key: "orderCount", label: "Total Orders", color: "#3b82f6" },
   { key: "staffCount", label: "Total Staff", color: "#8b5cf6" },
 ];
@@ -159,6 +171,9 @@ function AdminDashboardInner() {
   const [adminUser, setAdminUser] = useState<AdminUser>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [distributorPage, setDistributorPage] = useState(1);
+  const [distributorSearchInput, setDistributorSearchInput] = useState("");
+  const [distributorSearch, setDistributorSearch] = useState("");
 
   // Load admin user from localStorage
   useEffect(() => {
@@ -212,6 +227,7 @@ function AdminDashboardInner() {
     discountApprovalsQ,
     ledgerQ,
     dealersQ,
+    distributorsCountQ,
     staffQ,
   ] = useQueries({
     queries: [
@@ -232,21 +248,45 @@ function AdminDashboardInner() {
         queryFn: () => fetchJson<{ data: DealerSummary[]; total?: number }>(`${BACKEND_URL}/dealerpegination?page=1&limit=1000&search=`),
       },
       {
+        queryKey: ["adminSidebarSummary", "distributorCount"],
+        queryFn: () => fetchJson<{ data: DealerSummary[]; total?: number }>(`${BACKEND_URL}/dealerpegination?page=1&limit=1&search=`),
+      },
+      {
         queryKey: ["adminSidebarSummary", "staff"],
         queryFn: () => fetchJson<{ data: StaffSummary[]; count?: number }>(`${BACKEND_URL}/staffpegination?page=1&limit=200&search=`),
       },
     ],
   });
 
-  const summaryLoading = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, staffQ].some(q => q.isLoading);
-  const summaryError = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, staffQ].find(q => q.isError);
+  const summaryLoading = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].some(q => q.isLoading);
+  const summaryError = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].find(q => q.isError);
   const retrySummary = () => {
     outstandingOrdersQ.refetch();
     discountApprovalsQ.refetch();
     ledgerQ.refetch();
     dealersQ.refetch();
+    distributorsCountQ.refetch();
     staffQ.refetch();
   };
+
+  const {
+    data: distributorResponse,
+    isLoading: distributorsLoading,
+    isError: distributorsError,
+  } = useQuery<DealerPaginationResponse>({
+    queryKey: ["adminDashboardDistributors", distributorPage, distributorSearch],
+    queryFn: () => fetchJson<DealerPaginationResponse>(`${BACKEND_URL}/dealerpegination?page=${distributorPage}&search=${distributorSearch}`),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDistributorPage(1);
+      setDistributorSearch(distributorSearchInput);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [distributorSearchInput]);
 
   const outstandingOrders = (outstandingOrdersQ.data?.data ?? []).filter((o: any) => o.order_status === "0" || o.accept_order === "0");
   const pendingApprovals = (discountApprovalsQ.data?.data ?? []).filter(r => r.status === "pending").length;
@@ -263,6 +303,32 @@ function AdminDashboardInner() {
   const highExposureDealers = [...dealerRows]
     .sort((a, b) => (Number(b.currentlimit) || 0) - (Number(a.currentlimit) || 0))
     .slice(0, 5);
+  const totalDistributors = distributorsCountQ.data?.total ?? dealerRows.length;
+  const distributorRows = distributorResponse?.data ?? [];
+  const distributorTotal = distributorResponse?.total ?? ((distributorPage - 1) * 10 + distributorRows.length);
+  const distributorTotalPages = distributorResponse?.last_page ?? Math.max(1, Math.ceil(distributorTotal / 10));
+  const distributorStartIndex = distributorRows.length > 0 ? (distributorPage - 1) * 10 + 1 : 0;
+  const distributorEndIndex = distributorRows.length > 0 ? (distributorPage - 1) * 10 + distributorRows.length : 0;
+
+  const distributorPageNumbers = (): (number | "...")[] => {
+    const pages: (number | "...")[] = [];
+    if (distributorTotalPages <= 7) {
+      for (let i = 1; i <= distributorTotalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      if (distributorPage > 3) pages.push("...");
+      for (let i = Math.max(2, distributorPage - 1); i <= Math.min(distributorTotalPages - 1, distributorPage + 1); i++) pages.push(i);
+      if (distributorPage < distributorTotalPages - 2) pages.push("...");
+      pages.push(distributorTotalPages);
+    }
+    return pages;
+  };
+
+  const handleDistributorPageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > distributorTotalPages) return;
+    setDistributorPage(newPage);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const chartData = data.map((item) => ({
     name: `${item.order_id}`,
@@ -368,6 +434,40 @@ function AdminDashboardInner() {
         .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px; }
         .exposure-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
         .exposure-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: #374151; }
+        .table-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 20px; padding: 22px; margin-bottom: 16px; }
+        .table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .table-search { position: relative; min-width: 260px; max-width: 100%; flex: 1; }
+        .table-search input {
+          width: 100%;
+          padding: 11px 14px 11px 40px;
+          border: 1px solid #d1d5db;
+          border-radius: 12px;
+          background: #fff;
+          color: #111827;
+          font-size: 13px;
+          outline: none;
+        }
+        .table-search input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+        .table-search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #9ca3af; width: 16px; height: 16px; }
+        .table-wrap { overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 16px; }
+        .data-table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        .data-table thead tr { background: #f9fafb; }
+        .data-table th { padding: 14px 16px; text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+        .data-table td { padding: 14px 16px; border-bottom: 1px solid #f3f4f6; font-size: 13px; color: #374151; vertical-align: top; }
+        .data-table tbody tr:hover { background: #fafafa; }
+        .status-pill { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+        .status-active { background: #dcfce7; color: #047857; }
+        .status-inactive { background: #fee2e2; color: #b91c1c; }
+        .status-pending { background: #fef3c7; color: #b45309; }
+        .view-button { display: inline-flex; align-items: center; justify-content: center; padding: 7px 12px; border-radius: 10px; background: #eff6ff; color: #1d4ed8; text-decoration: none; font-size: 12px; font-weight: 600; border: 1px solid #dbeafe; transition: all .15s; }
+        .view-button:hover { background: #dbeafe; }
+        .table-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 14px; }
+        .table-count { font-size: 12px; color: #6b7280; }
+        .pagination { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .page-btn { min-width: 36px; height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: #fff; color: #374151; font-size: 12px; cursor: pointer; transition: all .15s; }
+        .page-btn:hover:not(:disabled) { background: #f9fafb; }
+        .page-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 600; }
+        .page-btn:disabled { opacity: .4; cursor: not-allowed; }
 
         /* ── Charts row ──────────────────────────── */
         .charts-row { display: grid; grid-template-columns: 1fr; gap: 16px; margin-bottom: 16px; }
@@ -474,7 +574,9 @@ function AdminDashboardInner() {
             {/* ── Stat Cards ── */}
             <div className="stat-grid">
               {STAT_CONFIG.map((stat) => {
-                const value = adminData[stat.key as keyof AdminStats] || 0;
+                const value = stat.key === "dealerCount"
+                  ? totalDistributors
+                  : adminData[stat.key as keyof AdminStats] || 0;
                 const badgeClass = stat.key === "PorderCount" ? "badge-amber" :
                   stat.key === "dealerCount" ? "badge-green" :
                     stat.key === "orderCount" ? "badge-blue" : "badge-purple";
@@ -509,8 +611,8 @@ function AdminDashboardInner() {
                 <Link href="/Pages/Ordermanagement/outstandingorders" className="quick-action-btn">+ Review orders</Link>
               </div>
               <div className="stat-card">
-                <div className="stat-lbl">Dealer Accounts</div>
-                <div className="font-sans font-bold">{summaryLoading ? "—" : (adminData.dealerCount || dealersQ.data?.total || dealerRows.length)}</div>
+                <div className="stat-lbl">Total Distributors</div>
+                <div className="font-sans font-bold">{summaryLoading ? "—" : totalDistributors}</div>
                 <div className="stat-badge badge-green">{activeDealers} active</div>
                 <div className="stat-badge badge-red" style={{ marginLeft: 6 }}>{inactiveDealers} inactive</div>
                 <Link href="/dashboard/admin/dealer/DealerList" className="quick-action-btn">+ Open dealers</Link>
@@ -552,6 +654,124 @@ function AdminDashboardInner() {
             </div>
 
             {/* ── Charts ── */}
+            <div className="table-card">
+              <div className="table-toolbar">
+                <div>
+                  <div className="panel-title">Distributors</div>
+                  <div className="panel-sub">Search and review all registered distributors</div>
+                </div>
+                <div className="table-search">
+                  <Search className="table-search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Search distributors..."
+                    value={distributorSearchInput}
+                    onChange={(e) => setDistributorSearchInput(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {distributorsError && (
+                <div style={{ marginBottom: 14, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 12, padding: "10px 14px", fontSize: 13 }}>
+                  Failed to load distributors. Please try again.
+                </div>
+              )}
+
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Distributor Name</th>
+                      <th>Dealer Code</th>
+                      <th>City</th>
+                      <th>Phone</th>
+                      <th>Assigned Staff</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {distributorsLoading ? (
+                      Array.from({ length: 8 }).map((_, idx) => (
+                        <tr key={idx}>
+                          {Array.from({ length: 7 }).map((__, cellIdx) => (
+                            <td key={cellIdx}>
+                              <div style={{ height: 14, borderRadius: 8, background: "#e5e7eb", width: cellIdx === 6 ? 70 : "100%", opacity: 0.75 }} />
+                            </td>
+                          ))}
+                        </tr>
+                      ))
+                    ) : distributorRows.length > 0 ? distributorRows.map((dealer) => {
+                      const isActive = Number(dealer.status) === 1;
+                      const isPending = Number(dealer.status) === 0;
+                      const statusClass = isActive ? "status-active" : isPending ? "status-pending" : "status-inactive";
+                      const statusLabel = isActive ? "Active" : isPending ? "Pending" : "Inactive";
+                      return (
+                        <tr key={dealer.Dealer_Id}>
+                          <td>
+                            <div style={{ fontWeight: 600, color: "#111827" }}>{dealer.Dealer_Name || "-"}</div>
+                          </td>
+                          <td>{dealer.Dealer_Dealercode || "-"}</td>
+                          <td>{dealer.Dealer_City || "-"}</td>
+                          <td>{dealer.Dealer_Number || "-"}</td>
+                          <td>{dealer.staffname || dealer.assignedstaff || "-"}</td>
+                          <td><span className={`status-pill ${statusClass}`}>{statusLabel}</span></td>
+                          <td>
+                            <Link href={`/dashboard/admin/dealer/${encodeURIComponent(dealer.Dealer_Id)}/view`} className="view-button">
+                              View
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={7} style={{ padding: "24px 16px", textAlign: "center", color: "#9ca3af" }}>
+                          No distributors found
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="table-footer">
+                <div className="table-count">
+                  {distributorRows.length > 0
+                    ? `Showing ${distributorStartIndex}–${distributorEndIndex} of ${distributorTotal}`
+                    : "No results"}
+                </div>
+                <div className="pagination">
+                  <button
+                    className="page-btn"
+                    onClick={() => handleDistributorPageChange(distributorPage - 1)}
+                    disabled={distributorPage === 1}
+                  >
+                    Prev
+                  </button>
+                  {distributorPageNumbers().map((p, idx) => (
+                    p === "..." ? (
+                      <span key={`dist-ellipsis-${idx}`} style={{ color: "#9ca3af", fontSize: 12 }}>...</span>
+                    ) : (
+                      <button
+                        key={p}
+                        className={`page-btn${p === distributorPage ? " active" : ""}`}
+                        onClick={() => handleDistributorPageChange(p)}
+                      >
+                        {p}
+                      </button>
+                    )
+                  ))}
+                  <button
+                    className="page-btn"
+                    onClick={() => handleDistributorPageChange(distributorPage + 1)}
+                    disabled={distributorPage === distributorTotalPages}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div className="charts-row">
 
               {/* Chart 1 — Top Orders */}
@@ -598,8 +818,8 @@ function AdminDashboardInner() {
               <div className="panel">
                 <div className="panel-header">
                   <div>
-                    <div className="panel-title">Top Dealers</div>
-                    <div className="panel-sub">Dealer performance ranking</div>
+                    <div className="panel-title">Top Distributors</div>
+                    <div className="panel-sub">Distributor performance ranking</div>
                   </div>
                   <div className="legend">
                     <span className="leg">
@@ -640,7 +860,7 @@ function AdminDashboardInner() {
               <div className="panel-header">
                 <div>
                   <div className="panel-title">Reports</div>
-                  <div className="panel-sub">Top performing orders and dealers</div>
+                  <div className="panel-sub">Top performing orders and distributors</div>
                 </div>
               </div>
 
@@ -666,10 +886,10 @@ function AdminDashboardInner() {
                   )}
                 </div>
 
-                {/* Top Dealers */}
+                {/* Top Distributors */}
                 <div className="">
                   <h3 style={{ fontSize: "12px", fontWeight: "600", color: "#ffffffff", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: "12px", background: "#d0d0d0ff", padding: "7px", borderRadius: "5px" }}>
-                    Top Dealers
+                    Top Distributors
                   </h3>
                   {loading ? (
                     <div className="report-loading">Loading...</div>

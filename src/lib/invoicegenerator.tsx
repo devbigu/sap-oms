@@ -16,13 +16,17 @@ export interface OrderInvoiceData {
     mtstatus: string;
     outstandingDate?: string;
     reason?: string;
+    order_note?: string;
+    note?: string;
+    remark?: string;
+    remarks?: string;
     product_name?: string;
     order_discount_amount?: string | number;
     order_net_amount?: string | number;
     grossAmount?: string | number;
     discountAmount?: string | number;
     netPayableAmount?: string | number;
-    
+
 }
 
 export interface DealerProfile {
@@ -114,7 +118,7 @@ async function fetchOrderItems(orderId: string): Promise<OrderItem[]> {
         // Normalize new-style items into OrderItem shape used below
         return (items ?? []).map((it: any, idx: number) => ({
             orderdata_id: String(it.productId ?? it.id ?? `i-${idx}`),
-            orderdata_cat_no: String(it.productId ?? it.catNo ?? it.orderdata_cat_no ?? ""),
+            orderdata_cat_no: resolveCatalogueNumber(it),
             orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
             orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
             orderdata_discount: String(it.discountAmount ?? it.orderdata_discount ?? 0),
@@ -139,6 +143,86 @@ async function fetchOrderItems(orderId: string): Promise<OrderItem[]> {
     }
 }
 
+export function extractOrderNoteFromRemarks(value: unknown): string {
+    if (typeof value !== "string") return "";
+
+    const match = value.match(/Order note:\s*([^|]+)/i);
+    return match?.[1]?.trim() || "";
+}
+
+/**
+ * Pure helper that resolves the invoice remark from multiple sources,
+ * following the priority order:
+ *
+ *   1. orderNote   (displayOrder.order_note)
+ *   2. note        (displayOrder.note)
+ *   3. savedNote   (from /api/order-notes)
+ *   4. orderRemark (order-level "Order note:" text)
+ *   5. itemRemarks (item-level "Order note:" text — first match only)
+ *   6. reason      (displayOrder.reason)
+ *   7. "N/A"
+ */
+export function resolveInvoiceRemark({
+    orderNote,
+    note,
+    savedNote,
+    orderRemark,
+    itemRemarks,
+    reason,
+}: {
+    orderNote?: unknown;
+    note?: unknown;
+    savedNote?: unknown;
+    orderRemark?: unknown;
+    itemRemarks?: unknown[];
+    reason?: unknown;
+}): string {
+    // 1 & 2: direct order note fields
+    const direct = String(orderNote || note || "").trim();
+    if (direct) return direct;
+
+    // 3: saved note from MongoDB
+    const saved = typeof savedNote === "string" ? savedNote.trim() : "";
+    if (saved) return saved;
+
+    // 4: order-level "Order note:" extraction
+    const fromOrderRemark = extractOrderNoteFromRemarks(orderRemark);
+    if (fromOrderRemark) return fromOrderRemark;
+
+    // 5: item-level "Order note:" — first unique match
+    if (Array.isArray(itemRemarks)) {
+        const fromItems = itemRemarks
+            .map((r) => extractOrderNoteFromRemarks(r))
+            .find(Boolean);
+        if (fromItems) return fromItems;
+    }
+
+    // 6: reason fallback
+    const reasonStr = typeof reason === "string" ? reason.trim() : "";
+    if (reasonStr) return reasonStr;
+
+    // 7: nothing found
+    return "N/A";
+}
+
+async function fetchSavedOrderNote(orderId: string): Promise<string> {
+    try {
+        const response = await fetch(
+            `/api/order-notes?order_id=${encodeURIComponent(orderId)}`,
+            { cache: "no-store" }
+        );
+
+        if (!response.ok) return "";
+
+        const json = await response.json();
+        const note = json?.data?.[0]?.note;
+
+        return typeof note === "string" ? note.trim() : "";
+    } catch {
+        return "";
+    }
+}
+
 // Parse PACK OF column from description HTML table: returns { catNo → packSize }
 function parsePackSizes(html: string): Record<string, number> {
     const result: Record<string, number> = {};
@@ -156,7 +240,7 @@ function parsePackSizes(html: string): Record<string, number> {
 
     [...tbodyMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/gi)].forEach(tr => {
         const cells = [...tr[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
-          .map(m => m[1].replace(/<[^>]*>/g, "").trim());
+            .map(m => m[1].replace(/<[^>]*>/g, "").trim());
         const catNo = cells[0];
         const packStr = cells[packIdx] ?? "1";
         const n = parseInt(packStr, 10);
@@ -230,6 +314,35 @@ function cell(
     doc.text(text, tx, y + h * 0.62, { align: opts.align ?? "left" });
 }
 
+
+function resolveCatalogueNumber(item: any): string {
+    const directValue =
+        item.orderdata_cat_no ??
+        item.variantCode ??
+        item.variant_code ??
+        item.product_cat ??
+        item.catNo ??
+        item.cat_no ??
+        item.catalogueNumber ??
+        item.catalogue_number ??
+        item.catalogue_no ??
+        item.sku ??
+        "";
+
+    if (String(directValue).trim()) {
+        return String(directValue).trim();
+    }
+
+    const remarks = String(item.remark ?? item.remarks ?? "");
+
+    const match = remarks.match(
+        /Cat\.?\s*No\.?\s*:\s*([^|,\n]+)/i
+    );
+
+    return match?.[1]?.trim() || "";
+}
+
+
 // ─── Main PDF Generator ───────────────────────────────────────────────────────
 export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<Blob> {
     const dp = getDealerProfile();
@@ -265,17 +378,34 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         orderItems = await fetchOrderItems(displayOrder.order_id);
     }
 
+    // Resolve the order note used in the invoice Remarks section.
+    const savedNote = await fetchSavedOrderNote(String(displayOrder.order_id));
+
+    // Collect item-level remark strings for the helper.
+    const itemRemarkStrings = orderItems.flatMap((item) =>
+        [item.remark, item.remarks].filter(Boolean)
+    );
+
+    const invoiceRemark = resolveInvoiceRemark({
+        orderNote: (displayOrder as any).order_note,
+        note: (displayOrder as any).note,
+        savedNote,
+        orderRemark: (displayOrder as any).remark ?? (displayOrder as any).remarks,
+        itemRemarks: itemRemarkStrings,
+        reason: displayOrder.reason,
+    });
+
     const doc = new jsPDF("p", "mm", "a4");
     const PW = doc.internal.pageSize.getWidth();
     const ML = 14;
     const MR = 14;
     const CW = PW - ML - MR;
 
-    const amounts  = resolveOrderAmounts(displayOrder);
-    const gross    = amounts.gross;
+    const amounts = resolveOrderAmounts(displayOrder);
+    const gross = amounts.gross;
     const discount = amounts.discountAmount;
-    const net      = amounts.netPayable;
-    const invNo    = invoiceNumber(displayOrder.order_id);
+    const net = amounts.netPayable;
+    const invNo = invoiceNumber(displayOrder.order_id);
 
     // Shared inner padding used consistently everywhere
     const PAD = 4;
@@ -330,8 +460,8 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     doc.setFontSize(11);
     const isApproved = (displayOrder as any).accept_order === "1" || Number(displayOrder.mtstatus ?? 0) >= 2 || String(displayOrder.mtstatus ?? "").toLowerCase().includes("completed");
     const titleStr = isApproved ? "ORDER INVOICE" : "PURCHASE ORDER";
-    const titleW   = doc.getTextWidth(titleStr);
-    const titleX   = PW / 2;
+    const titleW = doc.getTextWidth(titleStr);
+    const titleX = PW / 2;
     doc.text(titleStr, titleX, y, { align: "center" });
     doc.setLineWidth(0.35);
     doc.line(titleX - titleW / 2, y + 0.8, titleX + titleW / 2, y + 0.8);
@@ -340,24 +470,24 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
 
     // ── META TABLE ────────────────────────────────────────────────────────────
     const half = CW / 2;
-    const LBW  = 32;
-    const VW   = half - LBW;
-    const RH   = 6;
+    const LBW = 32;
+    const VW = half - LBW;
+    const RH = 6;
 
     const metaRows: [string, string, string, string][] = [
-        [isApproved ? "Invoice No" : "Purchase Order No",  invNo,
-         isApproved ? "Invoice Date" : "PO Date", moment(displayOrder.order_date).format("DD-MM-YYYY")],
-        ["Order Date",  moment(displayOrder.order_date).format("DD-MM-YYYY"),
-         "Order Time",  moment(displayOrder.order_date).format("hh:mm A")],
-        ["Dealer",      dp?.Dealer_Name || displayOrder.Dealer_Name || "—",
-         "Outstanding Date", displayOrder.outstandingDate ? moment(displayOrder.outstandingDate).format("DD-MM-YYYY") : "—"],
+        [isApproved ? "Invoice No" : "Purchase Order No", invNo,
+        isApproved ? "Invoice Date" : "PO Date", moment(displayOrder.order_date).format("DD-MM-YYYY")],
+        ["Order Date", moment(displayOrder.order_date).format("DD-MM-YYYY"),
+            "Order Time", moment(displayOrder.order_date).format("hh:mm A")],
+        ["Dealer", dp?.Dealer_Name || displayOrder.Dealer_Name || "—",
+            "Outstanding Date", displayOrder.outstandingDate ? moment(displayOrder.outstandingDate).format("DD-MM-YYYY") : "—"],
     ];
 
     metaRows.forEach(([l1, v1, l2, v2], i) => {
         const ry = y + i * RH;
-        cell(doc, ML,          ry, LBW, RH, l1, { bold: true });
-        cell(doc, ML + LBW,    ry, VW,  RH, v1);
-        cell(doc, ML + half,   ry, LBW, RH, l2, { bold: true });
+        cell(doc, ML, ry, LBW, RH, l1, { bold: true });
+        cell(doc, ML + LBW, ry, VW, RH, v1);
+        cell(doc, ML + half, ry, LBW, RH, l2, { bold: true });
         cell(doc, ML + half + LBW, ry, VW, RH, v2);
     });
 
@@ -367,30 +497,30 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const SEC_HDR_H = 6;
 
     const dealerLines: [string, string][] = [];
-    if (dp?.Dealer_Name)    dealerLines.push(["Name",    dp.Dealer_Name]);
+    if (dp?.Dealer_Name) dealerLines.push(["Name", dp.Dealer_Name]);
     if (dp?.Dealer_Address) dealerLines.push(["Address", dp.Dealer_Address]);
-    if (dp?.Dealer_City)    dealerLines.push(["City",    dp.Dealer_City]);
-    if (dp?.gst)            dealerLines.push(["GST No",  dp.gst]);
-    if (dp?.Dealer_Number)  dealerLines.push(["Phone",   dp.Dealer_Number]);
-    if (dp?.Dealer_Email)   dealerLines.push(["Email",   dp.Dealer_Email]);
+    if (dp?.Dealer_City) dealerLines.push(["City", dp.Dealer_City]);
+    if (dp?.gst) dealerLines.push(["GST No", dp.gst]);
+    if (dp?.Dealer_Number) dealerLines.push(["Phone", dp.Dealer_Number]);
+    if (dp?.Dealer_Email) dealerLines.push(["Email", dp.Dealer_Email]);
     if (dealerLines.length === 0 && displayOrder.Dealer_Name)
         dealerLines.push(["Name", displayOrder.Dealer_Name]);
 
-    const ROW_STEP    = 5.2;
+    const ROW_STEP = 5.2;
     const DEALER_BOD_H = Math.max(28, dealerLines.length * ROW_STEP + 10);
     const LAB_W = 24;   // label column inside dealer boxes
 
-    cell(doc, ML,        y, half, SEC_HDR_H, "Details of Dealer / Vendor", { bold: true });
-    cell(doc, ML + half, y, half, SEC_HDR_H, "Ship To Details",            { bold: true });
+    cell(doc, ML, y, half, SEC_HDR_H, "Details of Dealer / Vendor", { bold: true });
+    cell(doc, ML + half, y, half, SEC_HDR_H, "Ship To Details", { bold: true });
     y += SEC_HDR_H;
 
-    doc.rect(ML,        y, half, DEALER_BOD_H);
+    doc.rect(ML, y, half, DEALER_BOD_H);
     doc.rect(ML + half, y, half, DEALER_BOD_H);
 
     // Dealer rows — PAD from left, LAB_W for label column
     dealerLines.forEach(([label, value], i) => {
         const lineY = y + 7 + i * ROW_STEP;
-        doc.setFont("Helvetica", "bold");   doc.setFontSize(7.5);
+        doc.setFont("Helvetica", "bold"); doc.setFontSize(7.5);
         doc.text(`${label} :`, ML + PAD, lineY);
         doc.setFont("Helvetica", "normal");
         const wrapped = doc.splitTextToSize(value, half - PAD - LAB_W - PAD);
@@ -401,8 +531,8 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const shipAddr = dp?.Dealer_shipto
         || "Omsons Glassware Pvt. Ltd., KHATA No. 278/364 AND 285/372 HADBAST No. 66, Ambala, Haryana 133104";
 
-    doc.setFont("Helvetica", "bold");   doc.setFontSize(7.5);
-    doc.text("Name :",    ML + half + PAD, y + 7);
+    doc.setFont("Helvetica", "bold"); doc.setFontSize(7.5);
+    doc.text("Name :", ML + half + PAD, y + 7);
     doc.text("Address :", ML + half + PAD, y + 13);
     doc.setFont("Helvetica", "normal"); doc.setFontSize(7);
     doc.text(dp?.Dealer_Name || displayOrder.Dealer_Name || "—", ML + half + PAD + LAB_W, y + 7);
@@ -469,7 +599,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             const rowNet = rowGross - rowDiscount;
 
             const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks);
-            const description = `${item.product_name || item.orderdata_cat_no || "—"}${isPriority ? "\n[PRIORITY DELIVERY]" : ""}`;
+            const productName = String(item.product_name || "").trim();
+            const catalogueNumber = resolveCatalogueNumber(itemAny);
+            const description = `${productName || catalogueNumber || "\u2014"}${productName && catalogueNumber ? ` \u2014 Cat. No: ${catalogueNumber}` : ""}${isPriority ? "\n[PRIORITY DELIVERY]" : ""}`;
 
             totalQty += qty;
             totalPieces += pieces;
@@ -478,27 +610,27 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             sumNet += rowNet;
 
             itemRows.push([
-                { content: String(idx + 1).padStart(2, "0"),          styles: { halign: "center" } },
-                { content: description,                                styles: { halign: "left" } },
-                { content: String(qty),                                styles: { halign: "center" } },
-                { content: `${qty} x ${pack}`,                         styles: { halign: "center" } },
-                { content: String(pieces),                             styles: { halign: "center" } },
-                { content: item.product_unit || "Pcs",                 styles: { halign: "center" } },
-                { content: fmt(rowGross),                              styles: { halign: "right"  } },
-                { content: fmt(rowDiscount),                           styles: { halign: "right"  } },
-                { content: fmt(rowNet),                                styles: { halign: "right"  } },
+                { content: String(idx + 1).padStart(2, "0"), styles: { halign: "center" } },
+                { content: description, styles: { halign: "left" } },
+                { content: String(qty), styles: { halign: "center" } },
+                { content: `${qty} x ${pack}`, styles: { halign: "center" } },
+                { content: String(pieces), styles: { halign: "center" } },
+                { content: item.product_unit || "Pcs", styles: { halign: "center" } },
+                { content: fmt(rowGross), styles: { halign: "right" } },
+                { content: fmt(rowDiscount), styles: { halign: "right" } },
+                { content: fmt(rowNet), styles: { halign: "right" } },
             ]);
         });
         // After iterating, append totals row using sums
         itemRows.push([
-            { content: "Total", colSpan: 2,                    styles: { halign: "right", fontStyle: "bold" } },
-            { content: String(totalQty),                        styles: { halign: "center", fontStyle: "bold" } },
-            { content: "",                                     styles: {} },
-            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
-            { content: "",                                     styles: {} },
-            { content: fmt(sumGross),                           styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(sumDiscount),                        styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(sumNet),                             styles: { halign: "right", fontStyle: "bold" } },
+            { content: "Total", colSpan: 2, styles: { halign: "right", fontStyle: "bold" } },
+            { content: String(totalQty), styles: { halign: "center", fontStyle: "bold" } },
+            { content: "", styles: {} },
+            { content: String(totalPieces), styles: { halign: "center", fontStyle: "bold" } },
+            { content: "", styles: {} },
+            { content: fmt(sumGross), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(sumDiscount), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(sumNet), styles: { halign: "right", fontStyle: "bold" } },
         ]);
     } else {
         // Fallback: single row with whatever info we have
@@ -507,44 +639,44 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         const fpieces = totalQty * fpack;
         totalPieces = fpieces;
         itemRows.push([
-            { content: "01",                                                   styles: { halign: "center" } },
-            { content: displayOrder.product_name || "Omsons Glassware Products",       styles: { halign: "left"   } },
-            { content: String(totalQty),                                         styles: { halign: "center" } },
-            { content: `${totalQty} x ${fpack}`,                                 styles: { halign: "center" } },
-            { content: String(fpieces),                                          styles: { halign: "center" } },
-            { content: "Pcs",                                                  styles: { halign: "center" } },
-            { content: fmt(gross),                                               styles: { halign: "right"  } },
-            { content: fmt(discount),                                            styles: { halign: "right"  } },
-            { content: fmt(net),                                                 styles: { halign: "right"  } },
+            { content: "01", styles: { halign: "center" } },
+            { content: (() => { const pn = String(displayOrder.product_name || "").trim(); const cn = String((displayOrder as any).orderdata_cat_no || "").trim(); return `${pn || cn || "Omsons Glassware Products"}${pn && cn ? ` \u2014 Cat. No: ${cn}` : ""}`; })(), styles: { halign: "left" } },
+            { content: String(totalQty), styles: { halign: "center" } },
+            { content: `${totalQty} x ${fpack}`, styles: { halign: "center" } },
+            { content: String(fpieces), styles: { halign: "center" } },
+            { content: "Pcs", styles: { halign: "center" } },
+            { content: fmt(gross), styles: { halign: "right" } },
+            { content: fmt(discount), styles: { halign: "right" } },
+            { content: fmt(net), styles: { halign: "right" } },
         ]);
     }
 
     // Totals row (now includes pieces)
     if (orderItems.length === 0) {
         itemRows.push([
-            { content: "Total", colSpan: 2,                    styles: { halign: "right", fontStyle: "bold" } },
-            { content: String(totalQty),                        styles: { halign: "center", fontStyle: "bold" } },
-            { content: "",                                     styles: {} },
-            { content: String(totalPieces),                     styles: { halign: "center", fontStyle: "bold" } },
-            { content: "",                                     styles: {} },
-            { content: fmt(gross),                              styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(discount),                           styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(net),                                styles: { halign: "right", fontStyle: "bold" } },
+            { content: "Total", colSpan: 2, styles: { halign: "right", fontStyle: "bold" } },
+            { content: String(totalQty), styles: { halign: "center", fontStyle: "bold" } },
+            { content: "", styles: {} },
+            { content: String(totalPieces), styles: { halign: "center", fontStyle: "bold" } },
+            { content: "", styles: {} },
+            { content: fmt(gross), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(discount), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(net), styles: { halign: "right", fontStyle: "bold" } },
         ]);
     }
 
     autoTable(doc, {
         startY: y,
         head: [[
-            { content: "Sr\nNo",          styles: { halign: "center", cellWidth: 9 } },
-            { content: "Description",      styles: { halign: "left",   cellWidth: "auto" as const } },
-            { content: "Qty",              styles: { halign: "center", cellWidth: 12 } },
-            { content: "Pack\nSize",        styles: { halign: "center", cellWidth: 17 } },
-            { content: "Pieces",           styles: { halign: "center", cellWidth: 13 } },
-            { content: "UOM",              styles: { halign: "center", cellWidth: 11 } },
-            { content: "Gross Amt\n(Rs.)", styles: { halign: "right",  cellWidth: 23 } },
-            { content: "Discount\n(Rs.)",  styles: { halign: "right",  cellWidth: 21 } },
-            { content: "Net Amt\n(Rs.)",   styles: { halign: "right",  cellWidth: 21 } },
+            { content: "Sr\nNo", styles: { halign: "center", cellWidth: 9 } },
+            { content: "Description", styles: { halign: "left", cellWidth: "auto" as const } },
+            { content: "Qty", styles: { halign: "center", cellWidth: 12 } },
+            { content: "Pack\nSize", styles: { halign: "center", cellWidth: 17 } },
+            { content: "Pieces", styles: { halign: "center", cellWidth: 13 } },
+            { content: "UOM", styles: { halign: "center", cellWidth: 11 } },
+            { content: "Gross Amt\n(Rs.)", styles: { halign: "right", cellWidth: 23 } },
+            { content: "Discount\n(Rs.)", styles: { halign: "right", cellWidth: 21 } },
+            { content: "Net Amt\n(Rs.)", styles: { halign: "right", cellWidth: 21 } },
         ]],
         body: itemRows,
         margin: { left: ML, right: MR },
@@ -564,10 +696,26 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     y = (doc as any).lastAutoTable.finalY + 3;
 
     // ── REMARKS + T&C (left) | SUMMARY (right) ───────────────────────────────
-    const SUM_W  = 78;
+    const SUM_W = 78;
     const LEFT_W = CW - SUM_W;
-    const REM_H  = 22;
 
+    const remarkTextWidth = LEFT_W - PAD * 2 - 4;
+    const allRemarkLines = doc.splitTextToSize(
+        invoiceRemark || "N/A",
+        remarkTextWidth
+    ) as string[];
+
+    // Prevent unusually long notes from breaking the invoice layout.
+    const remarkLines = allRemarkLines.slice(0, 6);
+
+    if (allRemarkLines.length > 6) {
+        remarkLines[5] = `${remarkLines[5]}...`;
+    }
+
+    const REM_H = Math.max(
+        22,
+        PAD * 2 + 8 + remarkLines.length * 4
+    );
     // T&C height: PAD top + header line + gap + lines + PAD bottom
     const TC_LINE_H = 4;
     const TC_H = PAD + 5 + 3 + tcLines().length * TC_LINE_H + PAD;
@@ -579,11 +727,11 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     doc.text("Remarks", ML + PAD, y + PAD + 2);
     doc.rect(ML + PAD, y + PAD + 4, LEFT_W - PAD * 2, REM_H - PAD * 2 - 4);
     doc.setFont("Helvetica", "normal"); doc.setFontSize(7.5);
-    const remarkLines = displayOrder.reason
-        ? doc.splitTextToSize(displayOrder.reason, LEFT_W - PAD * 2 - 4)
-        : ["N/A"];
-    doc.text(remarkLines, ML + PAD + 2, y + PAD + 4 + 4);
-
+    doc.text(
+        remarkLines,
+        ML + PAD + 2,
+        y + PAD + 8
+    );
     // T&C — all four sides use PAD
     const tcY = y + REM_H;
     doc.rect(ML, tcY, LEFT_W, TC_H);
@@ -599,17 +747,17 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     );
 
     // Summary
-    const sx    = ML + LEFT_W;
+    const sx = ML + LEFT_W;
     const ROW_H = 6;
     const sumItems = [
-        { label: "Gross Amount", value: fmt(gross),    bold: false },
-        { label: "Discount",     value: fmt(discount),  bold: false },
-        { label: "Net Amount",   value: fmt(net),       bold: true  },
+        { label: "Gross Amount", value: fmt(gross), bold: false },
+        { label: "Discount", value: fmt(discount), bold: false },
+        { label: "Net Amount", value: fmt(net), bold: true },
     ];
     doc.rect(sx, y, SUM_W, TOTAL_L_H);
     doc.setFont("Helvetica", "bold"); doc.setFontSize(8.5);
     doc.text("Summary", sx + PAD, y + 6);
-    const LW  = SUM_W * 0.55;
+    const LW = SUM_W * 0.55;
     const VW2 = SUM_W - LW;
     let sy = y + 10;
     sumItems.forEach(item => {
@@ -629,7 +777,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     doc.setFont("Helvetica", "bold"); doc.setFontSize(7.5);
     doc.text("Amount in Words:", ML + PAD, y + FRH * 0.63);
     doc.setFont("Helvetica", "normal");
-    const wordsText    = toWords(net);
+    const wordsText = toWords(net);
     const wrappedWords = doc.splitTextToSize(wordsText, CW - 40);
     doc.text(wrappedWords[0], ML + 36, y + FRH * 0.63);
     y += FRH;
@@ -689,12 +837,12 @@ export async function uploadOrderInvoiceToSupabase(
     try {
         const summaryOverride = await fetchOrderSummaryOverride(order);
         const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
-        const invNo     = invoiceNumber(order.order_id);
+        const invNo = invoiceNumber(order.order_id);
         const timestamp = moment().format("YYYY-MM-DD_HH-mm-ss");
-        const safeInv   = invNo.replace(/[^a-z0-9-._]/gi, "_");
-        const filePath  = `invoices/${safeInv}_${timestamp}.pdf`;
+        const safeInv = invNo.replace(/[^a-z0-9-._]/gi, "_");
+        const filePath = `invoices/${safeInv}_${timestamp}.pdf`;
         const invoiceId = `${safeInv}_${timestamp}`;
-        const net       = resolveOrderAmounts(displayOrder).netPayable;
+        const net = resolveOrderAmounts(displayOrder).netPayable;
 
         const { error: upErr } = await supabase.storage
             .from("invoices")
@@ -705,15 +853,15 @@ export async function uploadOrderInvoiceToSupabase(
 
         const dp = getDealerProfile();
         const { error: dbErr } = await supabase.from("invoices").insert([{
-            invoice_id:     invoiceId,
+            invoice_id: invoiceId,
             invoice_number: invNo,
-            dealer_id:      dp?.Dealer_Id || order.order_id,
-            buyer_name:     dp?.Dealer_Name || displayOrder.Dealer_Name,
-            file_url:       urlData.publicUrl,
-            file_path:      filePath,
-            invoice_date:   displayOrder.order_date,
-            total_amount:   net,
-            created_at:     new Date().toISOString(),
+            dealer_id: dp?.Dealer_Id || order.order_id,
+            buyer_name: dp?.Dealer_Name || displayOrder.Dealer_Name,
+            file_url: urlData.publicUrl,
+            file_path: filePath,
+            invoice_date: displayOrder.order_date,
+            total_amount: net,
+            created_at: new Date().toISOString(),
         }]);
         if (dbErr) console.warn("Metadata save failed (PDF uploaded):", dbErr.message);
 
@@ -727,9 +875,9 @@ export async function uploadOrderInvoiceToSupabase(
 export async function downloadOrderInvoice(order: OrderInvoiceData): Promise<InvoiceResult> {
     try {
         const blob = await generateOrderInvoicePDF(order);
-        const url  = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
-        link.href     = url;
+        link.href = url;
         link.download = `${invoiceNumber(order.order_id).replace(/\//g, "-")}.pdf`;
         document.body.appendChild(link);
         link.click();

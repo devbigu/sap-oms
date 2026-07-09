@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import products from '../../../../../public/data/nested_omsons_products.json'
+import { buildCatalogueSearchText, normalizeText } from '@/lib/catalogue'
 
 interface Product {
   id: string
@@ -9,12 +10,16 @@ interface Product {
   categories?: string[]
   features?: string[]
   specsText?: string
+  descriptionHtml?: string
   variants?: Array<{
     id: string
     sku: string
     name: string
     specsText?: string
+    specs?: Record<string, string>
+    pack?: number
   }>
+  searchText?: string
 }
 
 interface SearchMatch {
@@ -41,6 +46,8 @@ function flattenProducts(productList: any[]): Product[] {
       categories: p.categories || [],
       features: p.features || [],
       specsText: p.specsText || '',
+      descriptionHtml: p.descriptionHtml || '',
+      searchText: buildCatalogueSearchText(p as any),
     })
 
     // Add variants
@@ -55,6 +62,13 @@ function flattenProducts(productList: any[]): Product[] {
             categories: p.categories || [],
             features: p.features || [],
             specsText: v.specsText || '',
+            descriptionHtml: p.descriptionHtml || '',
+            searchText: buildCatalogueSearchText({
+              ...p,
+              sku: v.sku,
+              name: v.name,
+              variants: [v],
+            } as any),
           })
         }
       })
@@ -70,6 +84,7 @@ function flattenProducts(productList: any[]): Product[] {
  */
 function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
   const lowerQuery = query.toLowerCase().trim()
+  const normalizedQuery = normalizeText(query)
   const matches: SearchMatch[] = []
   const seen = new Set<string>()
 
@@ -147,9 +162,9 @@ function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
 
   // 4. SPECS MATCH (numbers, units, etc.)
   productList.forEach((p) => {
-    if (!seen.has(p.id) && p.specsText) {
-      const lowerSpecs = p.specsText.toLowerCase()
-      if (lowerSpecs.includes(lowerQuery)) {
+    if (!seen.has(p.id) && (p.specsText || p.searchText)) {
+      const searchable = normalizeText(`${p.specsText || ''} ${p.searchText || ''}`)
+      if (searchable.includes(normalizedQuery)) {
         matches.push({
           id: p.id,
           sku: p.sku,
@@ -175,11 +190,11 @@ function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
   productList.forEach((p) => {
     if (!seen.has(p.id)) {
       let semanticScore = 0
-      const combinedText = `${p.name} ${p.specsText || ''}`.toLowerCase()
+      const combinedText = normalizeText(`${p.name} ${p.specsText || ''} ${p.searchText || ''}`)
 
       for (const [keyword, aliases] of Object.entries(semanticAliases)) {
         if (lowerQuery.includes(keyword) || aliases.some((a) => lowerQuery.includes(a))) {
-          if (aliases.some((a) => combinedText.includes(a))) {
+          if (aliases.some((a) => combinedText.includes(normalizeText(a)))) {
             semanticScore += 40
           }
         }

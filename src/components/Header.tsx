@@ -10,6 +10,7 @@ import Cart from "@/components/Cart"
 import Link from 'next/link'
 import { useCartStore } from "@/Store/store"
 import { useRouter } from 'next/navigation'
+import { buildCatalogueSearchText } from "@/lib/catalogue"
 
 // ─────────────────────────────────────────────────────────────
 // TYPES  (matches nested_omsons_products.json schema)
@@ -233,18 +234,7 @@ const Header = () => {
       .then(r => r.json())
       .then((raw: Product[]) => {
         const indexed = raw.map(p => {
-          const parts: string[] = [
-            p.name ?? '', p.sku ?? '', p.category ?? '',
-            ...(p.categories || []),
-            ...(p.features || []),
-            // Strip HTML tags from description before indexing
-            (p.descriptionHtml || '').replace(/<[^>]*>?/gm, ''),
-            // Flatten all variant SKUs, names, and specsText
-            ...(p.variants?.flatMap(v => [
-              v.sku ?? '', v.id ?? '', v.name ?? '', v.specsText ?? ''
-            ]) || [])
-          ]
-          return { ...p, _searchIndex: parts.join(' ').toLowerCase() }
+          return { ...p, _searchIndex: buildCatalogueSearchText(p as any) }
         })
         setAllProducts(indexed)
       })

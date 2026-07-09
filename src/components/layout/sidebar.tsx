@@ -47,6 +47,7 @@ const NAV: Record<Role, NavItem[]> = {
   staff: [
     { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                                icon: <LayoutDashboard size={15} /> },
     {                     label: "Profile",       href: "/dashboard/staff/profile",                        icon: <SquareUser size={15} />      },
+    {                     label: "Discount Requests", href: "/dashboard/staff/discount-requests",           icon: <Receipt size={15} />         },
     { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
     { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },

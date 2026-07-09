@@ -6,6 +6,11 @@ import { useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import { Suspense } from 'react';
 import { SIDEBAR_CATEGORIES } from '@/lib/categories';
+import {
+  getCatalogueProductDescriptor,
+  groupProductsBySection,
+  matchesCatalogueQuery,
+} from '@/lib/catalogue';
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
@@ -97,6 +102,7 @@ function ProductCard({ product }: { product: Product }) {
   const variantCount = product.variants?.length ?? 0;
   const leafCat = product.category ?? "";
   const bullet = parseBullets(product.features)[0] ?? "";
+  const descriptor = getCatalogueProductDescriptor(product);
   const multiVariant = variantCount > 1;
   const inStock = product.variants?.some(v => v.inStock) ?? false;
 
@@ -158,6 +164,12 @@ function ProductCard({ product }: { product: Product }) {
           <h3 style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", lineHeight: 1.4, margin: 0 }}>
             {product.name}
           </h3>
+
+          {descriptor && (
+            <p style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.45, margin: 0 }}>
+              {descriptor}
+            </p>
+          )}
 
           {bullet && (
             <p style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.5, margin: 0 }}>
@@ -255,18 +267,7 @@ function ProductsContent() {
   const filtered = useMemo(() => {
     let d = [...allData];
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      d = d.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q) ||
-        (p.categories ?? []).some(c => c.toLowerCase().includes(q)) ||
-        (p.variants ?? []).some(v =>
-          v.sku.toLowerCase().includes(q) ||
-          v.id.toLowerCase().includes(q) ||
-          v.name.toLowerCase().includes(q) ||
-          v.specsText.toLowerCase().includes(q)
-        )
-      );
+      d = d.filter(p => matchesCatalogueQuery(p, searchQuery));
     }
     if (selectedCats.length > 0) d = d.filter(p => selectedCats.some(cat => matchesSidebarCat(p, cat)));
     if (inStockOnly) d = d.filter(p => p.variants?.some(v => v.inStock) ?? false);
@@ -280,6 +281,7 @@ function ProductsContent() {
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const start      = (currentPage - 1) * PAGE_SIZE;
   const displayed  = filtered.slice(start, start + PAGE_SIZE);
+  const groupedDisplayed = useMemo(() => groupProductsBySection(displayed), [displayed]);
 
   const toggle = (cat: string) => {
     setSelectedCats(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
@@ -410,8 +412,22 @@ function ProductsContent() {
           )}
 
           {!loading && displayed.length > 0 && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-              {displayed.map(p => <ProductCard key={p.sku} product={p} />)}
+            <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+              {groupedDisplayed.map(section => (
+                <section key={section.section}>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+                    <div>
+                      <h2 style={{ fontSize: 18, fontWeight: 700, color: "#0f172a", margin: 0 }}>{section.section}</h2>
+                      <p style={{ fontSize: 12, color: "#94a3b8", margin: "4px 0 0" }}>
+                        {section.products.length} product{section.products.length === 1 ? "" : "s"} on this page
+                      </p>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
+                    {section.products.map(p => <ProductCard key={p.sku} product={p} />)}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
 

@@ -4,6 +4,11 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import axios from 'axios';
 import { useCartStore } from "@/Store/store";
+import {
+  getCatalogueProductDescriptor,
+  getCatalogueProductLabel,
+  getCatalogueSection,
+} from '@/lib/catalogue';
 
 // ─────────────────────────────────────────────────────────────
 // TYPES  (matches nested_omsons_products.json)
@@ -246,6 +251,8 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   const related    = product ? getRelated(allProducts, product) : [];
   const inStock    = product?.variants?.some(v => v.inStock) ?? false;
   const stickyInCart = cart.some(c => c.id === selectedVariantSKU);
+  const sectionLabel = product ? getCatalogueSection(product) : "";
+  const descriptor = product ? getCatalogueProductDescriptor(product) : "";
 
   // ── Cart actions ──────────────────────────────────────────
   const addVariant = (vSku: string, name: string, pricePaise: number, qty: number, packSize: number, image?: string) => {
@@ -314,7 +321,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
               <span>{product.category}</span>
             </>}
             <span>/</span>
-            <span style={{ color: "#0f172a", fontWeight: 600 }}>{product.name}</span>
+            <span style={{ color: "#0f172a", fontWeight: 600 }}>{getCatalogueProductLabel(product)}</span>
           </div>
         </div>
 
@@ -356,11 +363,24 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                 </div>
               )}
 
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                {sectionLabel && (
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", background: "#eff6ff", color: "#1e40af", borderRadius: 4, letterSpacing: ".05em", textTransform: "uppercase" }}>
+                    {sectionLabel}
+                  </span>
+                )}
+                {descriptor && (
+                  <span style={{ fontSize: 11, padding: "3px 8px", background: "#f8fafc", color: "#475569", borderRadius: 4 }}>
+                    {descriptor}
+                  </span>
+                )}
+              </div>
+
               <span style={{ fontSize: 11, color: "#94a3b8", display: "inline-block", marginBottom: 8, background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>
                 SKU: {product.sku}
               </span>
 
-              <h1 style={{ fontSize: 26, fontWeight: 300, lineHeight: 1.3, margin: "0 0 16px" }}>{product.name}</h1>
+              <h1 style={{ fontSize: 26, fontWeight: 300, lineHeight: 1.3, margin: "0 0 16px" }}>{getCatalogueProductLabel(product)}</h1>
 
               {/* Features / bullets */}
               {product.features?.length > 0 && (

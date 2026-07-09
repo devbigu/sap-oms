@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
+import { getDb, getMongoClient } from "@/lib/mongodb";
 import { fetchExternalDealer, getLedgerSnapshot } from "@/lib/ledgerSystem";
+import walletUtils from "@/lib/wallet";
 
 /**
  * POST /api/ledger/[dealerId]/pay
@@ -14,8 +15,9 @@ export async function POST(
     const { dealerId } = await params;
     const body = await req.json();
     const { amount, paymentMode, narration, referenceId, paymentDate } = body;
+    const paymentAmount = Number(amount);
 
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
       return NextResponse.json(
         { success: false, message: "Valid amount is required" },
         { status: 400 }
@@ -36,13 +38,12 @@ export async function POST(
       );
     }
 
-    // Create ledger transaction record
     const date = paymentDate ? new Date(paymentDate) : new Date();
 
-    const transaction = {
+    const paymentTransaction = {
       Dealer_Id: dealerId,
       type: "payment",
-      amount: parseFloat(amount),
+      amount: paymentAmount,
       paymentMode: paymentMode || "Cash",
       narration: narration || `Payment received - ${paymentMode || "Cash"}`,
       referenceId: referenceId || "",
@@ -51,15 +52,53 @@ export async function POST(
       updatedAt: new Date(),
     };
 
+    if (paymentMode === "Wallet") {
+      const client = await getMongoClient();
+      try {
+        await client.withSession(async (session) => {
+          await session.withTransaction(async () => {
+            const walletDebit = await walletUtils.applyWalletChange(db, dealerId, "debit", paymentAmount, {
+              session,
+              reference: referenceId || paymentTransaction.referenceId || "",
+              note: narration || `Wallet payment - ${paymentMode || "Wallet"}`,
+            });
+
+            await db.collection("ledger_transactions").insertOne(
+              {
+                ...paymentTransaction,
+                walletBalanceBefore: walletDebit.balanceBefore,
+                walletBalanceAfter: walletDebit.balanceAfter,
+              },
+              { session }
+            );
+          });
+        });
+      } catch (walletError: any) {
+        const status = Number(walletError?.status || walletError?.statusCode || 500);
+        return NextResponse.json(
+          { success: false, message: walletError.message },
+          { status: Number.isFinite(status) ? status : 500 }
+        );
+      } finally {
+        await client.close();
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: "Wallet payment recorded successfully",
+        transaction: paymentTransaction,
+      });
+    }
+
     const result = await db
       .collection("ledger_transactions")
-      .insertOne(transaction);
+      .insertOne(paymentTransaction);
 
     return NextResponse.json({
       success: true,
       message: "Payment recorded successfully",
       transactionId: result.insertedId.toString(),
-      transaction,
+      transaction: paymentTransaction,
     });
   } catch (error: any) {
     console.error("[POST /api/ledger/[dealerId]/pay]", error);

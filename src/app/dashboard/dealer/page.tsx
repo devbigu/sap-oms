@@ -39,11 +39,18 @@ const NAV_ITEMS = [
   { label: "Add Order", href: "/dashboard/dealer/AddOrderForm",  icon: <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg> },
 ];
 
+// function fmtCurrency(n: number) {
+//   if (n >= 1_000_000) return `₹${(n / 1_000_000).toFixed(2)}M`;
+//   if (n >= 1_000)     return `₹${(n / 1_000).toFixed(1)}K`;
+//   return `₹${n}`;
+// }
+
 function fmtCurrency(n: number) {
-  if (n >= 1_000_000) return `₹${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000)     return `₹${(n / 1_000).toFixed(1)}K`;
-  return `₹${n}`;
+  return `₹${Number(n || 0).toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+  })}`;
 }
+
 function fmtNum(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;

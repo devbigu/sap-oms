@@ -39,6 +39,25 @@ interface Dealer {
   walletBalance: number
 }
 
+interface WalletTransaction {
+  id: string
+  type: 'credit' | 'debit'
+  amount: number
+  balanceBefore: number
+  balanceAfter: number
+  reference?: string
+  note?: string
+  createdAt?: string | null
+}
+
+interface WalletResponse {
+  success: boolean
+  dealerId: string
+  balance: number
+  transactions: WalletTransaction[]
+  updatedAt?: string | null
+}
+
 interface LedgerSummaryData {
   totalDebit: number
   totalCredit: number
@@ -366,6 +385,20 @@ export default function DealerLedgerPage() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const {
+    data: walletData,
+    isLoading: isWalletLoading,
+    refetch: refetchWallet,
+  } = useQuery<WalletResponse>({
+    queryKey: ['dealer-wallet', dealerId],
+    queryFn: async () => {
+      const res = await axios.get(`/api/wallet/${dealerId}`)
+      return res.data
+    },
+    enabled: !!dealerId,
+    staleTime: 60 * 1000,
+  })
+
   useEffect(() => {
     setTransactionsPage(1)
   }, [dealerId])
@@ -413,6 +446,7 @@ export default function DealerLedgerPage() {
         setToast({ text: 'Payment recorded successfully', type: 'success' })
         await Promise.all([
           refetchLedger(),
+          refetchWallet(),
           queryClient.invalidateQueries({ queryKey: ['dealer-transactions', dealerId] }),
         ])
       }
@@ -542,6 +576,9 @@ export default function DealerLedgerPage() {
         <DealerInfoCard
           dealer={dealer || null}
           isLoading={isLedgerLoading}
+          walletBalance={walletData?.balance}
+          walletTransactions={walletData?.transactions}
+          walletLoading={isWalletLoading}
           onPayMoneyClick={() => setPayModalOpen(true)}
         />
 

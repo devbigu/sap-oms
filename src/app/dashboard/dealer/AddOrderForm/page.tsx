@@ -5,10 +5,19 @@ import React, { useState, useEffect, useRef, Suspense } from "react";
 import axios from "axios";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast, ToastContainer } from "react-toastify";
-import Select from "react-select";
 import moment from "moment";
 import { useCartStore } from "@/Store/store";
 import discountUtils from "@/lib/discount";
+import {
+  buildCatalogueIndex,
+  findCatalogueEntry,
+  getCatalogueProductDescriptor,
+  getCatalogueProductLabel,
+  getCatalogueSection,
+  getVariantLabel,
+  type CatalogueIndex,
+  type CatalogueProduct,
+} from "@/lib/catalogue";
 import {
   saveDraft,
   updateDraft,
@@ -30,9 +39,11 @@ type ProductRow = {
   price: number; // rupees per unit
   packSize: number;
   isPriority?: boolean;
+  catalogueSection?: string;
+  catalogueProductSku?: string;
+  catalogueVariantSku?: string;
 };
 
-type OptionType = { value: string; label: string; price: number };
 type CustomDiscountScope = "order" | "product";
 
 type CustomDiscountRequest = {
@@ -335,12 +346,12 @@ function AddOrderPageInner() {
   const [reorderLoading, setReorderLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
+  const [catalogueIndex, setCatalogueIndex] = useState<CatalogueIndex<CatalogueProduct> | null>(null);
   const [variantLookup, setVariantLookup] = useState<Record<string, ProductMeta>>({});
   const [shipto, setShipto] = useState("");
   const [refno, setRefno] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [tab, setTab] = useState<"manual" | "excel">("manual");
-  const [mounted, setMounted] = useState(false);
   const [expectedOrderNumber, setExpectedOrderNumber] = useState("");
   const [expectedOrderLoading, setExpectedOrderLoading] = useState(false);
   const seededRef = useRef(false);
@@ -373,8 +384,6 @@ function AddOrderPageInner() {
 
   const [arr1, setArr] = useState<ProductRow[]>([emptyRow()]);
 
-  useEffect(() => { setMounted(true); }, []);
-
   useEffect(() => {
     const stored = localStorage.getItem("UserData");
     const loggedIn = localStorage.getItem("status");
@@ -388,9 +397,10 @@ function AddOrderPageInner() {
     if (!user) return;
     Promise.all([
       fetch(`${BACKEND_URL}/productname`).then(r => r.json()),
-      axios.get("/data/products.json").then(r => r.data),
+      axios.get("/data/nested_omsons_products.json").then(r => r.data),
     ]).then(([apiData, localData]) => {
       setProducts(apiData.data ?? []);
+      setCatalogueIndex(buildCatalogueIndex(localData ?? []));
       setVariantLookup(buildVariantLookup(localData));
     }).catch(() => {
       fetch(`${BACKEND_URL}/productname`)
@@ -514,15 +524,21 @@ function AddOrderPageInner() {
                 String(p.product_cat).trim() === String(item.variantCode).trim() ||
                 String(p.product_id).trim() === String(item.variantCode).trim()
             );
+            const catalogueMatch = catalogueIndex ? findCatalogueEntry(catalogueIndex, String(item.variantCode).trim()) : null;
+            const catalogueProduct = catalogueMatch?.product ?? null;
+            const catalogueVariant = catalogueMatch?.variant ?? null;
             return {
               key: i + 1,
-              productname: match ? String(match.product_cat) : item.variantCode,
-              displayName: match ? (match.product_name ?? item.productName) : item.productName,
-              variantCode: item.variantCode,
+              productname: catalogueVariant?.sku ?? (match ? String(match.product_cat) : item.variantCode),
+              displayName: catalogueProduct ? getCatalogueProductLabel(catalogueProduct) : (match ? (match.product_name ?? item.productName) : item.productName),
+              variantCode: catalogueVariant?.sku ?? item.variantCode,
               producQuanity: item.quantity,
               price: cartPriceToRupees(item.unitPrice, match?.product_price),
-              packSize: item.packSize ?? 1,
+              packSize: catalogueVariant?.pack ?? item.packSize ?? 1,
               isPriority: item.isPriority ?? item.priority ?? false,
+              catalogueSection: catalogueProduct ? getCatalogueSection(catalogueProduct) : "",
+              catalogueProductSku: catalogueProduct?.sku ?? "",
+              catalogueVariantSku: catalogueVariant?.sku ?? "",
             };
           });
           setArr(rows);
@@ -533,7 +549,7 @@ function AddOrderPageInner() {
       })
       .catch(() => toast.error("Could not load cart draft."));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromCart, user, products, reorderIdParam]);
+  }, [fromCart, user, products, catalogueIndex, reorderIdParam]);
 
   // ── Seed rows from cart ───────────────────────────────────────────────────
   useEffect(() => {
@@ -552,39 +568,43 @@ function AddOrderPageInner() {
           String(p.product_cat).trim() === String(item.id).trim() ||
           String(p.product_id).trim() === String(item.id).trim()
       );
+      const catalogueMatch = catalogueIndex ? findCatalogueEntry(catalogueIndex, String(item.id).trim()) : null;
+      const catalogueProduct = catalogueMatch?.product ?? null;
+      const catalogueVariant = catalogueMatch?.variant ?? null;
       const nameParts = item.name.split(" - ");
       const productName = nameParts[0] ?? item.name;
-      const variantCode = nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id;
+      const variantCode = catalogueVariant?.sku ?? (nameParts.length > 1 ? nameParts[nameParts.length - 1] : item.id);
       const localMeta = variantLookup[item.id];
-      const packSize = localMeta?.packSize ?? (item as any).packSize ?? 1;
+      const packSize = catalogueVariant?.pack ?? localMeta?.packSize ?? (item as any).packSize ?? 1;
       const cartPrice = Number(item.price);
       const apiPrice = match ? Number(match.product_price) : 0;
       const price = cartPriceToRupees(cartPrice, apiPrice);
 
       return {
         key: i + 1,
-        productname: match ? String(match.product_cat) : String(item.id),
-        displayName: match ? (match.product_name ?? productName) : productName,
+        productname: variantCode,
+        displayName: catalogueProduct ? getCatalogueProductLabel(catalogueProduct) : (match ? (match.product_name ?? productName) : productName),
         variantCode,
         producQuanity: item.quantity,
         price,
         packSize,
         isPriority: item.isPriority ?? false,
+        catalogueSection: catalogueProduct ? getCatalogueSection(catalogueProduct) : "",
+        catalogueProductSku: catalogueProduct?.sku ?? "",
+        catalogueVariantSku: catalogueVariant?.sku ?? "",
       };
     });
 
     setArr(cartRows);
-  }, [products, cartItems, variantLookup, draftIdParam, reorderIdParam]);
+  }, [products, cartItems, variantLookup, catalogueIndex, draftIdParam, reorderIdParam]);
 
   // ── Discount ──────────────────────────────────────────────────────────────
   const subtotalPaise = arr1.reduce((acc, row) => acc + rowSubtotalPaise(row), 0);
   const subtotal = subtotalPaise / 100;
   const dealerDiscount = safePositiveNumber(user?.discount);
   const couponDiscount = appliedCoupon?.pct ?? 0;
-  const baseDiscountPayload = calculateStackedDiscount(subtotal, {
-    allocatedDiscountPercent: dealerDiscount,
-    couponDiscountPercent: couponDiscount,
-  });
+
+  // ── Custom / reorder discount resolution ─────────────────────────────
   const currentOrderSignature = buildOrderSignature(arr1, subtotal);
   const productRows = arr1.filter((r) => r.productname);
   const selectedCustomDiscountProduct = productRows.find((r) => getProductKey(r) === customDiscountProductKey) ?? productRows[0] ?? null;
@@ -634,26 +654,59 @@ function AddOrderPageInner() {
       (r) => r.status === "pending" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
     );
   };
+
+  // ── Sequential discount calculation ──────────────────────────────────
+  // Base discount payload — uses the new sequential slab logic.
+  // Slab is determined from amountBeforeSlab, NOT from gross subtotal.
+  const baseDiscountPayload = calculateStackedDiscount(subtotal, {
+    allocatedDiscountPercent: dealerDiscount,
+    couponDiscountPercent: couponDiscount,
+    approvedCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
+  });
+
   const getRowDiscountPercent = (row: ProductRow) => {
-    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
+    const globalPercent = baseDiscountPayload.baseDiscountPercent;
     const productRequest = getApprovedProductCustomRequest(row);
     if (productRequest) {
       return Math.min(100, Math.max(globalPercent, Number(productRequest.requestedDiscountPercent) || 0));
     }
     return globalPercent;
   };
-  const discountAmountFromRows = productRows.reduce((acc, row) => (
+
+  // Per-row base-discount amounts (slab is NOT included at row level)
+  const baseDiscountAmountFromRows = productRows.reduce((acc, row) => (
     acc + (rowSubtotalPaise(row) / 100) * (getRowDiscountPercent(row) / 100)
   ), 0);
+
+  // amountBeforeSlab from row-level base discounts
+  const amountBeforeSlabFromRows = roundRupees(Math.max(0, subtotal - baseDiscountAmountFromRows));
+
+  // Determine slab from the actual amountBeforeSlab
+  const slabPercentFromRows = amountBeforeSlabFromRows >= 500000 ? 5
+    : amountBeforeSlabFromRows >= 250000 ? 2 : 0;
+  const slabAmountFromRows = roundRupees(amountBeforeSlabFromRows * (slabPercentFromRows / 100));
+
+  // Final payable after sequential application
+  const finalPayableFromRows = roundRupees(Math.max(0, amountBeforeSlabFromRows - slabAmountFromRows));
+  const totalDiscountAmountFromRows = roundRupees(baseDiscountAmountFromRows + slabAmountFromRows);
   const effectiveDiscountPercent = subtotal > 0
-    ? Number(payloadAmount((discountAmountFromRows / subtotal) * 100))
+    ? Number(payloadAmount((totalDiscountAmountFromRows / subtotal) * 100))
     : 0;
+
   const discountPayload = {
     ...baseDiscountPayload,
+    // Override with row-level computed values
+    baseDiscountAmount: Number(payloadAmount(baseDiscountAmountFromRows)),
+    amountBeforeSlab: Number(payloadAmount(amountBeforeSlabFromRows)),
+    slabDiscountPercent: slabPercentFromRows,
+    slabDiscountAmount: Number(payloadAmount(slabAmountFromRows)),
     discountPercent: effectiveDiscountPercent,
-    discountAmount: Number(payloadAmount(discountAmountFromRows)),
-    finalPayableAmount: Number(payloadAmount(Math.max(0, subtotal - discountAmountFromRows))),
+    discountAmount: Number(payloadAmount(totalDiscountAmountFromRows)),
+    effectiveTotalDiscountPercent: effectiveDiscountPercent,
+    effectiveTotalDiscountAmount: Number(payloadAmount(totalDiscountAmountFromRows)),
+    finalPayableAmount: Number(payloadAmount(finalPayableFromRows)),
   };
+
   const activeDiscount: number = discountPayload.discountPercent;
   const discountAmountPaise = toPaise(discountPayload.discountAmount);
   const finalPayablePaise = toPaise(discountPayload.finalPayableAmount);
@@ -733,6 +786,7 @@ function AddOrderPageInner() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           dealerId: user.Dealer_Id,
+          staffId: String(user.assignedstaff ?? ""),
           dealerName: user.Dealer_Name,
           dealerCode: user.Dealer_Dealercode,
           dealerEmail: user.Dealer_Email,
@@ -794,6 +848,7 @@ function AddOrderPageInner() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           dealerId: user.Dealer_Id,
+          staffId: String(user.assignedstaff ?? ""),
           dealerName: user.Dealer_Name,
           dealerCode: user.Dealer_Dealercode,
           dealerEmail: user.Dealer_Email,
@@ -840,29 +895,105 @@ function AddOrderPageInner() {
     }
   };
 
-  // ── Select options ────────────────────────────────────────────────────────
-  const optionList: OptionType[] = products.map((p) => ({
-    value: String(p.product_cat),
-    label: `${p.product_cat} — ${p.product_name}${p.product_discription ? ` (${p.product_discription})` : ""}`,
-    price: Number(p.product_price),
-  }));
+  // ── Catalogue hierarchy helpers ───────────────────────────────────────────
+  const catalogueSections = catalogueIndex?.sections ?? [];
 
-  const getSelectValue = (row: ProductRow): OptionType | null =>
-    optionList.find((o) => String(o.value).trim() === String(row.productname).trim()) ?? null;
+  const resolveRowSelection = (row: ProductRow) => {
+    const lookupSku = String(row.catalogueVariantSku || row.productname || row.variantCode || "").trim();
+    const entry = catalogueIndex ? findCatalogueEntry(catalogueIndex, lookupSku) : null;
+    const product = entry?.product ?? null;
+    const variant = entry?.variant ?? null;
+    const section = row.catalogueSection || (product ? getCatalogueSection(product) : "");
+    const productSku = row.catalogueProductSku || product?.sku || product?.id || "";
+    const variantSku = row.catalogueVariantSku || variant?.sku || (variant ? variant.sku : "");
 
-  // ── Row helpers ───────────────────────────────────────────────────────────
-  const handleChangeSelect = (opt: OptionType, idx: number) => {
-    const labelParts = opt.label.split(" — ");
-    const catNo = labelParts[0]?.trim() ?? opt.value;
-    const rest = labelParts.slice(1).join(" — ");
-    const namePart = rest.split("(")[0].trim();
-    const localMeta = variantLookup[opt.value];
-    const packSize = localMeta?.packSize ?? 1;
+    return { section, productSku, variantSku, product, variant };
+  };
 
+  const getProductsForSection = (section: string) =>
+    catalogueSections.find((item) => item.section === section)?.products ?? [];
+
+  const getVariantsForProduct = (productSku: string) => {
+    const product = catalogueIndex?.productsBySku[String(productSku)] ?? null;
+    return product?.variants ?? [];
+  };
+
+  const resetRowSelection = (idx: number) => {
     setArr((prev) => {
-      const n = [...prev];
-      n[idx] = { ...n[idx], productname: opt.value, displayName: namePart || opt.label, variantCode: catNo, price: opt.price, packSize };
-      return n;
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        productname: "",
+        displayName: "",
+        variantCode: "",
+        price: 0,
+        packSize: 1,
+        catalogueSection: "",
+        catalogueProductSku: "",
+        catalogueVariantSku: "",
+      };
+      return next;
+    });
+  };
+
+  const handleSectionSelect = (idx: number, section: string) => {
+    setArr((prev) => {
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        catalogueSection: section,
+        catalogueProductSku: "",
+        catalogueVariantSku: "",
+        productname: "",
+        displayName: "",
+        variantCode: "",
+        price: 0,
+        packSize: 1,
+      };
+      return next;
+    });
+  };
+
+  const handleProductSelect = (idx: number, productSku: string) => {
+    const product = catalogueIndex?.productsBySku[String(productSku)];
+    setArr((prev) => {
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        catalogueSection: product ? getCatalogueSection(product) : next[idx].catalogueSection ?? "",
+        catalogueProductSku: productSku,
+        catalogueVariantSku: "",
+        productname: "",
+        displayName: product ? getCatalogueProductLabel(product) : "",
+        variantCode: "",
+        price: 0,
+        packSize: 1,
+      };
+      return next;
+    });
+  };
+
+  const handleVariantSelect = (idx: number, variantSku: string) => {
+    const entry = catalogueIndex ? findCatalogueEntry(catalogueIndex, variantSku) : null;
+    const product = entry?.product;
+    const variant = entry?.variant;
+    if (!product || !variant) return;
+
+    const displayName = getCatalogueProductLabel(product);
+    setArr((prev) => {
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        catalogueSection: getCatalogueSection(product),
+        catalogueProductSku: product.sku,
+        catalogueVariantSku: variant.sku,
+        productname: variant.sku,
+        displayName,
+        variantCode: variant.sku,
+        price: Number(variant.price ?? 0),
+        packSize: Number(variant.pack ?? 1),
+      };
+      return next;
     });
   };
 
@@ -1063,8 +1194,13 @@ function AddOrderPageInner() {
     fd.append("discountAmount", payloadAmount(discountPayload.discountAmount));
     fd.append("finalPayableAmount", payloadAmount(discountPayload.finalPayableAmount));
     fd.append("allocatedDiscountPercent", String(discountPayload.allocatedDiscountPercent));
-    fd.append("slabDiscountPercent", String(discountPayload.slabDiscountPercent));
     fd.append("couponDiscountPercent", String(discountPayload.couponDiscountPercent));
+    // Sequential slab discount fields — base and slab sent separately
+    fd.append("baseDiscountPercent", String(discountPayload.baseDiscountPercent));
+    fd.append("baseDiscountAmount", payloadAmount(discountPayload.baseDiscountAmount));
+    fd.append("amountBeforeSlab", payloadAmount(discountPayload.amountBeforeSlab));
+    fd.append("slabDiscountPercent", String(discountPayload.slabDiscountPercent));
+    fd.append("slabDiscountAmount", payloadAmount(discountPayload.slabDiscountAmount));
     if (orderNote.trim()) {
       fd.append("note", orderNote.trim());
       fd.append("order_note", orderNote.trim());
@@ -1178,25 +1314,6 @@ function AddOrderPageInner() {
   );
 
   const docDate = moment().format("MMMM Do YYYY");
-
-  const selectStyles = {
-    control: (base: any, state: any) => ({
-      ...base,
-      border: `1px solid ${state.isFocused ? "#6366f1" : "#e5e7eb"}`,
-      borderRadius: 10, boxShadow: state.isFocused ? "0 0 0 3px rgba(99,102,241,0.1)" : "none",
-      fontSize: 13, minHeight: 38, fontFamily: "inherit",
-      "&:hover": { borderColor: "#d1d5db" },
-    }),
-    option: (base: any, state: any) => ({
-      ...base, fontSize: 13,
-      backgroundColor: state.isSelected ? "#6366f1" : state.isFocused ? "#f5f5ff" : "white",
-      color: state.isSelected ? "#fff" : "#111827",
-    }),
-    placeholder: (base: any) => ({ ...base, color: "#9ca3af", fontSize: 13 }),
-    singleValue: (base: any) => ({ ...base, color: "#111827", fontSize: 13 }),
-    menu: (base: any) => ({ ...base, borderRadius: 10, border: "1px solid #e5e7eb", boxShadow: "0 8px 30px rgba(0,0,0,0.1)" }),
-    indicatorSeparator: () => ({ display: "none" }),
-  };
 
   return (
     <>
@@ -1410,14 +1527,14 @@ function AddOrderPageInner() {
               </div>
               <div className={`text-[13.5px] font-semibold rounded-xl px-3 py-2.5 border flex items-center justify-between ${hasAnyDiscount ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-slate-600 bg-slate-50 border-slate-200"
                 }`}>
-                <span>{discountPayload.discountPercent}% total discount</span>
-                <span className="text-[11px] font-medium">{hasApprovedCustomDiscount ? "custom approved" : `${dealerDiscount}% allocated`}</span>
+                <span>{discountPayload.discountPercent}% effective discount</span>
+                <span className="text-[11px] font-medium">{hasApprovedCustomDiscount ? "custom approved" : `${discountPayload.baseDiscountPercent}% base${hasSlabDiscount ? ` + ${discountPayload.slabDiscountPercent}% slab` : ""}`}</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Discount Stack */}
+        {/* Discount Stack — Sequential Breakdown */}
         <div className={`border rounded-2xl p-5 mb-5 ${hasAnyDiscount ? "bg-emerald-50/70 border-emerald-200" : "bg-white border-gray-200"
           }`}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1429,9 +1546,9 @@ function AddOrderPageInner() {
                 </svg>
               </div>
               <div>
-                <p className="text-[13px] font-semibold text-gray-900">Combined Discount</p>
+                <p className="text-[13px] font-semibold text-gray-900">Discount Breakdown</p>
                 <p className={`text-[12px] mt-0.5 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"}`}>
-                  Allocated discount + slab discount + coupon code
+                  Base discounts applied first, then slab on remaining amount
                 </p>
               </div>
             </div>
@@ -1447,39 +1564,69 @@ function AddOrderPageInner() {
                 <span>✏️</span>
                 Custom Discount
               </button>
-              <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Subtotal</p>
-                <p className="font-mono text-[13px] font-semibold text-gray-900">{fmt(subtotalPaise)}</p>
-              </div>
-              <div className={`rounded-xl border px-3 py-2 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"
-                }`}>
-                <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Savings</p>
-                <p className="font-mono text-[13px] font-bold">{hasAnyDiscount ? `-${fmt(discountAmountPaise)}` : fmt(0)}</p>
-              </div>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4">
+
+          {/* Step-by-step discount breakdown */}
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {/* 1. Gross Subtotal */}
             <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Allocated</p>
-              <p className="mt-1 font-mono text-[13px] font-semibold text-gray-900">{discountPayload.allocatedDiscountPercent}%</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Gross Subtotal</p>
+              <p className="mt-1 font-mono text-[13px] font-semibold text-gray-900">{fmt(subtotalPaise)}</p>
             </div>
-            <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Slab</p>
+
+            {/* 2. Base Discount */}
+            <div className={`rounded-xl border px-3 py-2 ${discountPayload.baseDiscountPercent > 0 ? "border-amber-200 bg-amber-50/50" : "border-gray-200 bg-white"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Base Discount</p>
+              <p className={`mt-1 font-mono text-[13px] font-semibold ${discountPayload.baseDiscountPercent > 0 ? "text-amber-700" : "text-gray-500"}`}>
+                {discountPayload.baseDiscountPercent}%
+              </p>
+              <p className="mt-0.5 text-[10px] text-gray-400 font-mono">
+                {discountPayload.baseDiscountAmount > 0 ? `−${fmt(toPaise(discountPayload.baseDiscountAmount))}` : "—"}
+              </p>
+              <div className="mt-1 space-y-0.5 text-[9px] text-gray-400">
+                {discountPayload.allocatedDiscountPercent > 0 && <p>Allocated: {discountPayload.allocatedDiscountPercent}%</p>}
+                {discountPayload.couponDiscountPercent > 0 && <p>Coupon: {discountPayload.couponDiscountPercent}% {appliedCoupon?.code ? `(${appliedCoupon.code})` : ""}</p>}
+                {(discountPayload.approvedCustomDiscountPercent ?? 0) > 0 && <p>Custom: {discountPayload.approvedCustomDiscountPercent}%</p>}
+              </div>
+            </div>
+
+            {/* 3. Amount Before Slab */}
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Before Slab</p>
+              <p className="mt-1 font-mono text-[13px] font-bold text-indigo-700">
+                {fmt(toPaise(discountPayload.amountBeforeSlab))}
+              </p>
+              <p className="mt-0.5 text-[9px] text-indigo-400">Slab determined from this</p>
+            </div>
+
+            {/* 4. Slab Discount */}
+            <div className={`rounded-xl border px-3 py-2 ${hasSlabDiscount ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200 bg-white"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Slab Discount</p>
               <p className={`mt-1 font-mono text-[13px] font-semibold ${hasSlabDiscount ? "text-emerald-700" : "text-gray-500"}`}>
                 {discountPayload.slabDiscountPercent}%
               </p>
+              <p className="mt-0.5 text-[10px] text-gray-400 font-mono">
+                {discountPayload.slabDiscountAmount > 0 ? `−${fmt(toPaise(discountPayload.slabDiscountAmount))}` : "—"}
+              </p>
               <p className="mt-0.5 text-[10px] text-gray-400">{discountStatusMessage}</p>
             </div>
-            <div className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Coupon</p>
-              <p className={`mt-1 font-mono text-[13px] font-semibold ${appliedCoupon ? "text-violet-700" : "text-gray-500"}`}>
-                {discountPayload.couponDiscountPercent}%
+
+            {/* 5. Effective Total Discount */}
+            <div className={`rounded-xl border px-3 py-2 ${hasAnyDiscount ? "border-emerald-200 bg-white" : "border-gray-200 bg-white"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Total Savings</p>
+              <p className="mt-1 font-mono text-[13px] font-bold text-emerald-700">
+                {discountPayload.discountPercent}%
               </p>
-              <p className="mt-0.5 text-[10px] text-gray-400">{appliedCoupon?.code ?? "No code applied"}</p>
+              <p className="mt-0.5 text-[10px] text-emerald-600 font-mono">
+                {discountPayload.discountAmount > 0 ? `−${fmt(discountAmountPaise)}` : "—"}
+              </p>
             </div>
-            <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Total</p>
-              <p className="mt-1 font-mono text-[13px] font-bold text-emerald-700">{discountPayload.discountPercent}%</p>
+
+            {/* 6. Final Payable */}
+            <div className="rounded-xl border border-gray-900 bg-gray-900 px-3 py-2 text-white">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Final Payable</p>
+              <p className="mt-1 font-mono text-[14px] font-bold">{fmt(finalPayablePaise)}</p>
             </div>
           </div>
         </div>
@@ -1721,7 +1868,11 @@ function AddOrderPageInner() {
                     const discAmt = Math.round(listPrice * (rowDiscountPercent / 100));
                     const rowTotal = Math.max(0, listPrice - discAmt);
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
-                    const meta = variantLookup[row.productname];
+                    const rowSelection = resolveRowSelection(row);
+                    const selectedProduct = rowSelection.product ?? catalogueIndex?.productsBySku[String(rowSelection.productSku)] ?? null;
+                    const selectedVariants = selectedProduct?.variants ?? [];
+                    const metaKey = rowSelection.variantSku || row.productname || row.variantCode;
+                    const meta = variantLookup[metaKey] ?? variantLookup[row.productname];
                     const productKey = getProductKey(row);
                     const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
                     const approvedProductReq = getApprovedProductCustomRequest(row);
@@ -1737,10 +1888,10 @@ function AddOrderPageInner() {
                           <span className="text-[11px] text-gray-300 font-mono">{String(idx + 1).padStart(2, "0")}</span>
                         </td>
                         <td className="px-3 py-3">
-                          {row.productname && (row.displayName || meta) && (
+                            {(row.displayName || selectedProduct || row.productname) && (
                             <div className="flex items-center gap-2 mb-2">
-                              {meta?.image ? (
-                                <img src={meta.image} alt={row.displayName}
+                              {meta?.image || selectedProduct?.images?.[0] ? (
+                                <img src={meta?.image || selectedProduct?.images?.[0] || ""} alt={row.displayName || selectedProduct?.name || row.productname}
                                   className="w-8 h-8 object-contain rounded border border-gray-100 bg-gray-50 flex-shrink-0" />
                               ) : (
                                 <div className="w-8 h-8 rounded border border-gray-100 bg-gray-50 flex-shrink-0 flex items-center justify-center">
@@ -1751,8 +1902,14 @@ function AddOrderPageInner() {
                               )}
                               <div className="min-w-0">
                                 <p className="text-[12px] font-semibold text-gray-800 truncate leading-tight">
-                                  {row.displayName || meta?.productName || row.productname}
+                                  {row.displayName || selectedProduct?.name || meta?.productName || row.productname}
                                 </p>
+                                {rowSelection.section && (
+                                  <p className="text-[10px] text-gray-400 truncate leading-tight mt-0.5">
+                                    {rowSelection.section}
+                                    {selectedProduct?.name ? ` · ${selectedProduct.name}` : ""}
+                                  </p>
+                                )}
                                 {row.isPriority && (
                                   <span className="inline-flex mt-1 px-2 py-0.5 bg-red-50 border border-red-200 text-red-700 rounded-full text-[10px] font-bold">
                                     Priority delivery
@@ -1761,24 +1918,56 @@ function AddOrderPageInner() {
                               </div>
                             </div>
                           )}
-                          <div className="flex items-center gap-2">
-                            <div className="min-w-[240px] flex-1">
-                              <Select
-                                options={optionList}
-                                placeholder="Search and select product…"
-                                value={getSelectValue(row)}
-                                onChange={(opt) => opt && handleChangeSelect(opt, idx)}
-                                isSearchable
-                                styles={selectStyles}
-                                menuPortalTarget={mounted ? document.body : undefined}
-                                menuPosition="fixed"
-                              />
-                            </div>
+                          <div className="flex flex-col gap-2">
+                            <select
+                              value={rowSelection.section}
+                              onChange={(e) => handleSectionSelect(idx, e.target.value)}
+                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            >
+                              <option value="">Catalogue Section</option>
+                              {catalogueSections.map((section) => (
+                                <option key={section.section} value={section.section}>
+                                  {section.section}
+                                </option>
+                              ))}
+                            </select>
+
+                            <select
+                              value={rowSelection.productSku}
+                              onChange={(e) => handleProductSelect(idx, e.target.value)}
+                              disabled={!rowSelection.section}
+                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all disabled:cursor-not-allowed disabled:bg-gray-50 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            >
+                              <option value="">Main Product</option>
+                              {getProductsForSection(rowSelection.section).map((product) => {
+                                const descriptor = getCatalogueProductDescriptor(product);
+                                return (
+                                  <option key={product.sku} value={product.sku}>
+                                    {descriptor ? `${product.name} - ${descriptor}` : product.name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            <select
+                              value={rowSelection.variantSku}
+                              onChange={(e) => handleVariantSelect(idx, e.target.value)}
+                              disabled={!rowSelection.productSku}
+                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all disabled:cursor-not-allowed disabled:bg-gray-50 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            >
+                              <option value="">Variant / Catalogue No.</option>
+                              {selectedVariants.map((variant) => (
+                                <option key={variant.sku} value={variant.sku}>
+                                  {getVariantLabel(selectedProduct ?? { id: "", sku: "", name: "", variants: [] }, variant)}
+                                </option>
+                              ))}
+                            </select>
+
                             <button
                               type="button"
                               onClick={() => togglePriority(idx)}
                               title="Mark this product as priority"
-                              className={`inline-flex h-[38px] shrink-0 items-center gap-2 rounded-xl border px-3 text-[11px] font-bold transition-colors ${row.isPriority
+                              className={`inline-flex h-[38px] w-fit items-center gap-2 rounded-xl border px-3 text-[11px] font-bold transition-colors ${row.isPriority
                                   ? "bg-red-600 border-red-600 text-white shadow-sm"
                                   : "bg-white border-red-200 text-red-600 hover:bg-red-50"
                                 }`}
@@ -1974,7 +2163,7 @@ function AddOrderPageInner() {
               </div>
             </div>
 
-            {/* Order summary */}
+            {/* Order summary — sequential discount breakdown */}
             <div className={`px-6 py-5 border-t border-gray-100 ${hasAnyDiscount ? "bg-emerald-50/60" : "bg-gray-50"
               }`}>
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -1986,31 +2175,45 @@ function AddOrderPageInner() {
                   </p>
                   <p className={`text-[12px] font-semibold mt-2 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"
                     }`}>
-                    Total discount: {discountPayload.discountPercent}% · Slab: {discountStatusMessage}
+                    Base: {discountPayload.baseDiscountPercent}%
+                    {hasSlabDiscount ? ` → Slab: ${discountPayload.slabDiscountPercent}%` : ""}
+                    {" · "}{discountStatusMessage}
                   </p>
                 </div>
 
-                <div className="w-full lg:max-w-md">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="w-full lg:max-w-xl">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Subtotal</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Gross Subtotal</p>
                       <p className="mt-1 font-mono text-[14px] font-semibold text-gray-900">{fmt(subtotalPaise)}</p>
                     </div>
-                    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Discount Percentage</p>
-                      <p className={`mt-1 font-mono text-[14px] font-semibold ${hasAnyDiscount ? "text-emerald-700" : "text-gray-600"}`}>
-                        {discountPayload.discountPercent}%
+                    <div className={`rounded-xl border px-4 py-3 ${discountPayload.baseDiscountPercent > 0 ? "border-amber-200 bg-amber-50/60 text-amber-700" : "border-gray-200 bg-white text-gray-600"}`}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Base Discount</p>
+                      <p className="mt-1 font-mono text-[14px] font-semibold">
+                        {discountPayload.baseDiscountPercent}%
+                        {discountPayload.baseDiscountAmount > 0 ? ` · −${fmt(toPaise(discountPayload.baseDiscountAmount))}` : ""}
                       </p>
                     </div>
-                    <div className={`rounded-xl border px-4 py-3 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"
-                      }`}>
-                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Discount Amount</p>
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Amount Before Slab</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-indigo-700">{fmt(toPaise(discountPayload.amountBeforeSlab))}</p>
+                    </div>
+                    <div className={`rounded-xl border px-4 py-3 ${hasSlabDiscount ? "border-emerald-200 bg-emerald-50/60 text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Slab Discount</p>
+                      <p className="mt-1 font-mono text-[14px] font-semibold">
+                        {discountPayload.slabDiscountPercent}%
+                        {discountPayload.slabDiscountAmount > 0 ? ` · −${fmt(toPaise(discountPayload.slabDiscountAmount))}` : ""}
+                      </p>
+                    </div>
+                    <div className={`rounded-xl border px-4 py-3 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Effective Total</p>
                       <p className="mt-1 font-mono text-[15px] font-bold">
-                        {hasAnyDiscount ? `-${fmt(discountAmountPaise)}` : fmt(0)}
+                        {discountPayload.discountPercent}%
+                        {hasAnyDiscount ? ` · −${fmt(discountAmountPaise)}` : ""}
                       </p>
                     </div>
                     <div className="rounded-xl border border-gray-900 bg-gray-900 px-4 py-3 text-white">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Final Payable Amount</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Final Payable</p>
                       <p className="mt-1 font-mono text-[17px] font-bold">{fmt(finalPayablePaise)}</p>
                     </div>
                   </div>

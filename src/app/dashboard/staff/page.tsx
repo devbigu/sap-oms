@@ -14,8 +14,9 @@ import {
 } from "recharts"
 import {
   LayoutDashboard, UserRoundPlus, ClipboardList,
-  BookOpen, LogOut, ChevronUp, ChevronDown, Search, AlertCircle, Eye,
+  BookOpen, LogOut, ChevronUp, ChevronDown, Search, AlertCircle, Eye, Receipt,
 } from "lucide-react"
+import { formatRupee, resolveCurrentMonthTotal } from "@/lib/companySales"
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { label: "Add Dealer",      href: "/Dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} /> },
   { label: "Order List",      href: "/Pages/Ordermanagement",                    icon: <ClipboardList size={15} /> },
   { label: "Pending Orders",  href: "/Pages/Ordermanagement/outstandingorders",  icon: <ClipboardList size={15} /> },
+  { label: "Discount Requests", href: "/dashboard/staff/discount-requests",      icon: <Receipt size={15} /> },
 ]
 
 // ─────────────────────────────────────────────────────────────
@@ -69,6 +71,26 @@ type MonthlyData = { month: string[]; total: string[] }
 type TopOrder    = { order_id: string; total: string }
 type TopDealer   = { Dealer_Name: string; total: string }
 type SortKey     = "Dealer_Name" | "Dealer_City" | "creditdays" | "currentlimit" | "discount"
+type DiscountRequest = {
+  id: string
+  dealerId: string
+  dealerName?: string
+  requestedDiscountPercent: number
+  currentDiscountPercent: number
+  subtotal: number
+  currentDiscountAmount: number
+  requestedDiscountAmount: number
+  currentFinalPayable: number
+  requestedFinalPayable: number
+  discountScope?: "order" | "product"
+  targetProduct?: {
+    displayName?: string
+    variantCode?: string
+    productname?: string
+  } | null
+  status: "pending" | "approved" | "rejected"
+  createdAt: string
+}
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -158,6 +180,7 @@ function ExecutiveDashboard() {
   const [
     ordersQ,
     dealersQ,
+    discountRequestsQ,
     monthlyOrdersQ,
     monthlyValueQ,
     topOrdersQ,
@@ -175,6 +198,12 @@ function ExecutiveDashboard() {
         queryFn:   () => fetchJson<{ data: StaffDealer[] }>(`${BACKEND_URL}/staffDealers?id=${user!.staff_id}`),
         enabled,
         select:    (d: { data: StaffDealer[] }) => d.data ?? [],
+      },
+      {
+        queryKey:  ["staffDiscountRequests", user?.staff_id],
+        queryFn:   () => fetchJson<{ data: DiscountRequest[] }>(`/api/custom-discount-requests?staff_id=${encodeURIComponent(user!.staff_id)}&status=pending&limit=200`),
+        enabled,
+        select:    (d: { data: DiscountRequest[] }) => d.data ?? [],
       },
       {
         queryKey:  ["monthlyOrders"],
@@ -208,22 +237,28 @@ function ExecutiveDashboard() {
   // ── Derived values ────────────────────────────────────────────
   const orders  = (ordersQ.data  as OrderItem[]   | undefined) ?? []
   const dealers = (dealersQ.data as StaffDealer[] | undefined) ?? []
+  const discountRequests = (discountRequestsQ.data as DiscountRequest[] | undefined) ?? []
   const totalOrders  = monthlyOrdersQ.data as MonthlyData | undefined
   const totalValue   = monthlyValueQ.data  as MonthlyData | undefined
   const topOrders    = (topOrdersQ.data  as TopOrder[]  | undefined) ?? []
   const topDealers   = (topDealersQ.data as TopDealer[] | undefined) ?? []
+  const companyWideOrders = resolveCurrentMonthTotal(totalOrders)
+  const companyWideSales = resolveCurrentMonthTotal(totalValue)
 
   const stats = useMemo(() => ({
     myOrders:      orders.length,
     totalRevenue:  orders.reduce((s, o) => s + Number(o.total || 0), 0),
     pendingOrders: orders.filter(o => o.status === "pending" || o.order_status === "0").length,
     myDealers:     dealers.length,
-  }), [orders, dealers])
+    pendingDiscountRequests: discountRequests.length,
+  }), [orders, dealers, discountRequests])
 
   const activeDealers = useMemo(
     () => dealers.filter(d => Number(d.status) === 1).length,
     [dealers]
   )
+
+  const companyMonthLoading = monthlyOrdersQ.isLoading || monthlyValueQ.isLoading
 
   const nearCreditLimitDealers = useMemo(
     () => dealers.filter(d => {
@@ -235,14 +270,15 @@ function ExecutiveDashboard() {
   )
 
   // Any query still loading the very first time
-  const globalLoading = !authChecked || [ordersQ, dealersQ].some(q => q.isLoading)
+  const globalLoading = !authChecked || [ordersQ, dealersQ, discountRequestsQ].some(q => q.isLoading)
   // Any hard error
-  const anyError = [ordersQ, dealersQ, monthlyOrdersQ, monthlyValueQ, topOrdersQ, topDealersQ]
+  const anyError = [ordersQ, dealersQ, discountRequestsQ, monthlyOrdersQ, monthlyValueQ, topOrdersQ, topDealersQ]
     .find(q => q.isError)
 
   const refetchAll = () => {
     ordersQ.refetch()
     dealersQ.refetch()
+    discountRequestsQ.refetch()
     monthlyOrdersQ.refetch()
     monthlyValueQ.refetch()
     topOrdersQ.refetch()
@@ -290,10 +326,27 @@ function ExecutiveDashboard() {
   const roleLabel  = getRoleLabel(user.staff_roletype)
 
   const STAT_CONFIG = [
+    {
+      label: "Company-wide Sales",
+      value: formatRupee(companyWideSales),
+      badge: "badge-purple",
+      badgeLabel: "This month",
+      href: "/dashboard/staff/sales",
+      sub: "Sales across all distributors",
+    },
+    {
+      label: "Company-wide Orders",
+      value: companyWideOrders.toLocaleString("en-IN"),
+      badge: "badge-blue",
+      badgeLabel: "This month",
+      href: "/dashboard/staff/sales",
+      sub: "Orders across all distributors",
+    },
     { label: "Pending Orders", value: stats.pendingOrders, badge: "badge-amber",  badgeLabel: "Action needed" },
     { label: "My Dealers",     value: stats.myDealers,     badge: "badge-green",  badgeLabel: "Assigned" },
+    { label: "Discount Requests", value: stats.pendingDiscountRequests, badge: "badge-amber", badgeLabel: `${stats.pendingDiscountRequests} pending` },
     { label: "Total Orders",   value: stats.myOrders,      badge: "badge-blue",   badgeLabel: "All time" },
-    { label: "Total Revenue",  value: fmtCurrency(stats.totalRevenue), badge: "badge-purple", badgeLabel: `₹${stats.totalRevenue.toLocaleString("en-IN")}` },
+    { label: "Total Revenue",  value: formatRupee(stats.totalRevenue), badge: "badge-purple", badgeLabel: `₹${stats.totalRevenue.toLocaleString("en-IN")}` },
   ]
 
   const SortIcon = ({ k }: { k: SortKey }) =>
@@ -394,7 +447,9 @@ function ExecutiveDashboard() {
         .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
         .stat-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 18px; padding: 18px 20px; transition: box-shadow .2s, transform .2s; }
         .stat-card:hover { box-shadow: 0 6px 24px rgba(0,0,0,0.07); transform: translateY(-2px); }
+        .stat-link-card { display: block; text-decoration: none; color: inherit; }
         .stat-lbl { font-size: 10px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 8px; }
+        .stat-sub { font-size: 11.5px; color: #6b7280; margin-top: 7px; }
         .stat-val { font-size: 28px; font-weight: 700; color: #111827; letter-spacing: -.03em; font-family: 'DM Mono', monospace; line-height: 1; }
         .stat-badge { display: inline-flex; align-items: center; gap: 3px; margin-top: 9px; padding: 2px 9px; border-radius: 20px; font-size: 10.5px; font-weight: 600; }
         .badge-amber  { background: #fef3c7; color: #b45309; }
@@ -545,15 +600,28 @@ function ExecutiveDashboard() {
             {/* ── Stat Cards ── */}
             <div className="stat-grid">
               {STAT_CONFIG.map(s => (
-                <div key={s.label} className="stat-card">
-                  <div className="stat-lbl">{s.label}</div>
-                  <div className="font-sans font-bold">
-                    {globalLoading
-                      ? <span className="shimmer" style={{ display: "inline-block", width: 60, height: 26 }} />
-                      : s.value}
+                s.href ? (
+                  <Link key={s.label} href={s.href} className="stat-card stat-link-card">
+                    <div className="stat-lbl">{s.label}</div>
+                    <div className="font-sans font-bold">
+                      {companyMonthLoading
+                        ? <span className="shimmer" style={{ display: "inline-block", width: 72, height: 26 }} />
+                        : s.value}
+                    </div>
+                    <div className="stat-sub">{s.sub}</div>
+                    <div className={`stat-badge ${s.badge}`}>{s.badgeLabel}</div>
+                  </Link>
+                ) : (
+                  <div key={s.label} className="stat-card">
+                    <div className="stat-lbl">{s.label}</div>
+                    <div className="font-sans font-bold">
+                      {globalLoading
+                        ? <span className="shimmer" style={{ display: "inline-block", width: 60, height: 26 }} />
+                        : s.value}
+                    </div>
+                    <div className={`stat-badge ${s.badge}`}>{s.badgeLabel}</div>
                   </div>
-                  <div className={`stat-badge ${s.badge}`}>{s.badgeLabel}</div>
-                </div>
+                )
               ))}
             </div>
 
@@ -581,6 +649,20 @@ function ExecutiveDashboard() {
                 <div className="panel-sub">Orders awaiting action from assigned dealers</div>
                 <div className={`stat-badge badge-amber${stats.pendingOrders > 0 ? " pulse-amber" : ""}`}>{stats.pendingOrders} pending</div>
                 <Link href="/Pages/Ordermanagement/outstandingorders" className="quick-action-btn">+ Review orders</Link>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-lbl">Discount Requests</div>
+                <div className="font-sans font-bold">
+                  {discountRequestsQ.isLoading
+                    ? <span className="shimmer" style={{ display: "inline-block", width: 60, height: 26 }} />
+                    : stats.pendingDiscountRequests}
+                </div>
+                <div className="panel-sub">Pending discount approvals linked to your staff ID</div>
+                <div className={`stat-badge badge-amber${stats.pendingDiscountRequests > 0 ? " pulse-amber" : ""}`}>
+                  {stats.pendingDiscountRequests} pending
+                </div>
+                <Link href="/dashboard/staff/discount-requests" className="quick-action-btn">+ View requests</Link>
               </div>
 
               <div className="stat-card">
