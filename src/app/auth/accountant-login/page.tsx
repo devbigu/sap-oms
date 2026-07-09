@@ -130,14 +130,7 @@ export default function AccountantLogin() {
                 </label>
               </div>
 
-              {/* Demo account */}
-              <button
-                type="button"
-                onClick={() => { setEmail("demo@omsons.com"); setPassword("demo1234"); setError("") }}
-                className="mt-3 h-10 w-full rounded-full border border-dashed border-slate-200 bg-white px-4 text-[12px] font-semibold text-slate-500 transition hover:border-[#593df4] hover:text-[#593df4]"
-              >
-                Use demo account
-              </button>
+             
 
               {/* Error message */}
               {error && (

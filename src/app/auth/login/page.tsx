@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import axios from "axios"
-import { Eye, EyeOff } from "lucide-react"
+import { AlertTriangle, Eye, EyeOff } from "lucide-react"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -16,12 +16,31 @@ const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/login/login_verify"
 export default function Login() {
   const router = useRouter()
 
+  const [showNotice, setShowNotice] = useState(true)
   const [roletype, setRoletype] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    if (!showNotice) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowNotice(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [showNotice])
 
   const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -255,6 +274,55 @@ export default function Login() {
 
         </section>
       </div>
+
+      {showNotice && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-md"
+          onClick={() => setShowNotice(false)}
+          aria-hidden="true"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="testing-phase-title"
+            className="w-full max-w-[460px] rounded-3xl bg-white p-6 text-slate-900 shadow-[0_30px_80px_rgba(15,23,42,0.28)] ring-1 ring-black/5 sm:p-7"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 flex-none items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-1 ring-amber-100">
+                <AlertTriangle size={24} strokeWidth={2.2} />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p
+                  id="testing-phase-title"
+                  className="text-base font-semibold tracking-[-0.01em] text-slate-950 sm:text-lg"
+                >
+                  Testing Phase Notice
+                </p>
+                <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
+                  This software is currently undergoing final testing. Please do not place any orders today.
+                  Ordering will be available from tomorrow.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
+              Thank you for your patience and cooperation.
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowNotice(false)}
+                className="inline-flex h-11 items-center justify-center rounded-full bg-amber-500 px-5 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(245,158,11,0.28)] transition hover:bg-amber-600 focus:outline-none focus:ring-4 focus:ring-amber-200"
+              >
+                I Understand
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

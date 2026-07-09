@@ -12,6 +12,19 @@ import {
 
 type Role    = "admin" | "dealer" | "staff" | "accountant";
 type NavItem = { label: string; href: string; icon: React.ReactNode; section?: string };
+type SidebarUser = {
+  role: Role;
+  name?: string;
+  username?: string;
+  email?: string;
+  Dealer_Name?: string;
+  Dealer_Email?: string;
+  Dealer_Number?: string;
+  Dealer_Dealercode?: string;
+  staff_name?: string;
+  staff_email?: string;
+  staff_roletype?: string;
+};
 
 const NAV: Record<Role, NavItem[]> = {
   admin: [
@@ -29,6 +42,7 @@ const NAV: Record<Role, NavItem[]> = {
     {                         label: "Discount Approvals",  href: "/dashboard/admin/custom-discount-approvals",       icon: <Receipt size={15} />         },
     { section: "Content",     label: "Slider Images",      href: "/dashboard/admin/slider",                          icon: <Images size={15} />          },
     {                         label: "Hot Items",           href: "/dashboard/admin/hot-items",                       icon: <Images size={15} />          },
+    { section: "Reports",     label: "Dealer Category Report", href: "/dashboard/admin/reports/dealer-category",     icon: <TrendingUp size={15} />      },
     { section: "Accountants", label: "Manage Accountants", href: "/dashboard/admin/manageAccountants/add-account",   icon: <ShieldCheck size={15} />     },
     { section: "Rewards",     label: "Dealer Rewards",     href: "/dashboard/admin/rewards",                         icon: <Gift size={15} />            },
   ],
@@ -52,6 +66,7 @@ const NAV: Record<Role, NavItem[]> = {
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
     { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },
     {                      label: "Dealer Ledger",  href: "/dashboard/admin/ledger",                         icon: <BookOpen size={15} />        },
+    { section: "Reports",  label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <TrendingUp size={15} />      },
   ],
   accountant: [
     { section: "Overview",  label: "Dashboard",      href: "/dashboard/accountant",                         icon: <LayoutDashboard size={15} /> },
@@ -85,7 +100,7 @@ function resolveUser() {
     if (s) { const p = JSON.parse(s); if (p?.staff_id) return { role: "staff" as Role, ...p }; }
     const a = localStorage.getItem("AdminData") || localStorage.getItem("admin");
     if (a) { const p = JSON.parse(a); return { role: "admin" as Role, ...p }; }
-  } catch (_) {}
+  } catch {}
   return null;
 }
 
@@ -101,10 +116,16 @@ function staffRoleLabel(rt?: string) {
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname              = usePathname();
   const router                = useRouter();
-  const [user,    setUser]    = useState<any>(null);
+  const [user,    setUser]    = useState<SidebarUser | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => { setUser(resolveUser()); setMounted(true); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setUser(resolveUser());
+      setMounted(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const role: Role = user?.role ?? "admin";
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import moment from 'moment'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, ChevronDown, Search, ShieldAlert, Store } from 'lucide-react'
@@ -85,6 +85,7 @@ type OrderItemsResponse = {
 
 const DEFAULT_FROM = moment().startOf('month').format('YYYY-MM-DD')
 const DEFAULT_TO = moment().endOf('month').format('YYYY-MM-DD')
+const IS_DEV = process.env.NODE_ENV !== 'production'
 
 function formatRupee(value: number) {
   return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -92,6 +93,27 @@ function formatRupee(value: number) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasStoredRole(raw: string | null, field: string, value?: string) {
+  if (!raw) return false
+  if (value === undefined) {
+    return raw.includes(`"${field}"`)
+  }
+
+  return new RegExp(`"${field}"\\s*:\\s*"${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(raw)
+}
+
+const subscribeToHydration = () => () => {}
+const getClientSnapshot = () => true
+const getServerSnapshot = () => false
+
+function useHasHydrated(): boolean {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    getClientSnapshot,
+    getServerSnapshot,
+  )
 }
 
 function dateOnly(value: unknown): string {
@@ -119,15 +141,34 @@ function withinRange(value: unknown, from: string, to: string) {
 }
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { cache: 'no-store', signal })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  const response = await fetch(url, { cache: 'no-store', signal })
+  const responseText = await response.text()
+
+  if (!response.ok) {
+    const preview = responseText.replace(/\s+/g, ' ').slice(0, 250)
+    throw new Error(
+      `Request failed with HTTP ${response.status}${IS_DEV && preview ? `: ${preview}` : ''}`
+    )
+  }
+
+  try {
+    return JSON.parse(responseText) as T
+  } catch {
+    const preview = responseText.replace(/\s+/g, ' ').slice(0, 250)
+    throw new Error(
+      `Expected JSON but received an invalid response${IS_DEV && preview ? `: ${preview}` : ''}`
+    )
+  }
 }
 
 async function fetchDealers(search: string, signal?: AbortSignal): Promise<Dealer[]> {
   const params = new URLSearchParams({ page: '1', search })
-  const json = await fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?${params.toString()}`, signal)
-  return Array.isArray(json.data) ? json.data : []
+  try {
+    const json = await fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?${params.toString()}`, signal)
+    return Array.isArray(json.data) ? json.data : []
+  } catch (error) {
+    throw new Error(`Dealer search failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
 }
 
 async function fetchDealerOrders(dealerId: string, signal?: AbortSignal): Promise<OrderHeader[]> {
@@ -156,55 +197,63 @@ async function fetchDealerOrders(dealerId: string, signal?: AbortSignal): Promis
 }
 
 async function fetchOrderItems(orderId: string, signal?: AbortSignal): Promise<OrderItem[]> {
-  const json = await fetchJson<OrderItemsResponse>(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`, signal)
-  const raw = json.data
+  try {
+    const json = await fetchJson<OrderItemsResponse>(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`, signal)
+    const raw = json.data
 
-  let items: unknown[] = []
-  if (Array.isArray(raw)) {
-    if (raw.length > 0 && (raw[0]?.productId || raw[0]?.productName || raw[0]?.quantityPacks !== undefined)) {
-      items = raw
-    } else if (raw.length > 0 && Array.isArray(raw[0]?.items)) {
-      items = raw[0].items
-    } else {
-      items = raw
+    let items: unknown[] = []
+    if (Array.isArray(raw)) {
+      const first = raw[0]
+      if (raw.length > 0 && isRecord(first) && (first.productId || first.productName || first.quantityPacks !== undefined)) {
+        items = raw
+      } else if (raw.length > 0 && isRecord(first) && Array.isArray(first.items)) {
+        items = first.items
+      } else {
+        items = raw
+      }
+    } else if (isRecord(raw) && Array.isArray(raw.items)) {
+      items = raw.items
     }
-  } else if (raw && typeof raw === 'object' && Array.isArray(raw.items)) {
-    items = raw.items
+
+    return items
+      .filter(isRecord)
+      .map((it, idx) => {
+      const packSizeValue = Number(it.packSize ?? it.pack_size)
+      const totalPiecesValue = Number(it.totalPieces ?? it.total_pieces)
+      const normalized: OrderItem = {
+        orderdata_id: String(it.orderdata_id ?? it.id ?? it.productId ?? `item-${orderId}-${idx}`),
+        orderdata_orderid: String(it.orderdata_orderid ?? it.orderId ?? orderId),
+        orderdata_cat_no: String(it.orderdata_cat_no ?? it.catNo ?? it.productId ?? it.product_cat ?? ''),
+        orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
+        orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
+        orderdata_discount: String(it.discountAmount ?? it.discount_amount ?? it.orderdata_discount ?? 0),
+        orderdata_afterDisPrice: String(it.finalPrice ?? it.final_price ?? it.orderdata_afterDisPrice ?? 0),
+        orderdata_totalprice: String(it.listPriceTotal ?? it.list_price_total ?? it.orderdata_totalprice ?? 0),
+        orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? ''),
+        product_name: String(it.productName ?? it.product_name ?? ''),
+        product_discription: String(it.productDescription ?? it.product_discription ?? ''),
+        packSize: Number.isFinite(packSizeValue) ? packSizeValue : undefined,
+        totalPieces: Number.isFinite(totalPiecesValue) ? totalPiecesValue : undefined,
+        category: it.category ?? it.product_category ?? it.productCategory ?? undefined,
+        product_category: it.product_category ?? undefined,
+        productCategory: it.productCategory ?? undefined,
+        unitPrice: it.unitPrice ?? it.unit_price ?? undefined,
+        discountAmount: it.discountAmount ?? it.discount_amount ?? undefined,
+        finalPrice: it.finalPrice ?? it.final_price ?? undefined,
+        listPriceTotal: it.listPriceTotal ?? it.list_price_total ?? undefined,
+        quantityPacks: it.quantityPacks ?? undefined,
+        quantity: it.quantity ?? undefined,
+        productId: it.productId ?? undefined,
+        catNo: it.catNo ?? undefined,
+        variantCode: it.variantCode ?? undefined,
+        product_cat: it.product_cat ?? undefined,
+      }
+
+      return normalized
+    })
+  } catch (error) {
+    throw new Error(`Order items failed for order ${orderId}: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
-
-  return items.map((rawItem, idx) => {
-    const it: Record<string, unknown> = isRecord(rawItem) ? rawItem : {}
-    const normalized: OrderItem = {
-      orderdata_id: String(it.orderdata_id ?? it.id ?? it.productId ?? `item-${orderId}-${idx}`),
-      orderdata_orderid: String(it.orderdata_orderid ?? it.orderId ?? orderId),
-      orderdata_cat_no: String(it.orderdata_cat_no ?? it.catNo ?? it.productId ?? it.product_cat ?? ''),
-      orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
-      orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
-      orderdata_discount: String(it.discountAmount ?? it.discount_amount ?? it.orderdata_discount ?? 0),
-      orderdata_afterDisPrice: String(it.finalPrice ?? it.final_price ?? it.orderdata_afterDisPrice ?? 0),
-      orderdata_totalprice: String(it.listPriceTotal ?? it.list_price_total ?? it.orderdata_totalprice ?? 0),
-      orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? ''),
-      product_name: String(it.productName ?? it.product_name ?? ''),
-      product_discription: String(it.productDescription ?? it.product_discription ?? ''),
-      packSize: it.packSize ?? it.pack_size ?? undefined,
-      totalPieces: it.totalPieces ?? it.total_pieces ?? undefined,
-      category: it.category ?? it.product_category ?? it.productCategory ?? undefined,
-      product_category: it.product_category ?? undefined,
-      productCategory: it.productCategory ?? undefined,
-      unitPrice: it.unitPrice ?? it.unit_price ?? undefined,
-      discountAmount: it.discountAmount ?? it.discount_amount ?? undefined,
-      finalPrice: it.finalPrice ?? it.final_price ?? undefined,
-      listPriceTotal: it.listPriceTotal ?? it.list_price_total ?? undefined,
-      quantityPacks: it.quantityPacks ?? undefined,
-      quantity: it.quantity ?? undefined,
-      productId: it.productId ?? undefined,
-      catNo: it.catNo ?? undefined,
-      variantCode: it.variantCode ?? undefined,
-      product_cat: it.product_cat ?? undefined,
-    }
-
-    return normalized
-  })
 }
 
 function resolveClientRole(): AllowedRole | 'dealer' | null {
@@ -212,23 +261,18 @@ function resolveClientRole(): AllowedRole | 'dealer' | null {
 
   try {
     const staffRaw = localStorage.getItem('staffData')
-    if (staffRaw) {
-      const parsed: unknown = JSON.parse(staffRaw)
-      if (isRecord(parsed) && typeof parsed.staff_id === 'string') return parsed.staff_roletype === '0' ? 'admin' : 'staff'
+    if (hasStoredRole(staffRaw, 'staff_id')) {
+      return hasStoredRole(staffRaw, 'staff_roletype', '0') ? 'admin' : 'staff'
     }
 
     const userData = localStorage.getItem('UserData')
-    if (userData) {
-      const parsed: unknown = JSON.parse(userData)
-      if (isRecord(parsed) && typeof parsed.Dealer_Id === 'string') return 'dealer'
-      if (isRecord(parsed) && typeof parsed.staff_id === 'string') return parsed.staff_roletype === '0' ? 'admin' : 'staff'
+    if (hasStoredRole(userData, 'Dealer_Id')) return 'dealer'
+    if (hasStoredRole(userData, 'staff_id')) {
+      return hasStoredRole(userData, 'staff_roletype', '0') ? 'admin' : 'staff'
     }
 
     const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
-    if (adminRaw) {
-      const parsed: unknown = JSON.parse(adminRaw)
-      if (isRecord(parsed) && Object.keys(parsed).length > 0) return 'admin'
-    }
+    if (adminRaw && adminRaw.trim().length > 2) return 'admin'
   } catch {
     return null
   }
@@ -238,6 +282,7 @@ function resolveClientRole(): AllowedRole | 'dealer' | null {
 
 export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff'] }: DealerCategoryReportProps) {
   const router = useRouter()
+  const hasHydrated = useHasHydrated()
   const [dealerSearch, setDealerSearch] = useState('')
   const [dealerResults, setDealerResults] = useState<Dealer[]>([])
   const [selectedDealer, setSelectedDealer] = useState<Dealer | null>(null)
@@ -248,35 +293,45 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
   const [selectorOpen, setSelectorOpen] = useState(false)
   const [fromDate, setFromDate] = useState(DEFAULT_FROM)
   const [toDate, setToDate] = useState(DEFAULT_TO)
-  const currentRole = resolveClientRole()
-  const accessChecked = currentRole !== null
-  const isAllowed = currentRole !== null && allowedRoles.includes(currentRole)
+  const currentRole = hasHydrated
+    ? resolveClientRole()
+    : null
+  const accessChecked = hasHydrated
+  const isAllowed =
+    (currentRole === 'admin' || currentRole === 'staff') &&
+    allowedRoles.includes(currentRole)
 
   useEffect(() => {
+    if (!accessChecked) return
+
     if (!currentRole) {
       router.replace('/auth/login')
       return
     }
 
-    if (!allowedRoles.includes(currentRole)) {
-      router.replace(currentRole === 'dealer' ? '/dashboard/dealer' : '/auth/login')
+    if (currentRole === 'dealer') {
+      router.replace('/dashboard/dealer')
       return
     }
-  }, [allowedRoles, currentRole, router])
+
+    if (!allowedRoles.includes(currentRole)) {
+      router.replace('/auth/login')
+      return
+    }
+  }, [accessChecked, allowedRoles, currentRole, router])
 
   useEffect(() => {
     if (!accessChecked || !isAllowed) return
     let active = true
-    fetch('/data/nested_omsons_products.json', { cache: 'no-store' })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((json: CatalogueProduct[]) => {
+    fetchJson<CatalogueProduct[]>('/data/nested_omsons_products.json')
+      .then((json) => {
         if (active) setCatalogueProducts(Array.isArray(json) ? json : [])
       })
-      .catch(() => {
-        if (active) setCatalogueProducts([])
+      .catch((error) => {
+        if (active) {
+          setCatalogueProducts([])
+          setError(error instanceof Error ? `Catalogue load failed: ${error.message}` : 'Catalogue load failed')
+        }
       })
 
     return () => { active = false }
@@ -297,8 +352,20 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
         .then(rows => {
           if (!controller.signal.aborted) setDealerResults(rows)
         })
-        .catch(() => {
-          if (!controller.signal.aborted) setDealerResults([])
+        .catch((error) => {
+          if (
+            controller.signal.aborted ||
+            (error instanceof DOMException && error.name === 'AbortError')
+          ) {
+            return
+          }
+
+          setDealerResults([])
+          setError(
+            error instanceof Error
+              ? error.message
+              : 'Failed to load report'
+          )
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoadingDealers(false)
@@ -344,10 +411,19 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
 
         setSnapshot({ dealer: selectedDealer, orders: dealerOrders, items: orderItems.flat() })
       } catch (err) {
-        if (!controller.signal.aborted) {
-          setSnapshot({ dealer: selectedDealer, orders: [], items: [] })
-          setError(err instanceof Error ? err.message : 'Failed to load report')
+        if (
+          controller.signal.aborted ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        ) {
+          return
         }
+
+        setSnapshot({ dealer: selectedDealer, orders: [], items: [] })
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load report'
+        )
       } finally {
         // Loading state is derived from the selected dealer and snapshot.
       }
@@ -373,6 +449,7 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
   const grandTotal = report.grandTotal
   const loadingReport = !!selectedDealer && snapshot.dealer?.Dealer_Id !== selectedDealer.Dealer_Id && !error
   const dealerSearchLoading = dealerSearch.trim().length > 0 && loadingDealers
+  const hasVisibleError = Boolean(error)
 
   if (!accessChecked || !isAllowed) {
     return (
@@ -419,11 +496,11 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Orders</div>
-                <div className="mt-1 font-semibold text-white">{snapshot.orders.length.toLocaleString('en-IN')}</div>
+                <div className="mt-1 font-semibold text-white">{hasVisibleError ? '—' : snapshot.orders.length.toLocaleString('en-IN')}</div>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Categories</div>
-                <div className="mt-1 font-semibold text-white">{reportRows.length.toLocaleString('en-IN')}</div>
+                <div className="mt-1 font-semibold text-white">{hasVisibleError ? '—' : reportRows.length.toLocaleString('en-IN')}</div>
               </div>
             </div>
           </div>
@@ -545,15 +622,15 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Quantity</div>
-                <div className="mt-1 text-lg font-semibold">{grandTotal.quantity.toLocaleString('en-IN')}</div>
+                <div className="mt-1 text-lg font-semibold">{hasVisibleError ? '—' : grandTotal.quantity.toLocaleString('en-IN')}</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Pieces</div>
-                <div className="mt-1 text-lg font-semibold">{grandTotal.pieces.toLocaleString('en-IN')}</div>
+                <div className="mt-1 text-lg font-semibold">{hasVisibleError ? '—' : grandTotal.pieces.toLocaleString('en-IN')}</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Net Sales</div>
-                <div className="mt-1 text-lg font-semibold text-emerald-700">{formatRupee(grandTotal.netSales)}</div>
+                <div className="mt-1 text-lg font-semibold text-emerald-700">{hasVisibleError ? '—' : formatRupee(grandTotal.netSales)}</div>
               </div>
             </div>
           </div>

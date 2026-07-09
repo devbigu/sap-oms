@@ -11,12 +11,16 @@ function safeText(value: unknown, max = 1000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function toDoc(doc: any) {
+function toDoc<T extends { _id: { toString(): string } }>(doc: T) {
+  const { _id, ...rest } = doc;
   return {
-    ...doc,
-    id: doc._id.toString(),
-    _id: undefined,
+    ...rest,
+    id: _id.toString(),
   };
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unexpected error";
 }
 
 export async function GET(req: NextRequest) {
@@ -28,7 +32,7 @@ export async function GET(req: NextRequest) {
     const limitParam = Number(req.nextUrl.searchParams.get("limit") || 100);
     const limit = Number.isFinite(limitParam) ? Math.min(200, Math.max(1, limitParam)) : 100;
 
-    const query: Record<string, any> = {};
+    const query: Record<string, string | boolean> = {};
     if (dealerId) query.dealerId = dealerId;
     if (staffId) query.staffId = staffId;
     if (status) query.status = status;
@@ -46,9 +50,12 @@ export async function GET(req: NextRequest) {
       .toArray();
 
     return NextResponse.json({ success: true, data: docs.map(toDoc) });
-  } catch (e: any) {
-    console.error("[GET /api/custom-discount-requests]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+  } catch (error: unknown) {
+    console.error("custom-discount-requests GET failed", error);
+    return NextResponse.json(
+      { success: false, message: "Failed to load custom discount requests" },
+      { status: 500 }
+    );
   }
 }
 
@@ -117,8 +124,11 @@ export async function POST(req: NextRequest) {
     const created = await db.collection("custom_discount_requests").findOne({ _id: result.insertedId });
 
     return NextResponse.json({ success: true, data: toDoc(created!) }, { status: 201 });
-  } catch (e: any) {
-    console.error("[POST /api/custom-discount-requests]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+  } catch (error: unknown) {
+    console.error("[POST /api/custom-discount-requests]", error);
+    return NextResponse.json(
+      { success: false, message: getErrorMessage(error) },
+      { status: 500 }
+    );
   }
 }
