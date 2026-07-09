@@ -119,6 +119,10 @@ const NAV_ITEMS = [
      href: "/Pages/Ordermanagement", 
      icon: <ClipboardList size={15} /> 
   },
+  { label: "Dealer Category Report",
+     href: "/dashboard/admin/reports/dealer-category",
+    icon: <ClipboardList size={15} /> 
+  },
   { label: "Pending Orders",
      href: "/Pages/Ordermanagement/outstandingorders",
     icon: <ClipboardList size={15} /> 

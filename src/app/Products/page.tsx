@@ -273,8 +273,8 @@ function ProductsContent() {
     if (inStockOnly) d = d.filter(p => p.variants?.some(v => v.inStock) ?? false);
     if (sortBy === "price_asc")  d.sort((a, b) => (getLowestPrice(a).regular ?? Infinity) - (getLowestPrice(b).regular ?? Infinity));
     if (sortBy === "price_desc") d.sort((a, b) => (getLowestPrice(b).regular ?? 0) - (getLowestPrice(a).regular ?? 0));
-    if (sortBy === "name_asc")   d.sort((a, b) => a.name.localeCompare(b.name));
-    if (sortBy === "name_desc")  d.sort((a, b) => b.name.localeCompare(a.name));
+    if (sortBy === "name_asc")   d.sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")));
+    if (sortBy === "name_desc")  d.sort((a, b) => String(b.name ?? "").localeCompare(String(a.name ?? "")));
     return d;
   }, [allData, selectedCats, sortBy, searchQuery, inStockOnly]);
 
