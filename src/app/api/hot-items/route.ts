@@ -7,6 +7,7 @@ type HotItem = {
   id: string;
   SKU: string;
   name: string;
+  specs: string;
   image: string;
   badge: string;
   active: boolean;
@@ -23,12 +24,12 @@ const DOC_ID = "homepage-hot-items";
 const MONGO_OPERATION_TIMEOUT_MS = 5000;
 
 const DEFAULT_ITEMS: HotItem[] = [
-  { id: "1", SKU: "163", name: "Adapters Reduction", image: "", badge: "Bestseller", active: true },
-  { id: "2", SKU: "164", name: "Adapters Cone and Cone", image: "", badge: "Fast moving", active: true },
-  { id: "3", SKU: "165", name: "Adapters Socket and Socket", image: "", badge: "Trending", active: true },
-  { id: "4", SKU: "144", name: "Flask Erlenmeyer Amber", image: "", badge: "Popular", active: true },
-  { id: "5", SKU: "145", name: "Flask Erlenmeyer Narrow", image: "", badge: "Top rated", active: true },
-  { id: "6", SKU: "147", name: "Flask Iodine", image: "", badge: "Hot pick", active: false },
+  { id: "1", SKU: "163", name: "Adapters Reduction", specs: "", image: "", badge: "Bestseller", active: true },
+  { id: "2", SKU: "164", name: "Adapters Cone and Cone", specs: "", image: "", badge: "Fast moving", active: true },
+  { id: "3", SKU: "165", name: "Adapters Socket and Socket", specs: "", image: "", badge: "Trending", active: true },
+  { id: "4", SKU: "144", name: "Flask Erlenmeyer Amber", specs: "", image: "", badge: "Popular", active: true },
+  { id: "5", SKU: "145", name: "Flask Erlenmeyer Narrow", specs: "", image: "", badge: "Top rated", active: true },
+  { id: "6", SKU: "147", name: "Flask Iodine", specs: "", image: "", badge: "Hot pick", active: false },
 ];
 
 function safeText(value: unknown, max = 300) {
@@ -45,6 +46,7 @@ function normalizeItem(raw: unknown, index: number): HotItem | null {
     id: safeText(candidate.id, 80) || `${Date.now()}-${index}`,
     SKU,
     name,
+    specs: safeText(candidate.specs ?? candidate.Specs ?? candidate.specifications ?? candidate.Specifications ?? candidate.specification, 500),
     image: safeText(candidate.image, 1000),
     badge: safeText(candidate.badge, 80) || "Hot pick",
     active: candidate.active !== false,

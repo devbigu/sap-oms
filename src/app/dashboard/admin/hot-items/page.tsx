@@ -9,6 +9,7 @@ export type HotItem = {
   id: string;
   SKU: string;
   name: string;
+  specs: string;
   image: string;
   badge: string;
   active: boolean;
@@ -17,6 +18,7 @@ export type HotItem = {
 type CatalogOption = {
   sku: string;
   name: string;
+  specs: string;
   image: string;
 };
 
@@ -36,12 +38,20 @@ type CatalogueImageSource = {
   Images?: unknown;
 };
 
+type CatalogueSpecsSource = {
+  specs?: unknown;
+  Specs?: unknown;
+  specifications?: unknown;
+  Specifications?: unknown;
+  specification?: unknown;
+};
+
 type CatalogueVariantRecord = CatalogueImageSource & {
   sku?: unknown;
   SKU?: unknown;
   name?: unknown;
   Name?: unknown;
-};
+} & CatalogueSpecsSource;
 
 type CatalogueProductRecord = CatalogueImageSource & {
   sku?: unknown;
@@ -49,7 +59,7 @@ type CatalogueProductRecord = CatalogueImageSource & {
   name?: unknown;
   Name?: unknown;
   variants?: unknown;
-};
+} & CatalogueSpecsSource;
 
 // ─── API + catalog helpers ───────────────────────────────────────────────────
 
@@ -60,6 +70,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function firstString(value: unknown): string {
+  if (typeof value === "string") return value.trim();
   if (!Array.isArray(value)) return "";
 
   for (const item of value) {
@@ -69,6 +80,16 @@ function firstString(value: unknown): string {
   }
 
   return "";
+}
+
+function getSpecs(value: CatalogueSpecsSource): string {
+  return (
+    firstString(value.specs) ||
+    firstString(value.Specs) ||
+    firstString(value.specifications) ||
+    firstString(value.Specifications) ||
+    firstString(value.specification)
+  );
 }
 
 async function fetchJson<T>(
@@ -112,6 +133,7 @@ function normalizeHotItems(items: unknown): HotItem[] {
         id: String(item.id ?? `${sku}-${index}`),
         SKU: sku,
         name,
+        specs: String(item.specs ?? ""),
         image: String(item.image ?? ""),
         badge: String(item.badge ?? "Hot pick"),
         active: item.active !== false,
@@ -159,11 +181,12 @@ function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[
   for (const product of products) {
     const productSku = String(product.sku ?? product.SKU ?? "").trim();
     const productName = String(product.name ?? product.Name ?? "").trim();
+    const productSpecs = getSpecs(product);
     const productImage = getFirstImage(product);
 
     if (productSku && productName && !seen.has(productSku.toLowerCase())) {
       seen.add(productSku.toLowerCase());
-      options.push({ sku: productSku, name: productName, image: productImage });
+      options.push({ sku: productSku, name: productName, specs: productSpecs, image: productImage });
     }
 
     const variants = Array.isArray(product.variants)
@@ -174,10 +197,11 @@ function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[
       const typedVariant = variant as CatalogueVariantRecord;
       const variantSku = String(typedVariant.sku ?? typedVariant.SKU ?? "").trim();
       const variantName = String(typedVariant.name ?? typedVariant.Name ?? productName).trim();
+      const variantSpecs = getSpecs(typedVariant) || productSpecs;
       const variantImage = getFirstImage(typedVariant) || productImage;
       if (!variantSku || seen.has(variantSku.toLowerCase())) continue;
       seen.add(variantSku.toLowerCase());
-      options.push({ sku: variantSku, name: variantName || productName, image: variantImage });
+      options.push({ sku: variantSku, name: variantName || productName, specs: variantSpecs, image: variantImage });
     }
   }
 
@@ -209,7 +233,7 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 // ─── Empty form ───────────────────────────────────────────────────────────────
 
 const emptyForm = (): Omit<HotItem, "id"> => ({
-  SKU: "", name: "", image: "", badge: BADGE_PRESETS[0], active: true,
+  SKU: "", name: "", specs: "", image: "", badge: BADGE_PRESETS[0], active: true,
 });
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -312,7 +336,7 @@ export default function AdminHotItemsPage() {
 
   const openEdit = (item: HotItem) => {
     setEditId(item.id);
-    setForm({ SKU: item.SKU, name: item.name, image: item.image, badge: item.badge, active: item.active });
+    setForm({ SKU: item.SKU, name: item.name, specs: item.specs, image: item.image, badge: item.badge, active: item.active });
     setShowForm(true);
   };
 
@@ -329,6 +353,7 @@ export default function AdminHotItemsPage() {
       ...f,
       SKU: option.sku,
       name: option.name,
+      specs: option.specs,
       image: option.image || f.image,
     }));
   };
@@ -487,12 +512,12 @@ export default function AdminHotItemsPage() {
                 <datalist id="hot-item-catalog">
                   {catalog.slice(0, 2500).map((option) => (
                     <option key={option.sku} value={option.sku}>
-                      {option.name}
+                      {option.name} 
                     </option>
                   ))}
                 </datalist>
                 {catalogueAvailable && findCatalogOption(form.SKU) && (
-                  <button
+                <button
                     type="button"
                     onClick={() => {
                       const match = findCatalogOption(form.SKU);
@@ -500,7 +525,7 @@ export default function AdminHotItemsPage() {
                     }}
                     className="mt-2 text-[11px] font-bold text-indigo-600 hover:text-indigo-800"
                   >
-                    Use catalog name and image
+                    Use catalog name, specs and image
                   </button>
                 )}
                 {!catalogueAvailable && (
@@ -519,6 +544,19 @@ export default function AdminHotItemsPage() {
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                   placeholder="e.g. Pycnometer Class A 25ml"
+                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                />
+              </div>
+
+              {/* Specifications */}
+              <div>
+                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">
+                  Specifications
+                </label>
+                <input
+                  value={form.specs}
+                  onChange={e => setForm(f => ({ ...f, specs: e.target.value }))}
+                  placeholder="e.g. 25 mL"
                   className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                 />
               </div>
@@ -711,11 +749,18 @@ export default function AdminHotItemsPage() {
                     }
                   </div>
 
-                  {/* Name + SKU */}
+                  {/* Name + SKU + Specs */}
                   <div className="min-w-0">
-                    <p className={`text-[13px] font-semibold leading-tight truncate ${item.active ? "text-gray-900" : "text-gray-400 line-through"}`}>
-                      {item.name}
-                    </p>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <p className={`text-[13px] font-semibold leading-tight truncate ${item.active ? "text-gray-900" : "text-gray-400 line-through"}`}>
+                        {item.name}
+                      </p>
+                      {item.specs && (
+                        <span className="shrink-0 text-[11px] text-gray-500 truncate">
+                          {item.specs}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-gray-400 font-mono mt-0.5">{item.SKU}</p>
                   </div>
 
@@ -788,6 +833,11 @@ export default function AdminHotItemsPage() {
                       </div>
                       <div className="px-1.5 pb-1.5">
                         <p className="text-[10px] font-medium text-gray-700 line-clamp-2 leading-tight">{item.name}</p>
+                        {item.specs && (
+                          <p className="text-[9px] text-gray-500 line-clamp-2 leading-tight mt-0.5">
+                            {item.specs}
+                          </p>
+                        )}
                         <p className="text-[9px] text-rose-500 font-semibold mt-0.5">Shop now →</p>
                       </div>
                     </div>

@@ -19,7 +19,7 @@ function getReadableAdditionalDiscountText(breakdown) {
     const percentText = Number(breakdown.slabDiscountPercent) > 0
       ? `${breakdown.slabDiscountPercent}%`
       : "flat";
-    return `Flat discount applied: ${percentText} (Rs. ${formatAmountText(breakdown.slabDiscountAmount)})`;
+    return `slab discount applied: ${percentText} (Rs. ${formatAmountText(breakdown.slabDiscountAmount)})`;
   }
 
   if (breakdown?.additionalDiscountType === "custom" && Number(breakdown.customDiscountAmount) > 0) {
@@ -76,7 +76,7 @@ test("item note is used before reason", () => {
   }), "Pack carefully");
 });
 
-test("flat technical reason becomes readable text", () => {
+test("slab technical reason becomes readable text", () => {
   assert.equal(resolveInvoiceRemark({
     reason: "slab_or_approved_discount",
     discountBreakdown: {
@@ -85,7 +85,7 @@ test("flat technical reason becomes readable text", () => {
       slabDiscountAmount: 6414.48,
       customDiscountAmount: 0,
     },
-  }), "Flat discount applied: 2% (Rs. 6,414.48)");
+  }), "slab discount applied: 2% (Rs. 6,414.48)");
 });
 
 test("custom technical reason becomes readable text", () => {

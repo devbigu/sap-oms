@@ -87,7 +87,7 @@ test("mutual exclusivity prefers explicit additional discount type", () => {
   assert.equal(breakdown.customDiscountAmount, 0);
 });
 
-test("flat discount is not double-counted in summary rows", () => {
+test("slab discount is not double-counted in summary rows", () => {
   const breakdown = orderAmounts.resolveOrderDiscountBreakdown({
     grossAmount: 641448,
     discountAmount: 327138.48,
@@ -103,7 +103,7 @@ test("flat discount is not double-counted in summary rows", () => {
   assert.deepEqual(rows.map((row) => row.label), [
     "Gross Amount",
     "Base Discount (50%)",
-    "Flat Discount (2%)",
+    "slab discount (2%)",
     "Total Discount",
     "Net Payable",
   ]);
@@ -152,7 +152,7 @@ test("badge text shows only the active additional discount", () => {
     customDiscountAmount: 6000,
   }));
 
-  assert.equal(slabBadge, "Flat 2% · ₹6,414.48");
+  assert.equal(slabBadge, "slab 2% · ₹6,414.48");
   assert.equal(customBadge, "Custom · ₹6,000.00");
 });
 

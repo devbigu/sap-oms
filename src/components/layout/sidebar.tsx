@@ -64,7 +64,7 @@ const NAV: Record<Role, NavItem[]> = {
     {                     label: "Discount Requests", href: "/dashboard/staff/discount-requests",           icon: <Receipt size={15} />         },
     { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },
-    { section: "Dealers",  label: "Dealer List",   href: "/dashboard/admin/dealer/DealerList",              icon: <Users size={15} />           },
+    { section: "Dealers",  label: "Dealer List",   href: "/dashboard/staff/dealerlist",              icon: <Users size={15} />           },
     {                      label: "Dealer Ledger",  href: "/dashboard/admin/ledger",                         icon: <BookOpen size={15} />        },
     { section: "Reports",  label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <TrendingUp size={15} />      },
   ],

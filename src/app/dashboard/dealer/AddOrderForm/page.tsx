@@ -1166,7 +1166,7 @@ function AddOrderPageInner() {
     const readableReason = discountPayload.additionalDiscountType === "custom"
       ? `Approved custom discount applied: Rs. ${discountPayload.customDiscountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : discountPayload.additionalDiscountType === "slab" && discountPayload.slabDiscountAmount > 0
-        ? `Flat discount applied: ${discountPayload.slabDiscountPercent}% (Rs. ${discountPayload.slabDiscountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+        ? `slab discount applied: ${discountPayload.slabDiscountPercent}% (Rs. ${discountPayload.slabDiscountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
         : "frontend_discount_override";
     const shouldSaveOverride =
       discountPayload.discountAmount > 0 &&
@@ -1614,7 +1614,7 @@ function AddOrderPageInner() {
                 <span className="text-[11px] font-medium">
                   {discountPayload.additionalDiscountType === "custom"
                     ? "approved custom selected"
-                    : `${discountPayload.baseDiscountPercent}% base${hasSlabDiscount ? ` + ${discountPayload.slabDiscountPercent}% flat` : ""}`}
+                    : `${discountPayload.baseDiscountPercent}% base${hasSlabDiscount ? ` + ${discountPayload.slabDiscountPercent}% slab` : ""}`}
                 </span>
               </div>
             </div>
@@ -1635,7 +1635,7 @@ function AddOrderPageInner() {
               <div>
                 <p className="text-[13px] font-semibold text-gray-900">Discount Breakdown</p>
                 <p className={`text-[12px] mt-0.5 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"}`}>
-                  Base discount applies first, then either flat discount or approved custom discount
+                  Base discount applies first, then either slab discount or approved custom discount
                 </p>
               </div>
             </div>
@@ -1685,14 +1685,14 @@ function AddOrderPageInner() {
                 {fmt(toPaise(discountPayload.postBaseAmount))}
               </p>
               <p className="mt-0.5 text-[9px] text-indigo-400">
-                {discountPayload.additionalDiscountType === "custom" ? "Custom discount applies from here" : "Flat discount is determined from this"}
+                {discountPayload.additionalDiscountType === "custom" ? "Custom discount applies from here" : "slab discount is determined from this"}
               </p>
             </div>
 
             {/* 4. Additional Discount */}
             <div className={`rounded-xl border px-3 py-2 ${(discountPayload.additionalDiscountAmount > 0) ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200 bg-white"}`}>
               <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "Flat Discount"}
+                {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "slab discount"}
               </p>
               <p className={`mt-1 font-mono text-[13px] font-semibold ${(discountPayload.additionalDiscountAmount > 0) ? "text-emerald-700" : "text-gray-500"}`}>
                 {discountPayload.additionalDiscountType === "custom"
@@ -1704,7 +1704,7 @@ function AddOrderPageInner() {
               </p>
               <p className="mt-0.5 text-[10px] text-gray-400">
                 {discountPayload.additionalDiscountType === "custom"
-                  ? "Flat discount is disabled while custom is active"
+                  ? "slab discount is disabled while custom is active"
                   : discountStatusMessage}
               </p>
             </div>
@@ -2275,8 +2275,8 @@ function AddOrderPageInner() {
                     Base: {discountPayload.baseDiscountPercent}%
                     {discountPayload.additionalDiscountType === "custom"
                       ? " · Approved custom selected"
-                      : hasSlabDiscount ? ` → Flat: ${discountPayload.slabDiscountPercent}%` : ""}
-                    {" · "}{discountPayload.additionalDiscountType === "custom" ? "Flat discount disabled" : discountStatusMessage}
+                      : hasSlabDiscount ? ` → slab: ${discountPayload.slabDiscountPercent}%` : ""}
+                    {" · "}{discountPayload.additionalDiscountType === "custom" ? "slab discount disabled" : discountStatusMessage}
                   </p>
                 </div>
 
@@ -2299,7 +2299,7 @@ function AddOrderPageInner() {
                     </div>
                     <div className={`rounded-xl border px-4 py-3 ${discountPayload.additionalDiscountAmount > 0 ? "border-emerald-200 bg-emerald-50/60 text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>
                       <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">
-                        {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "Flat Discount"}
+                        {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "slab discount"}
                       </p>
                       <p className="mt-1 font-mono text-[14px] font-semibold">
                         {discountPayload.additionalDiscountType === "custom" ? "Approved" : `${discountPayload.slabDiscountPercent}%`}

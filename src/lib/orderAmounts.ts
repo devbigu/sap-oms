@@ -427,8 +427,8 @@ export function getOrderDiscountSummaryRows(
     rows.push({
       key: "slab",
       label: breakdown.slabDiscountPercent > 0
-        ? `Flat Discount (${breakdown.slabDiscountPercent}%)`
-        : "Flat Discount",
+        ? `slab discount (${breakdown.slabDiscountPercent}%)`
+        : "slab discount",
       amount: breakdown.slabDiscountAmount,
     });
   }
@@ -454,7 +454,7 @@ export function formatAdditionalDiscountBadge(breakdown: AdditionalDiscountDispl
     const percentText = breakdown.slabDiscountPercent > 0
       ? `${breakdown.slabDiscountPercent}%`
       : "";
-    return `Flat ${percentText}`.trim() + ` · ${formatCurrency(breakdown.slabDiscountAmount)}`;
+    return `slab ${percentText}`.trim() + ` · ${formatCurrency(breakdown.slabDiscountAmount)}`;
   }
 
   if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
@@ -471,7 +471,7 @@ export function getReadableAdditionalDiscountText(
     const percentText = breakdown.slabDiscountPercent > 0
       ? `${breakdown.slabDiscountPercent}%`
       : "flat";
-    return `Flat discount applied: ${percentText} (Rs. ${formatAmountText(breakdown.slabDiscountAmount)})`;
+    return `slab discount applied: ${percentText} (Rs. ${formatAmountText(breakdown.slabDiscountAmount)})`;
   }
 
   if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
