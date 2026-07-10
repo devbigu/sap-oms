@@ -8,6 +8,7 @@ import { ArrowLeft, Package, Search, Download } from 'lucide-react'
 import moment from 'moment'
 import { hasPriorityTag } from '@/lib/orderPriority'
 import { OrderAmountSource, withDisplayOrderAmounts } from '@/lib/orderAmounts'
+import { mergeFallbackProductNotes } from '@/lib/orderProductNotes.mjs'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const YEAR        = new Date().getFullYear()
@@ -62,6 +63,7 @@ type OrderItem = {
   orderdata_totalprice: string
   remark: string
   remarks?: string
+  displayRemark?: string
   priority?: string | boolean
   isPriority?: string | boolean
   is_priority?: string | boolean
@@ -74,6 +76,15 @@ type OrderItemResponse = {
   data: OrderItem[]
   count: number
   last_page: number
+}
+
+type OrderProductNote = {
+  orderId?: string
+  orderItemId?: string | null
+  sku?: string
+  normalizedSku?: string
+  occurrence?: number
+  note?: string
 }
 
 type PayStatus = "Paid" | "Partial" | "Unpaid" | "Overdue"
@@ -157,6 +168,7 @@ export default function StaffDealerViewPage() {
   const [itemPage,      setItemPage]     = useState(1)
   const [search,        setSearch]       = useState("")
   const [searchInput,   setSearchInput]  = useState("")
+  const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([])
 
   const queryClient = useQueryClient()
 
@@ -280,16 +292,42 @@ export default function StaffDealerViewPage() {
 
   // Items pagination
   const items          = itemsResp?.data ?? []
+  const displayItems = useMemo(
+    () => mergeFallbackProductNotes(items, fallbackProductNotes) as unknown as OrderItem[],
+    [items, fallbackProductNotes]
+  )
   const itemTotal      = itemsResp?.count ?? 0
   const itemTotalPages = itemsResp?.last_page || Math.max(1, Math.ceil(itemTotal / ITEM_PAGE_SIZE))
 
+  useEffect(() => {
+    const orderIds = Array.from(new Set(items.map(item => String(item.orderdata_orderid || '').trim()).filter(Boolean)))
+    if (orderIds.length === 0) {
+      setFallbackProductNotes([])
+      return
+    }
+
+    let active = true
+    fetch(`/api/order-product-notes?orderIds=${encodeURIComponent(orderIds.join(','))}`, { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(json => {
+        if (!active) return
+        setFallbackProductNotes(json.success && Array.isArray(json.data) ? json.data : [])
+      })
+      .catch(() => {
+        if (active) setFallbackProductNotes([])
+      })
+
+    return () => { active = false }
+  }, [items])
+
   // CSV export for order items
   const exportItemsCSV = () => {
-    if (!items.length) return
-    const headers = ["S.No.", "Order ID", "Cat. No.", "Description", "Qty", "Priority", "Price", "Discount", "After Disc.", "Total", "Status", "Date"]
-    const rows = items.map((o, i) => [
+    if (!displayItems.length) return
+    const headers = ["S.No.", "Order ID", "Cat. No.", "Description", "Remark", "Qty", "Priority", "Price", "Discount", "After Disc.", "Total", "Status", "Date"]
+    const rows = displayItems.map((o, i) => [
       (itemPage - 1) * ITEM_PAGE_SIZE + i + 1,
       o.orderdata_orderid, o.orderdata_cat_no, o.order_item_description,
+      o.displayRemark || o.remark || "",
       o.orderdata_item_quantity, hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks) ? 'Priority' : '', o.orderdata_price, o.orderdata_discount,
       o.orderdata_afterDisPrice, o.orderdata_totalprice,
       dispatchBadge(o.orderdata_status).label,
@@ -552,7 +590,7 @@ export default function StaffDealerViewPage() {
               </div>
               <button
                 onClick={exportItemsCSV}
-                disabled={!items.length}
+                disabled={!displayItems.length}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
               >
                 <Download className="w-4 h-4" />
@@ -586,7 +624,7 @@ export default function StaffDealerViewPage() {
                       </tr>
                     ))}
 
-                    {!itemsLoading && items.length === 0 && (
+                    {!itemsLoading && displayItems.length === 0 && (
                       <tr>
                         <td colSpan={11} className="py-16 text-center">
                           <div className="flex flex-col items-center gap-2 text-gray-400">
@@ -597,7 +635,7 @@ export default function StaffDealerViewPage() {
                       </tr>
                     )}
 
-                    {!itemsLoading && items.map((item, i) => {
+                    {!itemsLoading && displayItems.map((item, i) => {
                       const badge = dispatchBadge(item.orderdata_status)
                       return (
                         <tr key={item.orderdata_id} className="hover:bg-gray-50 transition-colors">
@@ -621,6 +659,9 @@ export default function StaffDealerViewPage() {
                                 </span>
                               )}
                             </div>
+                            {item.displayRemark && (
+                              <div className="mt-1 text-[11px] leading-5 text-gray-500">{item.displayRemark}</div>
+                            )}
                           </td>
                           <td className="px-4 py-3.5 text-xs text-gray-600 text-center">
                             {item.orderdata_item_quantity || "—"}
@@ -651,7 +692,7 @@ export default function StaffDealerViewPage() {
               {/* Items pagination */}
               <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100">
                 <span className="text-xs text-gray-400">
-                  {items.length > 0
+                  {displayItems.length > 0
                     ? `Showing ${(itemPage - 1) * ITEM_PAGE_SIZE + 1}–${Math.min(itemPage * ITEM_PAGE_SIZE, itemTotal)} of ${itemTotal}`
                     : "No results"
                   }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Download, Search, Package } from 'lucide-react'
@@ -10,6 +10,7 @@ import {
   getCustomDiscountProgressKeyForOrder,
   type CustomDiscountProgress,
 } from '@/lib/customDiscountProgress'
+import { mergeFallbackProductNotes } from '@/lib/orderProductNotes.mjs'
 
 type OrderItem = {
   orderdata_id: string
@@ -24,6 +25,7 @@ type OrderItem = {
   orderdata_totalprice: string
   remark: string
   remarks?: string
+  displayRemark?: string
   priority?: string | boolean
   isPriority?: string | boolean
   is_priority?: string | boolean
@@ -52,6 +54,15 @@ type CustomDiscountRequest = {
   orderNumber?: string | null
   order_number?: string | null
   lastReorderedOrderId?: string | null
+}
+
+type OrderProductNote = {
+  orderId?: string
+  orderItemId?: string | null
+  sku?: string
+  normalizedSku?: string
+  occurrence?: number
+  note?: string
 }
 
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
@@ -84,6 +95,7 @@ export default function DispatchStatusPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState("")
   const [searchInput, setSearchInput] = useState("")
+  const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([])
 
   const queryClient = useQueryClient()
 
@@ -124,6 +136,10 @@ export default function DispatchStatusPage() {
   })
 
   const data: OrderItem[] = response?.data || []
+  const displayData = useMemo(
+    () => mergeFallbackProductNotes(data, fallbackProductNotes) as unknown as OrderItem[],
+    [data, fallbackProductNotes]
+  )
   const customDiscountProgressMap = buildCustomDiscountProgressMap(customDiscountRequests)
   const total = response?.count ?? 0
   const totalPages =
@@ -154,6 +170,27 @@ export default function DispatchStatusPage() {
     return () => clearTimeout(timer)
   }, [searchInput])
 
+  useEffect(() => {
+    const orderIds = Array.from(new Set(data.map((item) => String(item.orderdata_orderid || '').trim()).filter(Boolean)))
+    if (orderIds.length === 0) {
+      setFallbackProductNotes([])
+      return
+    }
+
+    let active = true
+    fetch(`/api/order-product-notes?orderIds=${encodeURIComponent(orderIds.join(','))}`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((json) => {
+        if (!active) return
+        setFallbackProductNotes(json.success && Array.isArray(json.data) ? json.data : [])
+      })
+      .catch(() => {
+        if (active) setFallbackProductNotes([])
+      })
+
+    return () => { active = false }
+  }, [data])
+
   function pageNumbers(): (number | "…")[] {
     const pages: (number | "…")[] = []
     if (totalPages <= 7) {
@@ -175,12 +212,12 @@ export default function DispatchStatusPage() {
   }
 
   const handleDownloadCSV = () => {
-    if (!data.length) return
+    if (!displayData.length) return
     const headers = [
       "S.No.", "Order ID", "Cat. No.", "Description", "Quantity",
       "Priority", "Price", "Discount", "After Discount", "Total Price", "Remark", "Status", "Custom Discount Status", "Date/Time"
     ]
-    const rows = data.map((o, i) => [
+    const rows = displayData.map((o, i) => [
       (page - 1) * ITEMS_PER_PAGE + i + 1,
       o.orderdata_id,
       o.orderdata_cat_no,
@@ -191,7 +228,7 @@ export default function DispatchStatusPage() {
       o.orderdata_discount,
       o.orderdata_afterDisPrice,
       o.orderdata_totalprice,
-      o.remark,
+      o.displayRemark || o.remark,
       statusBadge(o.orderdata_status).label,
       customDiscountBadge(customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(o.orderdata_orderid)]?.customDiscountStatus ?? null)?.label ?? "",
       o.orderdata_datetime,
@@ -222,7 +259,7 @@ export default function DispatchStatusPage() {
             </div>
             <button
               onClick={handleDownloadCSV}
-              disabled={!data.length}
+              disabled={!displayData.length}
               className="flex items-center gap-2 px-4 py-2 text-sm bg-white border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
             >
               <Download className="w-4 h-4" />
@@ -284,7 +321,7 @@ export default function DispatchStatusPage() {
                 ))}
 
                 {/* Empty */}
-                {!isLoading && data.length === 0 && (
+                {!isLoading && displayData.length === 0 && (
                   <tr>
                     <td colSpan={14} className="px-6 py-16 text-center">
                       <div className="flex flex-col items-center gap-2 text-gray-400">
@@ -296,7 +333,7 @@ export default function DispatchStatusPage() {
                 )}
 
                 {/* Rows */}
-                {!isLoading && data.map((item, i) => {
+                {!isLoading && displayData.map((item, i) => {
                   const badge = statusBadge(item.orderdata_status)
                   const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks)
                   const customBadge = customDiscountBadge(
@@ -355,7 +392,7 @@ export default function DispatchStatusPage() {
                       </td>
 
                       <td className="px-4 py-4 text-gray-500 text-xs">
-                        {item.remark || "—"}
+                        {item.displayRemark || item.remark || "—"}
                       </td>
 
                       <td className="px-4 py-4">
@@ -387,7 +424,7 @@ export default function DispatchStatusPage() {
           {/* Pagination */}
           <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100">
             <span className="text-xs text-gray-400">
-              {data.length > 0 ? `Showing ${startIndex}–${endIndex} of ${total}` : "No results"}
+              {displayData.length > 0 ? `Showing ${startIndex}–${endIndex} of ${total}` : "No results"}
             </span>
             <div className="flex items-center gap-1">
               <button

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/ban-ts-comment */
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
@@ -10,6 +11,10 @@ import {
     resolveOrderDiscountBreakdown,
     type OrderAmountSource,
 } from "@/lib/orderAmounts";
+import {
+    reconcileInvoiceRowAmounts,
+    type InvoiceRowStage,
+} from "@/lib/invoiceRowReconciliation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -417,27 +422,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const gross = amounts.gross;
     const discount = amounts.discountAmount;
     const net = amounts.netPayable;
-    const explicitItemDiscountTotal = orderItems.length > 0 && orderItems.every((item) => {
-        const amount = Number((item as any).discountAmount ?? item.orderdata_discount);
-        return Number.isFinite(amount) && amount >= 0;
-    })
-        ? orderItems.reduce((sum, item) => sum + Number((item as any).discountAmount ?? item.orderdata_discount ?? 0), 0)
-        : undefined;
-    const discountBreakdown = resolveOrderDiscountBreakdown(
-        displayOrder as OrderAmountSource,
-        undefined,
-        explicitItemDiscountTotal !== undefined ? { itemDiscountTotal: explicitItemDiscountTotal } : undefined
-    );
-    const invoiceRemark = resolveInvoiceRemark({
-        orderNote: (displayOrder as any).order_note,
-        note: (displayOrder as any).note,
-        savedNote,
-        orderRemark: (displayOrder as any).remark ?? (displayOrder as any).remarks,
-        itemRemarks: itemRemarkStrings,
-        reason: displayOrder.reason,
-        discountBreakdown,
-    });
     const invNo = invoiceNumber(displayOrder.order_id);
+    let discountBreakdown = resolveOrderDiscountBreakdown(displayOrder as OrderAmountSource);
+    let invoiceRemark = "N/A";
 
     // Shared inner padding used consistently everywhere
     const PAD = 4;
@@ -584,6 +571,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const itemRows: any[][] = [];
     let totalQty = 0;
     let totalPieces = 0;
+    const stagedRows: InvoiceRowStage[] = [];
 
     // Build pack lookup from products.json (public data)
     const packLookup: Record<string, number> = {};
@@ -602,10 +590,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     }
 
     if (orderItems.length > 0) {
-        let sumGross = 0;
-        let sumDiscount = 0;
-        let sumNet = 0;
-        orderItems.forEach((item, idx) => {
+        orderItems.forEach((item) => {
             const qty = Number(item.orderdata_item_quantity);
             const itemAny: any = item as any;
             const payloadPieces = Number(itemAny.totalPieces ?? itemAny.total_pieces ?? 0);
@@ -623,12 +608,20 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
                 rowGross = Number(item.orderdata_price) * qty;
             }
 
-            // Discount percent (per-item or order-level)
-            const perItemPct = Number(itemAny.totalDiscountPercent ?? itemAny.total_discount_percentage ?? itemAny.total_discount ?? itemAny.discount ?? NaN);
-            const orderPct = Number((displayOrder as any)?.totalDiscountPercentage ?? (displayOrder as any)?.discountPercent ?? (displayOrder as any)?.allocatedDiscountPercent ?? (displayOrder as any)?.allocatedDiscount ?? NaN);
-            const pct = !isNaN(perItemPct) ? perItemPct : (!isNaN(orderPct) ? orderPct : 0);
-            const rowDiscount = rowGross * (pct / 100);
-            const rowNet = rowGross - rowDiscount;
+            const explicitItemDiscountAmount = Number(
+                itemAny.discountAmount ?? itemAny.orderdata_discount_amount ?? itemAny.orderdata_discount
+            );
+            const hasExplicitItemDiscountAmount = Number.isFinite(explicitItemDiscountAmount) && explicitItemDiscountAmount >= 0;
+
+            let rowDiscount = hasExplicitItemDiscountAmount ? explicitItemDiscountAmount : 0;
+            if (!hasExplicitItemDiscountAmount) {
+                const perItemPct = Number(itemAny.totalDiscountPercent ?? itemAny.total_discount_percentage ?? itemAny.total_discount ?? itemAny.discount ?? NaN);
+                const orderPct = Number((displayOrder as any)?.totalDiscountPercentage ?? (displayOrder as any)?.discountPercent ?? (displayOrder as any)?.allocatedDiscountPercent ?? (displayOrder as any)?.allocatedDiscount ?? NaN);
+                const pct = !isNaN(perItemPct) ? perItemPct : (!isNaN(orderPct) ? orderPct : 0);
+                rowDiscount = rowGross * (pct / 100);
+            }
+            rowDiscount = Math.min(rowGross, Math.max(0, rowDiscount));
+            const rowNet = Math.max(0, rowGross - rowDiscount);
 
             const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks);
             const productName = String(item.product_name || "").trim();
@@ -637,32 +630,55 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
 
             totalQty += qty;
             totalPieces += pieces;
-            sumGross += rowGross;
-            sumDiscount += rowDiscount;
-            sumNet += rowNet;
+            stagedRows.push({
+                grossAmount: rowGross,
+                stagedDiscountAmount: rowDiscount,
+                stagedNetAmount: rowNet,
+                quantity: qty,
+                packSize: pack,
+                pieces,
+                description,
+                productUnit: item.product_unit || "Pcs",
+            });
+        });
 
+        const stageDiscountTotal = stagedRows.reduce((sum, row) => sum + row.stagedDiscountAmount, 0);
+        discountBreakdown = resolveOrderDiscountBreakdown(
+            displayOrder as OrderAmountSource,
+            undefined,
+            { itemDiscountTotal: stageDiscountTotal }
+        );
+        const reconciled = reconcileInvoiceRowAmounts({
+            rows: stagedRows,
+            amounts,
+            discountBreakdown,
+            useAuthoritativeTotals: Boolean(summaryOverride),
+        });
+
+        reconciled.rows.forEach((row, idx) => {
             itemRows.push([
                 { content: String(idx + 1).padStart(2, "0"), styles: { halign: "center" } },
-                { content: description, styles: { halign: "left" } },
-                { content: String(qty), styles: { halign: "center" } },
-                { content: `${qty} x ${pack}`, styles: { halign: "center" } },
-                { content: String(pieces), styles: { halign: "center" } },
-                { content: item.product_unit || "Pcs", styles: { halign: "center" } },
-                { content: fmt(rowGross), styles: { halign: "right" } },
-                { content: fmt(rowDiscount), styles: { halign: "right" } },
-                { content: fmt(rowNet), styles: { halign: "right" } },
+                { content: row.description, styles: { halign: "left" } },
+                { content: String(row.quantity), styles: { halign: "center" } },
+                { content: `${row.quantity} x ${row.packSize}`, styles: { halign: "center" } },
+                { content: String(row.pieces), styles: { halign: "center" } },
+                { content: row.productUnit, styles: { halign: "center" } },
+                { content: fmt(row.grossAmount), styles: { halign: "right" } },
+                { content: fmt(row.discountAmount), styles: { halign: "right" } },
+                { content: fmt(row.netAmount), styles: { halign: "right" } },
             ]);
         });
-        // After iterating, append totals row using sums
+
+        const totals = reconciled.totals;
         itemRows.push([
             { content: "Total", colSpan: 2, styles: { halign: "right", fontStyle: "bold" } },
             { content: String(totalQty), styles: { halign: "center", fontStyle: "bold" } },
             { content: "", styles: {} },
             { content: String(totalPieces), styles: { halign: "center", fontStyle: "bold" } },
             { content: "", styles: {} },
-            { content: fmt(sumGross), styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(sumDiscount), styles: { halign: "right", fontStyle: "bold" } },
-            { content: fmt(sumNet), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(totals.grossAmount), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(totals.discountAmount), styles: { halign: "right", fontStyle: "bold" } },
+            { content: fmt(totals.netAmount), styles: { halign: "right", fontStyle: "bold" } },
         ]);
     } else {
         // Fallback: single row with whatever info we have
@@ -682,6 +698,16 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             { content: fmt(net), styles: { halign: "right" } },
         ]);
     }
+
+    invoiceRemark = resolveInvoiceRemark({
+        orderNote: (displayOrder as any).order_note,
+        note: (displayOrder as any).note,
+        savedNote,
+        orderRemark: (displayOrder as any).remark ?? (displayOrder as any).remarks,
+        itemRemarks: itemRemarkStrings,
+        reason: displayOrder.reason,
+        discountBreakdown,
+    });
 
     // Totals row (now includes pieces)
     if (orderItems.length === 0) {

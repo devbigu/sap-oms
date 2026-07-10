@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -19,6 +20,24 @@ type OrderData = {
   reason: string; accept_order: string; outstandingDate: string; Dealer_Name: string
   orderdata_item_quantity: string; readyquantity: string; mtstatus: string
   orderdata_datetime: string; staffid: string
+}
+type DispatchOrderProduct = {
+  orderdata_id: string
+  orderdata_orderid: string
+  orderdata_cat_no: string
+  orderdata_item_quantity: string
+  orderdata_status: string
+  readyquantity: string
+  product_name?: string
+  product_discription?: string
+  remark?: string
+  remarks?: string
+}
+type DispatchRemark = {
+  remark?: string
+  readyquantity?: string
+  status?: string
+  datetime?: string
 }
 type OrderResponse = { data: OrderData[]; total?: number; count?: number; last_page?: number }
 type OrderSummaryOverride = {
@@ -113,7 +132,7 @@ function resolveSession(): UserSession | null {
       if (p && Object.keys(p).length > 0)
         return { role: 'admin', id: p.id || p.admin_id || p.Admin_Id || '', name: p.name || 'Admin', roletype: '0', viewRoute: '/orders' }
     }
-  } catch (_) {}
+  } catch {}
   return null
 }
 
@@ -138,6 +157,29 @@ function mtBadge(s: string) {
   if (value === 'InProcess') return { value, cls: 'badge-inprocess', dot: '#ef4444', label: 'In Process' }
   if (value === 'Pending') return { value, cls: 'badge-pending', dot: '#f59e0b', label: 'Pending' }
   return { value, cls: 'badge-noaction', dot: '#94a3b8', label: 'No Action Taken' }
+}
+
+function safeNumber(value: unknown): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function dispatchStatusOptionLabel(status: string) {
+  switch (String(status || '').trim()) {
+    case '1': return 'Packing'
+    case '2': return 'Dispatched'
+    case '3': return 'Not in Stock'
+    case '4': return 'Successful'
+    default: return 'Unknown'
+  }
+}
+
+function getDispatchLeftQuantity(item: DispatchOrderProduct): number {
+  return Math.max(0, safeNumber(item.orderdata_item_quantity) - safeNumber(item.readyquantity))
+}
+
+function getOriginalProductRemarks(item: DispatchOrderProduct): string {
+  return [item.remark, item.remarks].filter(Boolean).join(' | ')
 }
 
 function customDiscountBadge(progress: CustomDiscountProgress) {
@@ -184,9 +226,20 @@ function FilterTag({ label, color, bg, onRemove }: {
 }
 
 // ─── ActionMenu ───────────────────────────────────────────────────────────────
-function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onDecline, onDelete }: {
-  showDelete: boolean; showAccept: boolean; acceptOrder: string
-  onView: () => void; onAccept: () => void; onDecline: () => void; onDelete: () => void
+function ActionMenu({
+  showDelete,
+  showAccept,
+  showDispatch,
+  dispatchDisabled,
+  acceptOrder,
+  onView,
+  onDispatch,
+  onAccept,
+  onDecline,
+  onDelete,
+}: {
+  showDelete: boolean; showAccept: boolean; showDispatch?: boolean; dispatchDisabled?: boolean; acceptOrder: string
+  onView: () => void; onDispatch?: () => void; onAccept: () => void; onDecline: () => void; onDelete: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -202,7 +255,6 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }} ref={ref}>
-      {/* Trigger */}
       <button
         onClick={() => setOpen(v => !v)}
         aria-label="Actions"
@@ -214,12 +266,11 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
           cursor: 'pointer', transition: 'all 0.15s',
         }}
       >
-        {[0,1,2].map(i => (
+        {[0, 1, 2].map(i => (
           <span key={i} style={{ width: 3.5, height: 3.5, borderRadius: '50%', background: open ? '#6366f1' : '#94a3b8', display: 'block', transition: 'background 0.15s' }} />
         ))}
       </button>
 
-      {/* Dropdown */}
       {open && (
         <div style={{
           position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 50,
@@ -231,8 +282,6 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
           padding: '6px',
           display: 'flex', flexDirection: 'column', gap: 2,
         }}>
-
-          {/* View */}
           <button
             onClick={close(onView)}
             style={{
@@ -262,7 +311,45 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
             </span>
           </button>
 
-          {/* Accept */}
+          {showDispatch && (
+            <button
+              onClick={dispatchDisabled || !onDispatch ? undefined : close(onDispatch)}
+              disabled={dispatchDisabled || !onDispatch}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                width: '100%', padding: '9px 12px',
+                borderRadius: 8, border: 'none',
+                background: 'transparent',
+                cursor: dispatchDisabled ? 'not-allowed' : 'pointer',
+                fontSize: 12.5, fontWeight: 500,
+                color: dispatchDisabled ? '#9ca3af' : '#4338ca',
+                fontFamily: 'inherit', textAlign: 'left',
+                transition: 'background 0.12s',
+                opacity: dispatchDisabled ? 0.8 : 1,
+              }}
+              onMouseEnter={e => { if (!dispatchDisabled) e.currentTarget.style.background = '#eef2ff' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+            >
+              <span style={{
+                width: 28, height: 28, borderRadius: 7,
+                background: dispatchDisabled ? '#f8fafc' : '#eef2ff',
+                border: `1px solid ${dispatchDisabled ? '#e5e7eb' : '#c7d2fe'}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={dispatchDisabled ? '#9ca3af' : '#4338ca'} strokeWidth="2" strokeLinecap="round">
+                  <path d="M9 12h6M12 9v6" />
+                  <path d="M4 7h16M6 3h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
+                </svg>
+              </span>
+              <span>
+                <div style={{ lineHeight: 1.2 }}>Dispatch Details</div>
+                <div style={{ fontSize: 10.5, color: dispatchDisabled ? '#cbd5e1' : '#818cf8', marginTop: 2 }}>
+                  {dispatchDisabled ? 'Accept order first' : 'Update dispatch on this page'}
+                </div>
+              </span>
+            </button>
+          )}
+
           {showAccept && acceptOrder === '0' && (
             <button
               onClick={close(onAccept)}
@@ -294,7 +381,6 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
             </button>
           )}
 
-          {/* Already accepted → show disabled + decline */}
           {showAccept && acceptOrder === '1' && (
             <>
               <div style={{
@@ -347,7 +433,6 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
             </>
           )}
 
-          {/* Divider + Delete */}
           {showDelete && (
             <>
               <div style={{ height: 1, background: '#f1f5f9', margin: '2px 4px' }} />
@@ -388,6 +473,207 @@ function ActionMenu({ showDelete, showAccept, acceptOrder, onView, onAccept, onD
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+function DispatchDetailsDrawer({
+  order,
+  products,
+  loadingProducts,
+  productsError,
+  selectedProductId,
+  onSelectProduct,
+  history,
+  historyLoading,
+  historyError,
+  form,
+  formError,
+  submitting,
+  onFormChange,
+  onSubmit,
+  onClose,
+}: {
+  order: OrderData | null
+  products: DispatchOrderProduct[]
+  loadingProducts: boolean
+  productsError: string
+  selectedProductId: string
+  onSelectProduct: (productId: string) => void
+  history: DispatchRemark[]
+  historyLoading: boolean
+  historyError: string
+  form: { readyQuantity: string; status: string; remark: string }
+  formError: string
+  submitting: boolean
+  onFormChange: (field: 'readyQuantity' | 'status' | 'remark', value: string) => void
+  onSubmit: () => void
+  onClose: () => void
+}) {
+  if (!order) return null
+
+  const selectedProduct = products.find((item) => item.orderdata_id === selectedProductId) ?? null
+  const availableLeftQuantity = selectedProduct ? getDispatchLeftQuantity(selectedProduct) : 0
+
+  return (
+    <div className="dispatch-overlay" onClick={onClose}>
+      <div className="dispatch-drawer" onClick={(event) => event.stopPropagation()}>
+        <div className="dispatch-header">
+          <div>
+            <p className="dispatch-kicker">Dispatch Details</p>
+            <h2 className="dispatch-title">Order No: OM/{YEAR}/{order.order_id}</h2>
+            <p className="dispatch-subtitle">Dealer: {order.Dealer_Name || '—'}</p>
+          </div>
+          <button type="button" className="dispatch-close" onClick={onClose} aria-label="Close dispatch details">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="dispatch-layout">
+          <div className="dispatch-products">
+            <div className="dispatch-section-head">
+              <h3>Order Products</h3>
+              {!loadingProducts && <span>{products.length} line{products.length !== 1 ? 's' : ''}</span>}
+            </div>
+
+            {loadingProducts && <div className="dispatch-empty">Loading order products…</div>}
+            {!loadingProducts && productsError && <div className="dispatch-error">{productsError}</div>}
+            {!loadingProducts && !productsError && products.length === 0 && (
+              <div className="dispatch-empty">No products returned for this order.</div>
+            )}
+
+            {!loadingProducts && !productsError && products.length > 0 && (
+              <div className="dispatch-product-list">
+                {products.map((item, index) => {
+                  const selected = item.orderdata_id === selectedProductId
+                  return (
+                    <div key={item.orderdata_id} className={`dispatch-product-card${selected ? ' is-selected' : ''}`}>
+                      <div className="dispatch-product-top">
+                        <span className="dispatch-product-index">{String(index + 1).padStart(2, '0')}</span>
+                        <span className="dispatch-cat-pill">{item.orderdata_cat_no || '—'}</span>
+                        <span className="dispatch-line-id">#{item.orderdata_id}</span>
+                      </div>
+                      <p className="dispatch-product-name">{item.product_name || item.orderdata_cat_no || '—'}</p>
+                      <p className="dispatch-product-desc">{item.product_discription || 'No description available.'}</p>
+                      <div className="dispatch-product-grid">
+                        <span>Ordered: {safeNumber(item.orderdata_item_quantity)}</span>
+                        <span>Dispatched: {safeNumber(item.readyquantity)}</span>
+                        <span>Left: {getDispatchLeftQuantity(item)}</span>
+                        <span>Status: {dispatchStatusOptionLabel(item.orderdata_status)}</span>
+                      </div>
+                      <div className="dispatch-original-note">
+                        <span className="dispatch-original-note-label">Product Note / Original Remarks</span>
+                        <p>{getOriginalProductRemarks(item) || '—'}</p>
+                      </div>
+                      <button type="button" className="dispatch-select-btn" onClick={() => onSelectProduct(item.orderdata_id)}>
+                        Update Dispatch
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="dispatch-editor">
+            <div className="dispatch-section-head">
+              <h3>Dispatch Update</h3>
+              {selectedProduct && <span>Line #{selectedProduct.orderdata_id}</span>}
+            </div>
+
+            {!selectedProduct && <div className="dispatch-empty">Choose a product line to update its dispatch details.</div>}
+
+            {selectedProduct && (
+              <>
+                <div className="dispatch-form-card">
+                  <div className="dispatch-form-row">
+                    <label htmlFor="dispatch-ready">Ready Quantity</label>
+                    <input
+                      id="dispatch-ready"
+                      type="number"
+                      min="1"
+                      value={form.readyQuantity}
+                      onChange={(event) => onFormChange('readyQuantity', event.target.value)}
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  <div className="dispatch-form-row">
+                    <label htmlFor="dispatch-left">Left Quantity</label>
+                    <input id="dispatch-left" type="text" value={String(availableLeftQuantity)} readOnly disabled />
+                  </div>
+
+                  <div className="dispatch-form-row">
+                    <label htmlFor="dispatch-status">Current Status</label>
+                    <select
+                      id="dispatch-status"
+                      value={form.status}
+                      onChange={(event) => onFormChange('status', event.target.value)}
+                      disabled={submitting}
+                    >
+                      <option value="">Select status</option>
+                      <option value="1">Packing</option>
+                      <option value="2">Dispatched</option>
+                      <option value="3">Not in Stock</option>
+                      <option value="4">Successful</option>
+                    </select>
+                  </div>
+
+                  <div className="dispatch-form-row">
+                    <label htmlFor="dispatch-remark">Remark</label>
+                    <textarea
+                      id="dispatch-remark"
+                      value={form.remark}
+                      onChange={(event) => onFormChange('remark', event.target.value)}
+                      placeholder="Add dispatch remark"
+                      rows={4}
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  {formError && <div className="dispatch-error">{formError}</div>}
+
+                  <button type="button" className="dispatch-submit-btn" onClick={onSubmit} disabled={submitting}>
+                    {submitting ? 'Saving…' : 'Save Dispatch Update'}
+                  </button>
+                </div>
+
+                <div className="dispatch-history-card">
+                  <div className="dispatch-section-head">
+                    <h3>Dispatch History</h3>
+                    {!historyLoading && <span>{history.length} update{history.length !== 1 ? 's' : ''}</span>}
+                  </div>
+
+                  {historyLoading && <div className="dispatch-empty">Loading remark history…</div>}
+                  {!historyLoading && historyError && <div className="dispatch-error">{historyError}</div>}
+                  {!historyLoading && !historyError && history.length === 0 && (
+                    <div className="dispatch-empty">No dispatch history found for this product line.</div>
+                  )}
+                  {!historyLoading && !historyError && history.length > 0 && (
+                    <div className="dispatch-history-list">
+                      {history.map((entry, index) => (
+                        <div key={`${selectedProduct.orderdata_id}-${index}`} className="dispatch-history-item">
+                          <div className="dispatch-history-top">
+                            <span className="dispatch-product-index">{String(index + 1).padStart(2, '0')}</span>
+                            <span className="dispatch-history-status">{dispatchStatusOptionLabel(String(entry.status || ''))}</span>
+                          </div>
+                          <p className="dispatch-history-remark">{entry.remark || '—'}</p>
+                          <div className="dispatch-history-meta">
+                            <span>Ready Qty: {safeNumber(entry.readyquantity)}</span>
+                            <span>{entry.datetime || '—'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function OrdersPage() {
   const router      = useRouter()
   const queryClient = useQueryClient()
@@ -404,12 +690,23 @@ export default function OrdersPage() {
   const [dateFrom,     setDateFrom    ] = useState('')
   const [dateTo,       setDateTo      ] = useState('')
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({})
+  const [dispatchOrder, setDispatchOrder] = useState<OrderData | null>(null)
+  const [dispatchProducts, setDispatchProducts] = useState<DispatchOrderProduct[]>([])
+  const [dispatchProductsLoading, setDispatchProductsLoading] = useState(false)
+  const [dispatchProductsError, setDispatchProductsError] = useState('')
+  const [selectedDispatchProductId, setSelectedDispatchProductId] = useState('')
+  const [dispatchHistory, setDispatchHistory] = useState<DispatchRemark[]>([])
+  const [dispatchHistoryLoading, setDispatchHistoryLoading] = useState(false)
+  const [dispatchHistoryError, setDispatchHistoryError] = useState('')
+  const [dispatchSubmitting, setDispatchSubmitting] = useState(false)
+  const [dispatchFormError, setDispatchFormError] = useState('')
+  const [dispatchForm, setDispatchForm] = useState({ readyQuantity: '', status: '', remark: '' })
 
   useEffect(() => {
     const s = resolveSession()
     if (!s) { router.push('/auth/login'); return }
     setSession(s)
-  }, [])
+  }, [router])
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t) }, [toast])
   useEffect(() => { setPage(1) }, [orderIdInput, dealerInput, statusSearch, mtFilter, amountMin, amountMax, dateFrom, dateTo])
@@ -456,7 +753,7 @@ export default function OrdersPage() {
       .then(json => {
         if (!json.success) return
         const next: Record<string, OrderSummaryOverride> = {}
-        ;(json.data ?? []).forEach((item: any) => {
+        ;(json.data ?? []).forEach((item: OrderSummaryOverride & { orderId?: string }) => {
           if (item.orderId) next[item.orderId] = item
         })
         setSummaryOverrides(next)
@@ -576,6 +873,160 @@ export default function OrdersPage() {
     } catch { setToast({ msg: 'Action failed.', type: 'err' }) }
   }, [queryClient])
 
+  const loadDispatchProducts = useCallback(async (orderId: string, preferredProductId?: string) => {
+    setDispatchProductsLoading(true)
+    setDispatchProductsError('')
+    try {
+      const res = await fetch(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`, { cache: 'no-store' })
+      const json = await res.json()
+      const nextProducts: DispatchOrderProduct[] = Array.isArray(json?.data) ? json.data : []
+      setDispatchProducts(nextProducts)
+      const resolvedProductId = preferredProductId && nextProducts.some((item) => item.orderdata_id === preferredProductId)
+        ? preferredProductId
+        : nextProducts[0]?.orderdata_id ?? ''
+      setSelectedDispatchProductId(resolvedProductId)
+      setDispatchFormError('')
+    } catch {
+      setDispatchProducts([])
+      setSelectedDispatchProductId('')
+      setDispatchProductsError('Failed to load order products. Please try again.')
+    } finally {
+      setDispatchProductsLoading(false)
+    }
+  }, [])
+
+  const loadDispatchHistory = useCallback(async (productId: string) => {
+    if (!productId) {
+      setDispatchHistory([])
+      setDispatchHistoryError('')
+      return
+    }
+    setDispatchHistoryLoading(true)
+    setDispatchHistoryError('')
+    try {
+      const res = await fetch(`${BACKEND_URL}/getremark?id=${encodeURIComponent(productId)}`, { cache: 'no-store' })
+      const json = await res.json()
+      setDispatchHistory(Array.isArray(json?.data) ? json.data : [])
+    } catch {
+      setDispatchHistory([])
+      setDispatchHistoryError('Failed to load dispatch history. Please try again.')
+    } finally {
+      setDispatchHistoryLoading(false)
+    }
+  }, [])
+
+  const openDispatchDetails = useCallback((order: OrderData) => {
+    setDispatchOrder(order)
+    setDispatchProducts([])
+    setDispatchProductsError('')
+    setDispatchHistory([])
+    setDispatchHistoryError('')
+    setSelectedDispatchProductId('')
+    setDispatchFormError('')
+    setDispatchForm({ readyQuantity: '', status: '', remark: '' })
+    loadDispatchProducts(order.order_id)
+  }, [loadDispatchProducts])
+
+  const closeDispatchDetails = useCallback(() => {
+    setDispatchOrder(null)
+    setDispatchProducts([])
+    setDispatchProductsError('')
+    setDispatchHistory([])
+    setDispatchHistoryError('')
+    setSelectedDispatchProductId('')
+    setDispatchFormError('')
+    setDispatchForm({ readyQuantity: '', status: '', remark: '' })
+  }, [])
+
+  useEffect(() => {
+    const selectedProduct = dispatchProducts.find((item) => item.orderdata_id === selectedDispatchProductId) ?? null
+    if (!selectedProduct) {
+      setDispatchHistory([])
+      setDispatchHistoryError('')
+      setDispatchForm({ readyQuantity: '', status: '', remark: '' })
+      return
+    }
+
+    setDispatchForm({
+      readyQuantity: '',
+      status: ['1', '2', '3', '4'].includes(String(selectedProduct.orderdata_status || ''))
+        ? String(selectedProduct.orderdata_status)
+        : '',
+      remark: '',
+    })
+    setDispatchFormError('')
+    loadDispatchHistory(selectedProduct.orderdata_id)
+  }, [selectedDispatchProductId, dispatchProducts, loadDispatchHistory])
+
+  const selectedDispatchProduct = dispatchProducts.find((item) => item.orderdata_id === selectedDispatchProductId) ?? null
+
+  const handleDispatchFormChange = useCallback((field: 'readyQuantity' | 'status' | 'remark', value: string) => {
+    setDispatchForm((previous) => ({ ...previous, [field]: value }))
+    setDispatchFormError('')
+  }, [])
+
+  const handleDispatchSubmit = useCallback(async () => {
+    if (!dispatchOrder || !selectedDispatchProduct) return
+
+    const enteredReadyQuantity = Number(dispatchForm.readyQuantity)
+    const availableLeftQuantity = getDispatchLeftQuantity(selectedDispatchProduct)
+    const trimmedRemark = dispatchForm.remark.trim()
+
+    if (!dispatchForm.readyQuantity.trim() || !Number.isFinite(enteredReadyQuantity)) {
+      setDispatchFormError('Ready quantity is required.')
+      return
+    }
+    if (enteredReadyQuantity <= 0) {
+      setDispatchFormError('Ready quantity must be greater than zero.')
+      return
+    }
+    if (enteredReadyQuantity > availableLeftQuantity) {
+      setDispatchFormError('Ready quantity cannot exceed the currently available left quantity.')
+      return
+    }
+    if (!dispatchForm.status) {
+      setDispatchFormError('Please select a status.')
+      return
+    }
+    if (!trimmedRemark) {
+      setDispatchFormError('Remark is required.')
+      return
+    }
+
+    const fd = new FormData()
+    fd.append('orderid', selectedDispatchProduct.orderdata_id)
+    fd.append('readyquantity', String(enteredReadyQuantity))
+    fd.append('leftquantity', String(availableLeftQuantity))
+    fd.append('remark', trimmedRemark)
+    fd.append('status', dispatchForm.status)
+
+    setDispatchSubmitting(true)
+    setDispatchFormError('')
+    try {
+      const res = await axios.post(`${BACKEND_URL}/addremark`, fd)
+      setToast({ msg: res.data?.msg || 'Dispatch details updated.', type: 'ok' })
+      setDispatchForm((previous) => ({ ...previous, readyQuantity: '', remark: '' }))
+      await Promise.all([
+        loadDispatchProducts(dispatchOrder.order_id, selectedDispatchProduct.orderdata_id),
+        loadDispatchHistory(selectedDispatchProduct.orderdata_id),
+      ])
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    } catch {
+      setDispatchFormError('Failed to save dispatch update. Please try again.')
+    } finally {
+      setDispatchSubmitting(false)
+    }
+  }, [
+    dispatchForm.readyQuantity,
+    dispatchForm.remark,
+    dispatchForm.status,
+    dispatchOrder,
+    loadDispatchHistory,
+    loadDispatchProducts,
+    queryClient,
+    selectedDispatchProduct,
+  ])
+
   function pageNumbers(): (number | '…')[] {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
     const pages: (number | '…')[] = [1]
@@ -652,6 +1103,57 @@ export default function OrdersPage() {
         .badge-awaiting  { background: #fffbeb; color: #92400e; }
         .badge-inprocess { background: #fff1f2; color: #be123c; }
         .badge-noaction  { background: #f8fafc; color: #475569; }
+        .dispatch-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(15, 23, 42, 0.28); backdrop-filter: blur(5px); display: flex; justify-content: flex-end; }
+        .dispatch-drawer { width: min(1120px, 100%); height: 100%; background: #f8fafc; box-shadow: -18px 0 40px rgba(15, 23, 42, 0.16); display: flex; flex-direction: column; }
+        .dispatch-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px 28px 20px; border-bottom: 1px solid #e2e8f0; background: #fff; }
+        .dispatch-kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 8px; }
+        .dispatch-title { font-size: 22px; font-weight: 700; color: #0f172a; line-height: 1.15; }
+        .dispatch-subtitle { font-size: 13px; color: #64748b; margin-top: 4px; }
+        .dispatch-close { width: 38px; height: 38px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; color: #475569; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; }
+        .dispatch-close:hover { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
+        .dispatch-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr); gap: 20px; padding: 20px 28px 28px; overflow: hidden; }
+        .dispatch-products, .dispatch-editor { min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+        .dispatch-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .dispatch-section-head h3 { font-size: 15px; font-weight: 700; color: #0f172a; }
+        .dispatch-section-head span { font-size: 11px; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+        .dispatch-product-list, .dispatch-history-list { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+        .dispatch-product-card, .dispatch-form-card, .dispatch-history-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04); }
+        .dispatch-product-card { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+        .dispatch-product-card.is-selected { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.14); }
+        .dispatch-product-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+        .dispatch-product-index { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 24px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+        .dispatch-cat-pill, .dispatch-line-id, .dispatch-history-status { display: inline-flex; align-items: center; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+        .dispatch-cat-pill { background: #fef3c7; color: #92400e; }
+        .dispatch-line-id { background: #eef2ff; color: #4338ca; font-family: 'JetBrains Mono', monospace; }
+        .dispatch-history-status { background: #eff6ff; color: #1d4ed8; }
+        .dispatch-product-name { font-size: 14px; font-weight: 700; color: #111827; }
+        .dispatch-product-desc { font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.5; }
+        .dispatch-product-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+        .dispatch-product-grid span, .dispatch-history-meta span { font-size: 11px; color: #475569; font-family: 'JetBrains Mono', monospace; }
+        .dispatch-original-note { margin-top: 12px; padding: 12px; border-radius: 14px; background: #f8fafc; border: 1px solid #e2e8f0; }
+        .dispatch-original-note-label { display: block; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
+        .dispatch-original-note p { font-size: 12px; color: #334155; line-height: 1.5; }
+        .dispatch-select-btn, .dispatch-submit-btn { border: none; cursor: pointer; font-family: inherit; font-weight: 600; transition: all 0.15s; }
+        .dispatch-select-btn { align-self: flex-start; padding: 9px 14px; border-radius: 12px; background: #eef2ff; color: #4338ca; }
+        .dispatch-select-btn:hover { background: #e0e7ff; }
+        .dispatch-form-card, .dispatch-history-card { padding: 16px; }
+        .dispatch-form-card { display: flex; flex-direction: column; gap: 14px; }
+        .dispatch-form-row { display: flex; flex-direction: column; gap: 6px; }
+        .dispatch-form-row label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }
+        .dispatch-form-row input, .dispatch-form-row select, .dispatch-form-row textarea { width: 100%; border-radius: 12px; border: 1px solid #dbe2ee; background: #fff; padding: 11px 12px; font-size: 13px; font-family: inherit; color: #0f172a; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+        .dispatch-form-row input:focus, .dispatch-form-row select:focus, .dispatch-form-row textarea:focus { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.14); }
+        .dispatch-form-row input[disabled], .dispatch-form-row select[disabled], .dispatch-form-row textarea[disabled] { background: #f8fafc; color: #64748b; cursor: not-allowed; }
+        .dispatch-submit-btn { padding: 11px 16px; border-radius: 12px; background: #1d4ed8; color: #fff; }
+        .dispatch-submit-btn:hover:not(:disabled) { background: #1e40af; }
+        .dispatch-submit-btn:disabled { opacity: 0.55; cursor: wait; }
+        .dispatch-history-card { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+        .dispatch-history-item { padding: 12px; border-radius: 14px; background: #f8fafc; border: 1px solid #e2e8f0; }
+        .dispatch-history-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+        .dispatch-history-remark { font-size: 12px; color: #1f2937; line-height: 1.5; }
+        .dispatch-history-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+        .dispatch-empty, .dispatch-error { padding: 16px; border-radius: 14px; font-size: 12.5px; }
+        .dispatch-empty { background: #fff; border: 1px dashed #dbe2ee; color: #64748b; }
+        .dispatch-error { background: #fff1f2; border: 1px solid #fecdd3; color: #be123c; }
         .empty-row td { padding: 52px 20px; text-align: center; color: #9ca3af; font-size: 13px; }
         .pagination { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-top: 1px solid #f1f3f9; flex-wrap: wrap; gap: 12px; }
         .pagination-info { font-size: 12px; color: #94a3b8; }
@@ -667,6 +1169,10 @@ export default function OrdersPage() {
         .toast-err { background: #fff1f2; color: #be123c; border: 1px solid #fecdd3; }
         @keyframes slideUp { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .active-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+        @media (max-width: 1100px) {
+          .dispatch-layout { grid-template-columns: 1fr; overflow-y: auto; }
+          .dispatch-drawer { width: 100%; }
+        }
       `}</style>
 
       <div className="orders-root">
@@ -932,9 +1438,12 @@ export default function OrdersPage() {
                             <ActionMenu
                               showDelete={showDelete}
                               showAccept={showAccept}
+                              showDispatch={session.role === 'staff'}
+                              dispatchDisabled={session.role === 'staff' && (order.accept_order !== '1' || order.del_status !== '0')}
                               acceptOrder={order.accept_order}
                               // ── unified route: same detail page as order history ──
                               onView={() => router.push(`/orders/${order.order_id}`)}
+                              onDispatch={() => openDispatchDetails(order)}
                               onAccept={() => handleAccept(order.order_id, 1)}
                               onDecline={() => handleAccept(order.order_id, 0)}
                               onDelete={() => handleDelete(order.order_id)}
@@ -975,6 +1484,24 @@ export default function OrdersPage() {
 
         </div>
       </div>
+
+      <DispatchDetailsDrawer
+        order={dispatchOrder}
+        products={dispatchProducts}
+        loadingProducts={dispatchProductsLoading}
+        productsError={dispatchProductsError}
+        selectedProductId={selectedDispatchProductId}
+        onSelectProduct={setSelectedDispatchProductId}
+        history={dispatchHistory}
+        historyLoading={dispatchHistoryLoading}
+        historyError={dispatchHistoryError}
+        form={dispatchForm}
+        formError={dispatchFormError}
+        submitting={dispatchSubmitting}
+        onFormChange={handleDispatchFormChange}
+        onSubmit={handleDispatchSubmit}
+        onClose={closeDispatchDetails}
+      />
     </>
   )
 }

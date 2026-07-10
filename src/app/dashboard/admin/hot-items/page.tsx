@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -18,6 +18,7 @@ export type HotItem = {
 type CatalogOption = {
   sku: string;
   name: string;
+  displayName: string;
   specs: string;
   image: string;
 };
@@ -39,6 +40,8 @@ type CatalogueImageSource = {
 };
 
 type CatalogueSpecsSource = {
+  specsText?: unknown;
+  SpecsText?: unknown;
   specs?: unknown;
   Specs?: unknown;
   specifications?: unknown;
@@ -82,14 +85,70 @@ function firstString(value: unknown): string {
   return "";
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatSpecObject(value: Record<string, unknown>): string {
+  return Object.entries(value)
+    .map(([key, specValue]) => {
+      const cleanKey = String(key).trim();
+      const cleanValue = String(specValue ?? "").trim();
+      if (!cleanKey || !cleanValue) return "";
+      return `${cleanKey}: ${cleanValue}`;
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function getSpecs(value: CatalogueSpecsSource): string {
-  return (
-    firstString(value.specs) ||
-    firstString(value.Specs) ||
-    firstString(value.specifications) ||
-    firstString(value.Specifications) ||
-    firstString(value.specification)
-  );
+  const candidates = [
+    value.specsText,
+    value.SpecsText,
+    value.specs,
+    value.Specs,
+    value.specifications,
+    value.Specifications,
+    value.specification,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" || Array.isArray(candidate)) {
+      const text = firstString(candidate);
+      if (text) return text;
+    }
+
+    if (isPlainObject(candidate)) {
+      const formatted = formatSpecObject(candidate);
+      if (formatted) return formatted;
+    }
+  }
+
+  return "";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanCatalogueName(name: string, sku: string): string {
+  const cleanName = String(name ?? "").trim();
+  const cleanSku = String(sku ?? "").trim();
+
+  if (!cleanName || !cleanSku) return cleanName;
+
+  const escapedSku = escapeRegExp(cleanSku);
+  const patterns = [
+    new RegExp(`\\s*[-–—]\\s*${escapedSku}\\s*$`, "i"),
+    new RegExp(`\\s*\\(?\\s*${escapedSku}\\s*\\)?\\s*$`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const next = cleanName.replace(pattern, "").trim();
+    if (next && next !== cleanSku) return next;
+  }
+
+  return cleanName;
 }
 
 async function fetchJson<T>(
@@ -183,10 +242,17 @@ function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[
     const productName = String(product.name ?? product.Name ?? "").trim();
     const productSpecs = getSpecs(product);
     const productImage = getFirstImage(product);
+    const productDisplayName = cleanCatalogueName(productName, productSku);
 
     if (productSku && productName && !seen.has(productSku.toLowerCase())) {
       seen.add(productSku.toLowerCase());
-      options.push({ sku: productSku, name: productName, specs: productSpecs, image: productImage });
+      options.push({
+        sku: productSku,
+        name: productName,
+        displayName: productDisplayName,
+        specs: productSpecs,
+        image: productImage,
+      });
     }
 
     const variants = Array.isArray(product.variants)
@@ -199,9 +265,16 @@ function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[
       const variantName = String(typedVariant.name ?? typedVariant.Name ?? productName).trim();
       const variantSpecs = getSpecs(typedVariant) || productSpecs;
       const variantImage = getFirstImage(typedVariant) || productImage;
+      const variantDisplayName = cleanCatalogueName(variantName || productName, variantSku);
       if (!variantSku || seen.has(variantSku.toLowerCase())) continue;
       seen.add(variantSku.toLowerCase());
-      options.push({ sku: variantSku, name: variantName || productName, specs: variantSpecs, image: variantImage });
+      options.push({
+        sku: variantSku,
+        name: variantName || productName,
+        displayName: variantDisplayName,
+        specs: variantSpecs,
+        image: variantImage,
+      });
     }
   }
 
@@ -266,6 +339,9 @@ export default function AdminHotItemsPage() {
   const [catalog, setCatalog] = useState<CatalogOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [catalogueWarning, setCatalogueWarning] = useState<string | null>(null);
+  const [skuDropdownOpen, setSkuDropdownOpen] = useState(false);
+  const skuInputRef = useRef<HTMLInputElement | null>(null);
+  const skuDropdownRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -326,6 +402,29 @@ export default function AdminHotItemsPage() {
     };
   }, [show]);
 
+  useEffect(() => {
+    if (!skuDropdownOpen) return undefined;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && skuInputRef.current?.contains(target)) return;
+      if (target && skuDropdownRef.current?.contains(target)) return;
+      setSkuDropdownOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSkuDropdownOpen(false);
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [skuDropdownOpen]);
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const openAdd = () => {
@@ -348,14 +447,30 @@ export default function AdminHotItemsPage() {
     return catalog.find((option) => option.sku.toLowerCase() === needle) ?? null;
   };
 
+  const findCatalogMatches = (sku: string) => {
+    const needle = sku.trim().toLowerCase();
+    if (!needle) return [];
+
+    return catalog
+      .filter((option) => option.sku.toLowerCase().includes(needle))
+      .sort((a, b) => {
+        const aStarts = a.sku.toLowerCase().startsWith(needle);
+        const bStarts = b.sku.toLowerCase().startsWith(needle);
+        if (aStarts !== bStarts) return aStarts ? -1 : 1;
+        return a.sku.localeCompare(b.sku);
+      })
+      .slice(0, 50);
+  };
+
   const applyCatalogOption = (option: CatalogOption) => {
     setForm((f) => ({
       ...f,
       SKU: option.sku,
-      name: option.name,
+      name: option.displayName || option.name,
       specs: option.specs,
       image: option.image || f.image,
     }));
+    setSkuDropdownOpen(false);
   };
 
   const syncCatalogMatch = (sku: string) => {
@@ -420,6 +535,7 @@ export default function AdminHotItemsPage() {
 
   const activeCount = items.filter(i => i.active).length;
   const catalogueAvailable = catalog.length > 0 && !catalogueWarning;
+  const skuSuggestions = catalogueAvailable ? findCatalogMatches(form.SKU) : [];
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -501,21 +617,58 @@ export default function AdminHotItemsPage() {
                 <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest block mb-1.5">
                   SKU <span className="text-red-500">*</span>
                 </label>
-                <input
-                  list="hot-item-catalog"
-                  value={form.SKU}
-                  onChange={e => setForm(f => ({ ...f, SKU: e.target.value }))}
-                  onBlur={e => syncCatalogMatch(e.target.value)}
-                  placeholder="e.g. PYC-25-A"
-                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
-                />
-                <datalist id="hot-item-catalog">
-                  {catalog.slice(0, 2500).map((option) => (
-                    <option key={option.sku} value={option.sku}>
-                      {option.name} 
-                    </option>
-                  ))}
-                </datalist>
+                <div className="relative">
+                  <input
+                    ref={skuInputRef}
+                    value={form.SKU}
+                    onChange={e => {
+                      const nextSku = e.target.value;
+                      setForm(f => ({ ...f, SKU: nextSku }));
+                      setSkuDropdownOpen(Boolean(nextSku.trim()) && catalogueAvailable);
+                    }}
+                    onFocus={() => {
+                      if (form.SKU.trim() && catalogueAvailable) {
+                        setSkuDropdownOpen(true);
+                      }
+                    }}
+                    onBlur={e => syncCatalogMatch(e.target.value)}
+                    placeholder="e.g. PYC-25-A"
+                    className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
+                    autoComplete="off"
+                    aria-autocomplete="list"
+                    aria-controls="hot-item-catalog-suggestions"
+                  />
+                  {catalogueAvailable && skuDropdownOpen && skuSuggestions.length > 0 && (
+                    <div
+                      id="hot-item-catalog-suggestions"
+                      ref={skuDropdownRef}
+                      className="absolute left-0 right-0 top-full mt-2 z-30 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl"
+                    >
+                      <div className="max-h-72 overflow-auto py-1">
+                        {skuSuggestions.map((option) => (
+                          <button
+                            key={option.sku}
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              applyCatalogOption(option);
+                              skuInputRef.current?.focus();
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 hover:bg-indigo-50 focus:bg-indigo-50 outline-none transition-colors border-b border-gray-100 last:border-b-0"
+                          >
+                            <div className="text-[12px] font-semibold text-gray-900 font-mono leading-5">
+                              {option.sku}
+                              {option.specs ? ` — ${option.specs}` : ""}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-gray-500 leading-4">
+                              {option.displayName || option.name}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {catalogueAvailable && findCatalogOption(form.SKU) && (
                 <button
                     type="button"
