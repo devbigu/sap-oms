@@ -76,6 +76,7 @@ export default function EditDealerPage() {
   const [currentlimit,   setCurrentlimit]   = useState("")
   const [notes,          setNotes]          = useState("")
   const [dealerid,       setDealerid]       = useState("")
+  const [status,         setStatus]         = useState("1")
   const [assignedStaffIds, setAssignedStaffIds] = useState<string[]>([])
   const [existingStaffNames, setExistingStaffNames] = useState("")
 
@@ -86,59 +87,64 @@ export default function EditDealerPage() {
     return () => clearTimeout(t)
   }, [toastMsg])
 
-  const fetchDealer = async () => {
-    if (!dealerId) return
-    setIsLoading(true)
-    try {
-      const res  = await fetch(`${BACKEND_URL}/getdealer?id=${encodeURIComponent(dealerId)}`, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ type: 'type' }),
-      })
-      const json = await res.json()
-      if (json.status) {
-        const d = json.data
-        setName(d.Dealer_Name        || "")
-        setEmail(d.Dealer_Email       || "")
-        setNumber(d.Dealer_Number     || "")
-        setCity(d.Dealer_City         || "")
-        setPincode(d.Dealer_Pincode   || "")
-        setAddress(d.Dealer_Address   || "")
-        setUsername(d.Dealer_Username || "")
-        setDiscount(d.discount        || "")
-        setPassword(d.Dealer_Password || "")
-        setDealercode(d.Dealer_Dealercode || "")
-        setGst(d.gst                  || "")
-        setCreditdays(d.creditdays    || "")
-        setNotes(d.Dealer_Notes       || "")
-        setDealerid(d.Dealer_Id       || "")
-        setAnnualtarget(d.annualtarget || "")
-        setCurrentlimit(d.currentlimit || "")
-        setExistingStaffNames(d.staffname || "")
-        setAssignedStaffIds(splitCsv(d.assignedstaff))
-      } else {
-        setToastMsg({ text: json.msz || "Failed to load dealer", type: 'error' })
-      }
-    } catch {
-      setToastMsg({ text: "Failed to load dealer data", type: 'error' })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const fetchStaff = async () => {
-    try {
-      const res  = await fetch(`${BACKEND_URL}/staffassign`)
-      const json = await res.json()
-      setStaffOptions(json.data || [])
-    } catch {
-      console.error("Failed to fetch staff")
-    }
-  }
-
   useEffect(() => {
-    fetchDealer()
-    fetchStaff()
+    let active = true
+
+    const loadDealer = async () => {
+      if (!dealerId) return
+      setIsLoading(true)
+      try {
+        const res = await fetch(`${BACKEND_URL}/getdealer?id=${encodeURIComponent(dealerId)}`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ type: 'type' }),
+        })
+        const json = await res.json()
+        if (!active) return
+        if (json.status) {
+          const d = json.data
+          setName(d.Dealer_Name        || "")
+          setEmail(d.Dealer_Email       || "")
+          setNumber(d.Dealer_Number     || "")
+          setCity(d.Dealer_City         || "")
+          setPincode(d.Dealer_Pincode   || "")
+          setAddress(d.Dealer_Address   || "")
+          setUsername(d.Dealer_Username || "")
+          setDiscount(d.discount        || "")
+          setPassword(d.Dealer_Password || "")
+          setDealercode(d.Dealer_Dealercode || "")
+          setGst(d.gst                  || "")
+          setCreditdays(d.creditdays    || "")
+          setNotes(d.Dealer_Notes       || "")
+          setDealerid(d.Dealer_Id       || "")
+          setStatus(String(d.status ?? d.Dealer_Status ?? "1"))
+          setAnnualtarget(d.annualtarget || "")
+          setCurrentlimit(d.currentlimit || "")
+          setExistingStaffNames(d.staffname || "")
+          setAssignedStaffIds(splitCsv(d.assignedstaff))
+        } else {
+          setToastMsg({ text: json.msz || "Failed to load dealer", type: 'error' })
+        }
+      } catch {
+        if (active) setToastMsg({ text: "Failed to load dealer data", type: 'error' })
+      } finally {
+        if (active) setIsLoading(false)
+      }
+    }
+
+    const loadStaff = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/staffassign`)
+        const json = await res.json()
+        if (active) setStaffOptions(json.data || [])
+      } catch {
+        console.error("Failed to fetch staff")
+      }
+    }
+
+    loadDealer()
+    loadStaff()
+    return () => { active = false }
   }, [dealerId])
 
   const handleStaffSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -183,6 +189,7 @@ export default function EditDealerPage() {
       fd.append("creditdays",       creditdays)
       fd.append("annualtarget",     annualtarget)
       fd.append("currentlimit",     currentlimit)
+      fd.append("status",           status)
       fd.append("id",               resolvedDealerId)
       fd.append("Dealer_Id",        resolvedDealerId)
 
@@ -281,6 +288,31 @@ export default function EditDealerPage() {
                 <InputField label="Credit Days"    value={creditdays}   onChange={setCreditdays}   type="number" placeholder="e.g. 30" />
                 <InputField label="Annual Target"  value={annualtarget} onChange={setAnnualtarget} type="number" placeholder="Amount in Rs" />
                 <InputField label="Current Limit"  value={currentlimit} onChange={setCurrentlimit} type="number" placeholder="Credit limit in Rs" />
+              </div>
+            </div>
+
+            {/* Status */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+              <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-5 pb-3 border-b border-gray-100">
+                Account Status
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                    Dealer Status
+                  </label>
+                  <select
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value)}
+                    className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                  >
+                    <option value="1">Active</option>
+                    <option value="0">Inactive</option>
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Inactive dealers will still remain in the list, but the badge and access checks can use this value.
+                  </p>
+                </div>
               </div>
             </div>
 

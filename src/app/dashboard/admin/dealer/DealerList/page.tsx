@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, BookOpen, Pencil, Eye, EyeOff, MoreVertical } from 'lucide-react'
+import { Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
 
 type Dealer = {
   Dealer_Id: string
@@ -41,13 +41,8 @@ const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 const getDealerEditRoute = (dealerId: string) => `/dashboard/admin/dealer/${encodeURIComponent(dealerId)}`
-const getDealerLedgerRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/ledger`
 const getDealerViewRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/view`
 const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
-
-function initials(name: string) {
-  return name?.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?"
-}
 
 function statusBadge(s: string) {
   return s === "1"
@@ -64,7 +59,7 @@ function getRole(): AppRole {
 }
 
 export default function DealerListPage() {
-  const [role,          setRole]          = useState<AppRole>("admin")
+  const [role]          = useState<AppRole>(() => getRole())
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
@@ -72,10 +67,9 @@ export default function DealerListPage() {
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [updatingDealerId, setUpdatingDealerId] = useState<string | null>(null)
 
   const queryClient = useQueryClient()
-
-  useEffect(() => { setRole(getRole()) }, [])
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -85,12 +79,12 @@ export default function DealerListPage() {
   }, [toastMsg])
 
   useEffect(() => {
-    const handleDocClick = (e: any) => {
-      const path = (e?.composedPath && e.composedPath()) || e?.path || []
-      if (Array.isArray(path) && path.some((el: any) => el?.dataset?.menuId)) return
-      let node = e?.target
+    const handleDocClick = (e: MouseEvent) => {
+      const path = typeof e.composedPath === "function" ? e.composedPath() : []
+      if (Array.isArray(path) && path.some((el) => el instanceof HTMLElement && el.dataset.menuId)) return
+      let node: Node | null = e.target instanceof Node ? e.target : null
       while (node) {
-        if (node?.dataset && node.dataset.menuId) return
+        if (node instanceof HTMLElement && node.dataset.menuId) return
         node = node.parentNode
       }
       setOpenMenu(null)
@@ -130,7 +124,7 @@ export default function DealerListPage() {
         return res.json()
       },
     })
-  }, [page, search])
+  }, [page, search, queryClient])
 
   // Debounced search
   useEffect(() => {
@@ -151,6 +145,43 @@ export default function DealerListPage() {
       setToastMsg({ text: "Failed to delete dealer", type: 'error' })
     } finally {
       setDeleteConfirm(null)
+    }
+  }
+
+  const handleStatusToggle = async (dealer: Dealer) => {
+    const nextStatus = dealer.status === "1" ? "0" : "1"
+    setUpdatingDealerId(dealer.Dealer_Id)
+    try {
+      const fd = new FormData()
+      fd.append("id", dealer.Dealer_Id)
+      fd.append("Dealer_Id", dealer.Dealer_Id)
+      fd.append("Dealer_Name", dealer.Dealer_Name || "")
+      fd.append("Dealer_Email", dealer.Dealer_Email || "")
+      fd.append("Dealer_Number", dealer.Dealer_Number || "")
+      fd.append("Dealer_City", dealer.Dealer_City || "")
+      fd.append("Dealer_Address", dealer.Dealer_Address || "")
+      fd.append("Dealer_Pincode", dealer.Dealer_Pincode || "")
+      fd.append("Dealer_Username", dealer.Dealer_Username || "")
+      fd.append("Dealer_Password", dealer.Dealer_Password || "")
+      fd.append("Dealer_Dealercode", dealer.Dealer_Dealercode || "")
+      fd.append("Dealer_Notes", dealer.Dealer_Notes || "")
+      fd.append("assignedstaff", dealer.assignedstaff || "")
+      fd.append("staffname", dealer.staffname || "")
+      fd.append("discount", dealer.discount || "")
+      fd.append("gst", dealer.gst || "")
+      fd.append("creditdays", dealer.creditdays || "")
+      fd.append("annualtarget", dealer.annualtarget || "")
+      fd.append("currentlimit", dealer.currentlimit || "")
+      fd.append("status", nextStatus)
+
+      const res = await axios.post(`${BACKEND_URL}/updateDealer`, fd)
+      setToastMsg({ text: res.data.msg || `Dealer marked as ${nextStatus === "1" ? "active" : "inactive"}`, type: 'success' })
+      await refetch()
+      setOpenMenu(null)
+    } catch {
+      setToastMsg({ text: "Failed to update dealer status", type: 'error' })
+    } finally {
+      setUpdatingDealerId(null)
     }
   }
 
@@ -378,6 +409,17 @@ export default function DealerListPage() {
                                 {canManageDealers && (
                                   <>
                                     <Link href={getDealerEditRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleStatusToggle(dealer) }}
+                                      disabled={updatingDealerId === dealer.Dealer_Id}
+                                      className="w-full text-left px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      {updatingDealerId === dealer.Dealer_Id
+                                        ? "Updating..."
+                                        : dealer.status === "1"
+                                          ? "Mark Inactive"
+                                          : "Mark Active"}
+                                    </button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(dealer.Dealer_Id); setOpenMenu(null) }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">Delete</button>
                                   </>
                                 )}

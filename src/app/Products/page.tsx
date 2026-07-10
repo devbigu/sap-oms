@@ -239,24 +239,28 @@ function CategoryRow({ label, count, checked, onChange }: { label: string; count
 // ─────────────────────────────────────────────────────────────
 function ProductsContent() {
   const searchParams = useSearchParams();
-  const urlQuery = searchParams.get("q") ?? "";
+  const q = searchParams.get("q") ?? "";
+  const category = searchParams.get("cat") ?? "";
 
   const [allData, setAllData]             = useState<Product[]>([]);
   const [loading, setLoading]             = useState(true);
   const [currentPage, setCurrentPage]     = useState(1);
   const [sortBy, setSortBy]               = useState("default");
-  const [searchQuery, setSearchQuery]     = useState(urlQuery);
+  const [searchQuery, setSearchQuery]     = useState(q);
   const [selectedCats, setSelectedCats]   = useState<string[]>(() => {
-    const cat = searchParams.get("cat");
-    return cat && SIDEBAR_CATEGORIES[cat] ? [cat] : [];
+    return category && SIDEBAR_CATEGORIES[category] ? [category] : [];
   });
   const [inStockOnly, setInStockOnly]     = useState(false);
   const [catExpanded, setCatExpanded]     = useState(true);
 
   useEffect(() => {
-    setSearchQuery(urlQuery);
-    setCurrentPage(1);
-  }, [urlQuery]);
+    const timeoutId = window.setTimeout(() => {
+      setSearchQuery(q);
+      setCurrentPage(1);
+      setSelectedCats(category && SIDEBAR_CATEGORIES[category] ? [category] : []);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [q, category]);
 
   useEffect(() => {
     axios.get("/data/nested_omsons_products.json")

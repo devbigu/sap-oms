@@ -1,16 +1,16 @@
 "use client"
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { GoLocation } from "react-icons/go"
 import { IoCartOutline } from "react-icons/io5"
 import { FaMagnifyingGlass } from "react-icons/fa6"
-import { categories } from '@/Assets/dataset'
 import AccountList from "@/components/AccountList"
 import Cart from "@/components/Cart"
 import Link from 'next/link'
 import { useCartStore } from "@/Store/store"
 import { useRouter } from 'next/navigation'
 import { buildCatalogueSearchText } from "@/lib/catalogue"
+import { SIDEBAR_CATEGORIES } from "@/lib/categories"
 
 // ─────────────────────────────────────────────────────────────
 // TYPES  (matches nested_omsons_products.json schema)
@@ -44,6 +44,10 @@ type ProductSuggestion = Product & {
   _matchedSku?: string
   _matchedName?: string
 }
+
+const headerCategories = Object.keys(SIDEBAR_CATEGORIES).sort((a, b) =>
+  a.localeCompare(b, undefined, { sensitivity: "base" })
+)
 
 export type RecentlyViewedItem = {
   SKU: string
@@ -94,17 +98,20 @@ export function storeCategoryFilter(value: string) {
   } catch { /* ignore */ }
 }
 
-export function userName() {
+export function UserName() {
   const [value, setValue] = useState(null);
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("UserData")
-      if (!raw) return
-      const data = JSON.parse(raw)
-      setValue(data?.Dealer_Name ?? data?.city ?? data?.District ?? data?.district ?? null)
-    } catch { /* ignore */ }
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const raw = localStorage.getItem("UserData")
+        if (!raw) return
+        const data = JSON.parse(raw)
+        setValue(data?.Dealer_Name ?? data?.city ?? data?.District ?? data?.district ?? null)
+      } catch { /* ignore */ }
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
   }, [])
-  return <div className='font-bold uppercase'>{value}</div>;
+  return <span className="font-bold uppercase">{value}</span>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -115,16 +122,47 @@ function useLocationFromStorage() {
   const [pincode, setPincode] = useState<string | null>(null)
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("UserData")
-      if (!raw) return
-      const data = JSON.parse(raw)
-      setCity(data?.Dealer_Address ?? data?.city ?? data?.District ?? data?.district ?? null)
-      setPincode(data?.Pincode ?? data?.pincode ?? data?.Pin ?? data?.pin ?? null)
-    } catch { /* ignore */ }
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const raw = localStorage.getItem("UserData")
+        if (!raw) return
+        const data = JSON.parse(raw)
+        setCity(data?.Dealer_Address ?? data?.city ?? data?.District ?? data?.district ?? null)
+        setPincode(data?.Pincode ?? data?.pincode ?? data?.Pin ?? data?.pin ?? null)
+      } catch { /* ignore */ }
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
   }, [])
 
   return { city, pincode }
+}
+
+function normalizeCategory(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+}
+
+function productMatchesCategory(
+  product: Product,
+  selectedCategory: string
+): boolean {
+  if (selectedCategory === "all") return true
+
+  const target = normalizeCategory(selectedCategory)
+
+  const productCategories = [
+    product.category,
+    ...(product.categories ?? []),
+  ]
+    .map(normalizeCategory)
+    .filter(Boolean)
+
+  return productCategories.some((category) =>
+    category === target ||
+    category.startsWith(`${target} >`) ||
+    category.startsWith(`${target}/`)
+  )
 }
 
 function resolveHeaderRole(): HeaderRole {
@@ -223,9 +261,30 @@ const Header = () => {
   const { city, pincode } = useLocationFromStorage()
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const getSearchPool = (products: Product[], category: string) =>
+    category === "all"
+      ? products
+      : products.filter((product) => productMatchesCategory(product, category))
 
   useEffect(() => {
-    setHeaderRole(resolveHeaderRole())
+    const timeoutId = window.setTimeout(() => {
+      setHeaderRole(resolveHeaderRole())
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const storedCategory = localStorage.getItem(CAT_KEY)
+        if (storedCategory && storedCategory !== "all" && SIDEBAR_CATEGORIES[storedCategory]) {
+          setSelectedCategory(storedCategory)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
   }, [])
 
   // ── Load products once & build search index ─────────────────
@@ -234,7 +293,7 @@ const Header = () => {
       .then(r => r.json())
       .then((raw: Product[]) => {
         const indexed = raw.map(p => {
-          return { ...p, _searchIndex: buildCatalogueSearchText(p as any) }
+          return { ...p, _searchIndex: buildCatalogueSearchText(p) }
         })
         setAllProducts(indexed)
       })
@@ -245,18 +304,16 @@ const Header = () => {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
-    const q = query.trim().toLowerCase()
-    if (!q) { setSuggestions([]); setShowDropdown(false); return }
-
     debounceRef.current = setTimeout(() => {
-      let pool = allProducts
-      if (selectedCategory !== "all") {
-        const lowerCat = selectedCategory.toLowerCase()
-        pool = pool.filter(p =>
-          (p.category ?? '').toLowerCase().includes(lowerCat) ||
-          p.categories?.some(c => c.toLowerCase().includes(lowerCat))
-        )
+      const q = query.trim().toLowerCase()
+      if (!q) {
+        setSuggestions([])
+        setShowDropdown(false)
+        setActiveIndex(-1)
+        return
       }
+
+      const pool = getSearchPool(allProducts, selectedCategory)
 
       const matched = pool
         .map(p => {
@@ -326,15 +383,7 @@ const Header = () => {
 
   const findBestSearchTarget = (q: string): ProductSuggestion | null => {
     const lowerQ = q.toLowerCase()
-    let pool = allProducts
-
-    if (selectedCategory !== "all") {
-      const lowerCat = selectedCategory.toLowerCase()
-      pool = pool.filter(p =>
-        (p.category ?? '').toLowerCase().includes(lowerCat) ||
-        p.categories?.some(c => c.toLowerCase().includes(lowerCat))
-      )
-    }
+    const pool = getSearchPool(allProducts, selectedCategory)
 
     const [best] = pool
       .map(p => {
@@ -359,9 +408,14 @@ const Header = () => {
     const q = query.trim()
     if (!q) return
     setShowDropdown(false)
+    const params = new URLSearchParams()
+    params.set("q", q)
+    if (selectedCategory !== "all") {
+      params.set("cat", selectedCategory)
+    }
 
     if (headerRole === "admin" || headerRole === "staff") {
-      router.push(`/Pages/products?q=${encodeURIComponent(q)}`)
+      router.push(`/Pages/products?${params.toString()}`)
       return
     }
 
@@ -371,15 +425,17 @@ const Header = () => {
       return
     }
 
-    router.push(`/Products?q=${encodeURIComponent(q)}`)
+    router.push(`/Products?${params.toString()}`)
   }
 
   // ── Category change → store filter + navigate ───────────────
   const handleCategoryChange = (value: string) => {
     setSelectedCategory(value)
     storeCategoryFilter(value)
-    if (value !== "all") {
-      router.push(`/Products?category=${encodeURIComponent(value)}`)
+    setActiveIndex(-1)
+
+    if (query.trim()) {
+      setShowDropdown(true)
     }
   }
 
@@ -425,8 +481,9 @@ const Header = () => {
             onChange={(e) => handleCategoryChange(e.target.value)}
             suppressHydrationWarning
           >
-            {categories.map((cat) => (
-              <option key={cat.value} value={cat.value}>{cat.label}</option>
+            <option value="all">All</option>
+            {headerCategories.map((category) => (
+              <option key={category} value={category}>{category}</option>
             ))}
           </select>
 
@@ -511,7 +568,7 @@ const Header = () => {
         {/* ACCOUNT */}
         <div className="flex flex-col border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer relative group">
           <div className="flex flex-col">
-            <span className="text-xs text-gray-300 flex">Hello, <div className='font-bold uppercase'>{userName()}</div></span>
+            <span className="text-xs text-gray-300 flex">Hello, <UserName /></span>
             <span className="text-sm font-bold">Account &amp; Lists</span>
           </div>
           <div className="absolute right-0 top-full mt-1 w-106 hidden group-hover:block z-60 bg-white shadow-lg border border-gray-200 rounded p-3 transition-all">

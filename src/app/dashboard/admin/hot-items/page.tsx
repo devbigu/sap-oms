@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -20,31 +20,139 @@ type CatalogOption = {
   image: string;
 };
 
+type HotItemsApiData = {
+  items?: unknown;
+  isDefault?: boolean;
+};
+
+type HotItemsApiResponse = {
+  success?: boolean;
+  message?: string;
+  data?: HotItemsApiData;
+};
+
+type CatalogueImageSource = {
+  images?: unknown;
+  Images?: unknown;
+};
+
+type CatalogueVariantRecord = CatalogueImageSource & {
+  sku?: unknown;
+  SKU?: unknown;
+  name?: unknown;
+  Name?: unknown;
+};
+
+type CatalogueProductRecord = CatalogueImageSource & {
+  sku?: unknown;
+  SKU?: unknown;
+  name?: unknown;
+  Name?: unknown;
+  variants?: unknown;
+};
+
 // ─── API + catalog helpers ───────────────────────────────────────────────────
 
-async function getHotItems(): Promise<HotItem[]> {
-  const res = await fetch("/api/hot-items", { cache: "no-store" });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.message ?? "Could not load hot items");
-  return json.data?.items ?? [];
+const IS_DEV = process.env.NODE_ENV !== "production";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstString(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) {
+      return item.trim();
+    }
+  }
+
+  return "";
+}
+
+async function fetchJson<T>(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  endpointLabel = "request"
+): Promise<T> {
+  const response = await fetch(input, init);
+  const responseText = await response.text();
+  const preview = responseText.replace(/\s+/g, " ").trim().slice(0, 250);
+  const previewSuffix = IS_DEV && preview ? `: ${preview}` : "";
+
+  if (!response.ok) {
+    throw new Error(
+      `${endpointLabel} failed with HTTP ${response.status}${previewSuffix}`
+    );
+  }
+
+  try {
+    return JSON.parse(responseText) as T;
+  } catch {
+    throw new Error(
+      `${endpointLabel} returned invalid JSON${previewSuffix}`
+    );
+  }
+}
+
+function normalizeHotItems(items: unknown): HotItem[] {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map((item, index) => {
+      if (!isRecord(item)) return null;
+
+      const sku = String(item.SKU ?? item.sku ?? "").trim();
+      const name = String(item.name ?? item.Name ?? "").trim();
+
+      if (!sku || !name) return null;
+
+      return {
+        id: String(item.id ?? `${sku}-${index}`),
+        SKU: sku,
+        name,
+        image: String(item.image ?? ""),
+        badge: String(item.badge ?? "Hot pick"),
+        active: item.active !== false,
+      } satisfies HotItem;
+    })
+    .filter((item): item is HotItem => item !== null);
+}
+
+async function getHotItems(): Promise<{ items: HotItem[]; isDefault: boolean }> {
+  const json = await fetchJson<HotItemsApiResponse>(
+    "/api/hot-items",
+    { cache: "no-store" },
+    "Hot items API"
+  );
+
+  if (!json.success) {
+    throw new Error(json.message ?? "Could not load hot items");
+  }
+
+  return {
+    items: normalizeHotItems(json.data?.items),
+    isDefault: Boolean(json.data?.isDefault),
+  };
 }
 
 async function saveHotItems(items: HotItem[]): Promise<HotItem[]> {
-  const res = await fetch("/api/hot-items", {
+  const json = await fetchJson<HotItemsApiResponse>("/api/hot-items", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items }),
-  });
-  const json = await res.json();
+  }, "Hot items API");
+
   if (!json.success) throw new Error(json.message ?? "Could not publish hot items");
-  return json.data?.items ?? items;
+  return normalizeHotItems(json.data?.items ?? items);
 }
 
-function getFirstImage(item: any): string {
-  return (item?.images ?? item?.Images ?? []).find(Boolean) ?? "";
+function getFirstImage(item: CatalogueImageSource): string {
+  return firstString(item.images) || firstString(item.Images);
 }
 
-function buildCatalogOptions(products: any[]): CatalogOption[] {
+function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[] {
   const seen = new Set<string>();
   const options: CatalogOption[] = [];
 
@@ -58,10 +166,15 @@ function buildCatalogOptions(products: any[]): CatalogOption[] {
       options.push({ sku: productSku, name: productName, image: productImage });
     }
 
-    for (const variant of product.variants ?? []) {
-      const variantSku = String(variant.sku ?? variant.SKU ?? "").trim();
-      const variantName = String(variant.name ?? variant.Name ?? productName).trim();
-      const variantImage = getFirstImage(variant) || productImage;
+    const variants = Array.isArray(product.variants)
+      ? product.variants.filter(isRecord)
+      : [];
+
+    for (const variant of variants) {
+      const typedVariant = variant as CatalogueVariantRecord;
+      const variantSku = String(typedVariant.sku ?? typedVariant.SKU ?? "").trim();
+      const variantName = String(typedVariant.name ?? typedVariant.Name ?? productName).trim();
+      const variantImage = getFirstImage(typedVariant) || productImage;
       if (!variantSku || seen.has(variantSku.toLowerCase())) continue;
       seen.add(variantSku.toLowerCase());
       options.push({ sku: variantSku, name: variantName || productName, image: variantImage });
@@ -69,6 +182,16 @@ function buildCatalogOptions(products: any[]): CatalogOption[] {
   }
 
   return options;
+}
+
+async function fetchCatalogueProducts(): Promise<CatalogueProductRecord[]> {
+  const json = await fetchJson<unknown>(
+    "/data/nested_omsons_products.json",
+    { cache: "no-store" },
+    "Catalogue JSON"
+  );
+
+  return Array.isArray(json) ? (json.filter(isRecord) as CatalogueProductRecord[]) : [];
 }
 
 // ─── Badge presets ────────────────────────────────────────────────────────────
@@ -93,10 +216,10 @@ const emptyForm = (): Omit<HotItem, "id"> => ({
 
 function useToast() {
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
-  const show = (msg: string, type: "success" | "error" = "success") => {
+  const show = useCallback((msg: string, type: "success" | "error" = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2800);
-  };
+  }, []);
   return { toast, show };
 }
 
@@ -117,28 +240,67 @@ export default function AdminHotItemsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [catalog, setCatalog] = useState<CatalogOption[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [catalogueWarning, setCatalogueWarning] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    Promise.all([
-      getHotItems(),
-      fetch("/data/nested_omsons_products.json").then((r) => r.json()),
-    ])
-      .then(([hotItems, catalogData]) => {
-        if (!active) return;
-        setItems(hotItems);
-        setCatalog(buildCatalogOptions(catalogData));
-      })
-      .catch((e) => {
-        if (!active) return;
-        show(e instanceof Error ? e.message : "Could not load hot items.", "error");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
-  }, []);
+    const controller = new AbortController();
+
+    void (async () => {
+      try {
+        const [hotResult, catalogResult] = await Promise.allSettled([
+          getHotItems(),
+          fetchCatalogueProducts(),
+        ]);
+
+        if (!active || controller.signal.aborted) return;
+
+        if (hotResult.status === "fulfilled") {
+          setItems(hotResult.value.items);
+        } else {
+          setItems([]);
+          setLoadError(
+            hotResult.reason instanceof Error
+              ? hotResult.reason.message
+              : "Could not load hot items"
+          );
+          show(
+            hotResult.reason instanceof Error
+              ? hotResult.reason.message
+              : "Could not load hot items",
+            "error"
+          );
+        }
+
+        if (catalogResult.status === "fulfilled") {
+          setCatalog(buildCatalogOptions(catalogResult.value));
+          setCatalogueWarning(null);
+        } else {
+          setCatalog([]);
+          setCatalogueWarning(
+            catalogResult.reason instanceof Error
+              ? catalogResult.reason.message
+              : "Catalogue unavailable"
+          );
+        }
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : "Could not load hot items";
+        setLoadError(message);
+        show(message, "error");
+      } finally {
+        if (active && !controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [show]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -232,6 +394,7 @@ export default function AdminHotItemsPage() {
   };
 
   const activeCount = items.filter(i => i.active).length;
+  const catalogueAvailable = catalog.length > 0 && !catalogueWarning;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -319,7 +482,7 @@ export default function AdminHotItemsPage() {
                   onChange={e => setForm(f => ({ ...f, SKU: e.target.value }))}
                   onBlur={e => syncCatalogMatch(e.target.value)}
                   placeholder="e.g. PYC-25-A"
-                  className="w-full px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
+                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
                 />
                 <datalist id="hot-item-catalog">
                   {catalog.slice(0, 2500).map((option) => (
@@ -328,7 +491,7 @@ export default function AdminHotItemsPage() {
                     </option>
                   ))}
                 </datalist>
-                {findCatalogOption(form.SKU) && (
+                {catalogueAvailable && findCatalogOption(form.SKU) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -339,6 +502,11 @@ export default function AdminHotItemsPage() {
                   >
                     Use catalog name and image
                   </button>
+                )}
+                {!catalogueAvailable && (
+                  <p className="mt-2 text-[11px] text-amber-700">
+                    Catalogue lookup is unavailable right now, so SKU autofill is limited.
+                  </p>
                 )}
               </div>
 
@@ -351,7 +519,7 @@ export default function AdminHotItemsPage() {
                   value={form.name}
                   onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                   placeholder="e.g. Pycnometer Class A 25ml"
-                  className="w-full px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                 />
               </div>
 
@@ -362,11 +530,11 @@ export default function AdminHotItemsPage() {
                   value={form.image}
                   onChange={e => setForm(f => ({ ...f, image: e.target.value }))}
                   placeholder="https://…"
-                  className="w-full px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                 />
                 {form.image && (
                   <img src={form.image} alt="preview"
-                    className="mt-2 h-16 w-16 object-contain rounded-lg border border-gray-100 bg-gray-50" />
+                    className="mt-2 text-black h-16 w-16 object-contain rounded-lg border border-gray-100 bg-gray-50" />
                 )}
               </div>
 
@@ -390,7 +558,7 @@ export default function AdminHotItemsPage() {
                   value={form.badge}
                   onChange={e => setForm(f => ({ ...f, badge: e.target.value }))}
                   placeholder="Or type a custom badge…"
-                  className="w-full px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                  className="w-full text-black px-3.5 py-2.5 text-[13px] border border-gray-200 rounded-xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
                 />
               </div>
 
@@ -464,8 +632,25 @@ export default function AdminHotItemsPage() {
           </div>
         </div>
 
-        <div className="max-w-5xl mx-auto px-4 lg:px-8 py-8 flex flex-col lg:flex-row gap-8">
+        <div className="max-w-5xl mx-auto px-4 lg:px-8 py-8">
+          {(loadError || catalogueWarning) && (
+            <div
+              className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
+                loadError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}
+            >
+              <div className="font-semibold">
+                {loadError ? "Hot items failed to load" : "Catalogue unavailable"}
+              </div>
+              <div className="mt-1 text-sm leading-6 opacity-90">
+                {loadError ? loadError : catalogueWarning}
+              </div>
+            </div>
+          )}
 
+          <div className="flex flex-col lg:flex-row gap-8">
           {/* ── Items list ── */}
           <div className="flex-1 min-w-0">
             <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
@@ -484,7 +669,15 @@ export default function AdminHotItemsPage() {
                 </div>
               )}
 
-              {!loading && items.length === 0 && (
+              {!loading && loadError && (
+                <div className="flex flex-col items-center justify-center py-20 gap-3 px-6 text-center">
+                  <span className="text-4xl">⚠️</span>
+                  <p className="text-sm font-medium text-red-600">Unable to load hot items.</p>
+                  <p className="max-w-md text-sm text-gray-500">{loadError}</p>
+                </div>
+              )}
+
+              {!loading && !loadError && items.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 gap-3">
                   <span className="text-4xl">🔥</span>
                   <p className="text-sm text-gray-500">No hot items yet. Add your first one.</p>
@@ -610,6 +803,7 @@ export default function AdminHotItemsPage() {
             </div>
           </div>
 
+        </div>
         </div>
       </div>
     </>

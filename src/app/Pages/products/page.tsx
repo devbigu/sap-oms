@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import axios from 'axios'
 import { Pencil, Trash2, Download, Search, Package, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 
@@ -26,12 +26,40 @@ type ProductResponse = {
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 
+function normalizeCategory(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase()
+}
+
+function productMatchesCategory(product: ProductData, selectedCategory: string): boolean {
+  if (selectedCategory === "all") return true
+
+  const target = normalizeCategory(selectedCategory)
+  const productValues = [
+    product.product_cat,
+    product.product_name,
+    product.product_discription,
+    product.product_unit,
+  ]
+    .map(normalizeCategory)
+    .filter(Boolean)
+
+  return productValues.some((value) =>
+    value === target ||
+    value.includes(target) ||
+    target.includes(value)
+  )
+}
+
 export default function ProductListPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const urlQuery = searchParams.get("q") ?? ""
+  const urlCategory = searchParams.get("cat") ?? "all"
 
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
+  const [selectedCategory, setSelectedCategory] = useState(urlCategory)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; ok: boolean } | null>(null)
 
@@ -43,29 +71,51 @@ export default function ProductListPage() {
     return () => clearTimeout(t)
   }, [toastMsg])
 
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setSearchInput(urlQuery)
+      setSearch(urlQuery)
+      setPage(1)
+      setSelectedCategory(urlCategory)
+    }, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [urlQuery, urlCategory])
+
   const { data: response, isLoading, isError, refetch } = useQuery<ProductResponse>({
-    queryKey: ['products', page, search],
+    queryKey: ['products', page, search, selectedCategory],
     queryFn: async () => {
-      const res = await axios.get(`${BACKEND_URL}/pegination?page=${page}&search=${search}`)
+      const params = new URLSearchParams({ page: String(page), search })
+      if (selectedCategory !== "all") {
+        params.set("cat", selectedCategory)
+      }
+      const res = await axios.get(`${BACKEND_URL}/pegination?${params.toString()}`)
       return res.data
     },
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
-  const data: ProductData[] = response?.data || []
+  const data: ProductData[] = useMemo(() => response?.data ?? [], [response?.data])
+  const filteredData = useMemo(
+    () => data.filter((product) => productMatchesCategory(product, selectedCategory)),
+    [data, selectedCategory]
+  )
   const total      = response?.count ?? 0
   const totalPages = response?.last_page || Math.max(1, Math.ceil(total / ITEMS_PER_PAGE))
 
   useEffect(() => {
     queryClient.prefetchQuery({
-      queryKey: ['products', page + 1, search],
+      queryKey: ['products', page + 1, search, selectedCategory],
       queryFn: async () => {
-        const res = await axios.get(`${BACKEND_URL}/pegination?page=${page + 1}&search=${search}`)
+        const params = new URLSearchParams({ page: String(page + 1), search })
+        if (selectedCategory !== "all") {
+          params.set("cat", selectedCategory)
+        }
+        const res = await axios.get(`${BACKEND_URL}/pegination?${params.toString()}`)
         return res.data
       },
     })
-  }, [page, search])
+  }, [page, search, selectedCategory, queryClient])
 
   useEffect(() => {
     const t = setTimeout(() => { setPage(1); setSearch(searchInput) }, 400)
@@ -89,9 +139,9 @@ export default function ProductListPage() {
   }
 
   const handleDownloadExcel = () => {
-    if (!data.length) return
+    if (!filteredData.length) return
     const headers = ["S.No.", "Catalogue No.", "Product Name", "Price", "Quantity", "Unit"]
-    const rows = data.map((p, i) => [
+    const rows = filteredData.map((p, i) => [
       (page - 1) * ITEMS_PER_PAGE + i + 1,
       p.product_cat, p.product_name, p.product_price, p.product_quantity, p.product_unit,
     ])
@@ -207,7 +257,7 @@ export default function ProductListPage() {
         </div>
         <button
           onClick={handleDownloadExcel}
-          disabled={!data.length}
+          disabled={!filteredData.length}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border border-[#e2e8f0] bg-[#f8fafc] text-[12.5px] font-medium text-[#374151] cursor-pointer transition-all whitespace-nowrap hover:bg-[#eff6ff] hover:border-[#bfdbfe] hover:text-[#1d4ed8] disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Download size={14} />
@@ -241,7 +291,7 @@ export default function ProductListPage() {
           <div className="flex gap-3 mb-[22px] flex-wrap">
             {[
               { dot: "#3b5bdb", label: "Total Products", value: total.toLocaleString() },
-              { dot: "#10b981", label: "This Page",      value: data.length },
+              { dot: "#10b981", label: "This Page",      value: filteredData.length },
               { dot: "#f59e0b", label: "Page",           value: `${page} / ${totalPages}` },
             ].map(s => (
               <div key={s.label} className="flex items-center gap-2 px-4 py-[9px] bg-white border border-[#e8edf5] rounded-[10px] text-[12.5px] text-[#374151] font-medium shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
@@ -300,7 +350,7 @@ export default function ProductListPage() {
                 <style>{`@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}`}</style>
 
                 {/* Empty state */}
-                {!isLoading && data.length === 0 && (
+                {!isLoading && filteredData.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-5 py-[60px] text-center">
                       <Package size={36} className="mx-auto mb-3 text-[#cbd5e1]" />
@@ -313,7 +363,7 @@ export default function ProductListPage() {
                 )}
 
                 {/* Data rows */}
-                {!isLoading && data.map((product, i) => (
+                {!isLoading && filteredData.map((product, i) => (
                   <tr key={product.product_id} className="border-b border-[#f1f5fb] last:border-b-0 transition-colors hover:bg-[#f8faff]">
 
                     <td className="pl-[22px] pr-4 py-[14px]">
@@ -381,8 +431,8 @@ export default function ProductListPage() {
           {/* ── Pagination ── */}
           <div className="flex items-center justify-between px-[22px] py-[14px] border-t border-[#f1f5fb] flex-wrap gap-3">
             <div className="text-[12px] text-[#94a3b8]">
-              {data.length > 0 ? (
-                <>Showing <strong className="text-[#374151] font-semibold">{startIndex}–{endIndex}</strong> of <strong className="text-[#374151] font-semibold">{total.toLocaleString()}</strong> products</>
+              {filteredData.length > 0 ? (
+                <>Showing <strong className="text-[#374151] font-semibold">{startIndex}–{Math.min(endIndex, filteredData.length)}</strong> of <strong className="text-[#374151] font-semibold">{filteredData.length.toLocaleString()}</strong> products</>
               ) : "No results"}
             </div>
             <div className="flex items-center gap-1">
