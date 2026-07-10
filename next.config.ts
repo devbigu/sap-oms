@@ -5,7 +5,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
-  serverExternalPackages: ["mongodb"],
 };
 
 export default nextConfig;

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import axios from 'axios'
+import { fetchDealerStatus, normalizeDealerStatus, saveDealerStatus, type DealerStatus } from "@/lib/dealerStatus"
 
 type StaffOption = {
   staff_id: string
@@ -12,6 +13,17 @@ type StaffOption = {
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const DEALER_LIST_ROUTE = "/dashboard/admin/dealer/DealerList"
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text()
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (/^\s*</.test(text)) throw new Error("Expected JSON but received HTML")
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error("Invalid JSON response")
+  }
+}
 
 function splitCsv(value: unknown) {
   if (Array.isArray(value)) return value.map(String).map(s => s.trim()).filter(Boolean)
@@ -76,7 +88,8 @@ export default function EditDealerPage() {
   const [currentlimit,   setCurrentlimit]   = useState("")
   const [notes,          setNotes]          = useState("")
   const [dealerid,       setDealerid]       = useState("")
-  const [status,         setStatus]         = useState("1")
+  const [status,         setStatus]         = useState<DealerStatus>("active")
+  const [statusSaving,   setStatusSaving]   = useState(false)
   const [assignedStaffIds, setAssignedStaffIds] = useState<string[]>([])
   const [existingStaffNames, setExistingStaffNames] = useState("")
 
@@ -99,7 +112,7 @@ export default function EditDealerPage() {
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ type: 'type' }),
         })
-        const json = await res.json()
+        const json = await parseJsonResponse<any>(res)
         if (!active) return
         if (json.status) {
           const d = json.data
@@ -117,11 +130,20 @@ export default function EditDealerPage() {
           setCreditdays(d.creditdays    || "")
           setNotes(d.Dealer_Notes       || "")
           setDealerid(d.Dealer_Id       || "")
-          setStatus(String(d.status ?? d.Dealer_Status ?? "1"))
           setAnnualtarget(d.annualtarget || "")
           setCurrentlimit(d.currentlimit || "")
           setExistingStaffNames(d.staffname || "")
           setAssignedStaffIds(splitCsv(d.assignedstaff))
+
+          try {
+            const dealerStatus = await fetchDealerStatus(String(d.Dealer_Id || dealerId))
+            if (active) setStatus(dealerStatus)
+          } catch {
+            if (active) {
+              setStatus("active")
+              setToastMsg({ text: "Could not load dealer status from MongoDB", type: 'error' })
+            }
+          }
         } else {
           setToastMsg({ text: json.msz || "Failed to load dealer", type: 'error' })
         }
@@ -135,7 +157,7 @@ export default function EditDealerPage() {
     const loadStaff = async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/staffassign`)
-        const json = await res.json()
+        const json = await parseJsonResponse<any>(res)
         if (active) setStaffOptions(json.data || [])
       } catch {
         console.error("Failed to fetch staff")
@@ -157,6 +179,27 @@ export default function EditDealerPage() {
       .map(id => staffOptions.find(s => s.staff_id === id)?.staff_name ?? "")
       .filter(Boolean)
       .join(",") || existingStaffNames
+
+  const handleStatusSave = async () => {
+    const resolvedDealerId = dealerid || dealerId
+    if (!resolvedDealerId) {
+      setToastMsg({ text: "Missing dealer id", type: 'error' })
+      return
+    }
+
+    setStatusSaving(true)
+    try {
+      await saveDealerStatus({
+        dealerId: resolvedDealerId,
+        status: normalizeDealerStatus(status),
+      })
+      setToastMsg({ text: `Dealer marked ${status === "active" ? "active" : "inactive"}`, type: 'success' })
+    } catch {
+      setToastMsg({ text: "Failed to update dealer status", type: 'error' })
+    } finally {
+      setStatusSaving(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -189,7 +232,6 @@ export default function EditDealerPage() {
       fd.append("creditdays",       creditdays)
       fd.append("annualtarget",     annualtarget)
       fd.append("currentlimit",     currentlimit)
-      fd.append("status",           status)
       fd.append("id",               resolvedDealerId)
       fd.append("Dealer_Id",        resolvedDealerId)
 
@@ -303,15 +345,23 @@ export default function EditDealerPage() {
                   </label>
                   <select
                     value={status}
-                    onChange={(e) => setStatus(e.target.value)}
+                    onChange={(e) => setStatus(normalizeDealerStatus(e.target.value))}
                     className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
                   >
-                    <option value="1">Active</option>
-                    <option value="0">Inactive</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
                   </select>
                   <p className="text-[11px] text-gray-400">
-                    Inactive dealers will still remain in the list, but the badge and access checks can use this value.
+                    Inactive dealers will still remain in the list, but access checks will block the account.
                   </p>
+                  <button
+                    type="button"
+                    onClick={handleStatusSave}
+                    disabled={statusSaving}
+                    className="mt-2 inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {statusSaving ? "Saving..." : "Save Status"}
+                  </button>
                 </div>
               </div>
             </div>

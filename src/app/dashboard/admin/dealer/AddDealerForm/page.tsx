@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
+
+const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL ??
+  "https://mirisoft.co.in/sas/dealerapi"
+).replace(/\/+$/, "");
 
 type StaffMember = {
   staff_id: string;
@@ -54,22 +59,46 @@ export default function AddDealerForm() {
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
+  const showToast = useCallback((msg: string, type: "success" | "error") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
   useEffect(() => {
     const isLoggedIn = JSON.parse(localStorage.getItem("status") || "false");
     if (!isLoggedIn) {
       router.push("/login");
       return;
     }
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/staffassign`)
-      .then((res) => res.json())
-      .then((data) => setStaffList(data.data))
-      .catch((err) => console.error("Failed to fetch staff:", err));
-  }, []);
 
-  const showToast = (msg: string, type: "success" | "error") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
-  };
+    const loadStaffMembers = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/staffassign`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          setStaffList([]);
+          showToast(`Failed to load staff list (${response.status})`, "error");
+          return;
+        }
+
+        const data = await response.json();
+        if (Array.isArray(data?.data)) {
+          setStaffList(data.data);
+          return;
+        }
+
+        setStaffList([]);
+        showToast("Staff list response did not contain an array.", "error");
+      } catch (err) {
+        setStaffList([]);
+        showToast("Failed to load staff list. Please try again.", "error");
+        console.error("Failed to fetch staff:", err);
+      }
+    };
+
+    void loadStaffMembers();
+  }, [router, showToast]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -153,7 +182,7 @@ export default function AddDealerForm() {
 
     try {
       const { data } = await axios.post(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/formdata1`,
+        `${API_BASE}/api/formdata1`,
         fd
       );
       showToast(data.msg, "success");

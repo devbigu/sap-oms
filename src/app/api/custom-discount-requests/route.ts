@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
+import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+
+export const runtime = "nodejs";
 
 function clampPercent(value: unknown) {
   const n = Number(value);
@@ -17,10 +19,6 @@ function toDoc<T extends { _id: { toString(): string } }>(doc: T) {
     ...rest,
     id: _id.toString(),
   };
-}
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Unexpected error";
 }
 
 export async function GET(req: NextRequest) {
@@ -52,9 +50,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, data: docs.map(toDoc) });
   } catch (error: unknown) {
     console.error("custom-discount-requests GET failed", error);
+    const status = isMongoDependencyError(error) ? 503 : 500;
     return NextResponse.json(
-      { success: false, message: "Failed to load custom discount requests" },
-      { status: 500 }
+      { success: false, message: status === 503 ? "Custom discount database is currently unavailable" : "Failed to load custom discount requests" },
+      { status }
     );
   }
 }
@@ -126,9 +125,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, data: toDoc(created!) }, { status: 201 });
   } catch (error: unknown) {
     console.error("[POST /api/custom-discount-requests]", error);
+    const status = isMongoDependencyError(error) ? 503 : 500;
     return NextResponse.json(
-      { success: false, message: getErrorMessage(error) },
-      { status: 500 }
+      { success: false, message: status === 503 ? "Custom discount database is currently unavailable" : "Failed to create custom discount request" },
+      { status }
     );
   }
 }

@@ -152,6 +152,12 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   }
 
   try {
+    if (/^\s*</.test(responseText)) {
+      throw new Error(
+        `Expected JSON but received an HTML response${IS_DEV && responseText ? `: ${responseText.replace(/\s+/g, ' ').slice(0, 250)}` : ''}`
+      )
+    }
+
     return JSON.parse(responseText) as T
   } catch {
     const preview = responseText.replace(/\s+/g, ' ').slice(0, 250)
@@ -391,7 +397,16 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
 
         const orderItems = await Promise.all(
           dealerOrders.map(async order => {
-            const items = await fetchOrderItems(order.order_id, controller.signal)
+            const items = await fetchOrderItems(order.order_id, controller.signal).catch((error) => {
+              if (
+                controller.signal.aborted ||
+                (error instanceof DOMException && error.name === 'AbortError')
+              ) {
+                throw error
+              }
+              console.error('dealer category order items failed', error)
+              return [] as OrderItem[]
+            })
             return items.map(item => ({
               ...item,
               Dealer_Name: order.Dealer_Name ?? selectedDealer.Dealer_Name,

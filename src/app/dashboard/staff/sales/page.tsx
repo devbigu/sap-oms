@@ -137,7 +137,6 @@ function SalesReportPageInner() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500;600&display=swap');
         *, *::before, *::after { box-sizing: border-box; }
         body { margin: 0; }
         .sales-root { min-height: 100vh; background: linear-gradient(180deg, #f7f8fc 0%, #eef2ff 100%); color: #111827; font-family: 'DM Sans', sans-serif; }

@@ -3,6 +3,8 @@ import { getDb, getMongoClient } from "@/lib/mongodb";
 import { fetchExternalDealer, getLedgerSnapshot } from "@/lib/ledgerSystem";
 import walletUtils from "@/lib/wallet";
 
+export const runtime = "nodejs";
+
 /**
  * POST /api/ledger/[dealerId]/pay
  * Record a payment/money received from dealer
@@ -79,8 +81,6 @@ export async function POST(
           { success: false, message: walletError.message },
           { status: Number.isFinite(status) ? status : 500 }
         );
-      } finally {
-        await client.close();
       }
 
       return NextResponse.json({

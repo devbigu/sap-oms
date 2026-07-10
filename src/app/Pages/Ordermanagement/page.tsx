@@ -577,7 +577,6 @@ export default function OrdersPage() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         .orders-root { min-height: 100vh; background: #f7f8fc; font-family: 'Sora', sans-serif; color: #0f172a; }
         .orders-topbar { background: #fff; border-bottom: 1px solid #e8eaf0; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 14px; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 8px rgba(0,0,0,0.04); }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { LayoutDashboard, UserRoundPlus, Users, SquareUser, Plus, ClipboardList, Search } from 'lucide-react';
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   QueryClient,
@@ -20,6 +20,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { fetchDealerStatusOverrides, normalizeDealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const year = new Date().getFullYear();
@@ -87,22 +88,22 @@ const logoImage = "https://omsonsapp.vercel.app/headicon.png";
 const NAV_ITEMS = [
   {
     label: "Dealer List",
-    href: "/Dashboard/admin/dealer/DealerList",
+    href: "/dashboard/admin/dealer/DealerList",
     icon: <LayoutDashboard />
   },
   {
     label: "Add Dealer",
-    href: "/Dashboard/admin/dealer/AddDealerForm",
+    href: "/dashboard/admin/dealer/AddDealerForm",
     icon: <UserRoundPlus />
   },
   {
     label: "Staff List",
-    href: "/Dashboard/admin/staff/stafflist",
+    href: "/dashboard/admin/staff/stafflist",
     icon: <Users />
   },
   {
     label: "Add Staff",
-    href: "/Dashboard/admin/staff/addstaff",
+    href: "/dashboard/admin/staff/addstaff",
     icon: <SquareUser />
   },
   {
@@ -148,8 +149,18 @@ const dashboardQueryClient = new QueryClient({
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
+  return parseJsonResponse<T>(res);
+}
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  if (/^\s*</.test(text)) throw new Error("Expected JSON but received HTML");
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Invalid JSON response");
+  }
 }
 
 export default function AdminDashboard() {
@@ -201,9 +212,9 @@ function AdminDashboardInner() {
           fetch(`${BACKEND_URL}/dealercount`),
         ]);
 
-        const orderJson = await orderRes.json();
-        const dealerJson = await dealerRes.json();
-        const staffJson = await staffRes.json();
+        const orderJson = await parseJsonResponse<any>(orderRes);
+        const dealerJson = await parseJsonResponse<any>(dealerRes);
+        const staffJson = await parseJsonResponse<any>(staffRes);
 
         setData(orderJson.top || []);
         setDealerData(dealerJson.top || []);
@@ -262,6 +273,12 @@ function AdminDashboardInner() {
     ],
   });
 
+  const { data: statusOverrides } = useQuery<DealerStatusDocument[]>({
+    queryKey: ["adminSidebarSummary", "dealerStatuses"],
+    queryFn: fetchDealerStatusOverrides,
+    staleTime: 5 * 60 * 1000,
+  });
+
   const summaryLoading = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].some(q => q.isLoading);
   const summaryError = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].find(q => q.isError);
   const retrySummary = () => {
@@ -294,9 +311,15 @@ function AdminDashboardInner() {
 
   const outstandingOrders = (outstandingOrdersQ.data?.data ?? []).filter((o: any) => o.order_status === "0" || o.accept_order === "0");
   const pendingApprovals = (discountApprovalsQ.data?.data ?? []).filter(r => r.status === "pending").length;
-  const dealerRows = dealersQ.data?.data ?? [];
-  const activeDealers = dealerRows.filter(d => Number(d.status) === 1).length;
-  const inactiveDealers = dealerRows.filter(d => Number(d.status) !== 1).length;
+  const statusMap = useMemo(() => new Map(
+    (statusOverrides ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
+  ), [statusOverrides]);
+  const dealerRows = useMemo(() => (dealersQ.data?.data ?? []).map((dealer) => ({
+    ...dealer,
+    status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
+  })), [dealersQ.data?.data, statusMap]);
+  const activeDealers = dealerRows.filter(d => normalizeDealerStatus(d.status) === "active").length;
+  const inactiveDealers = dealerRows.filter(d => normalizeDealerStatus(d.status) !== "active").length;
   const staffRows = staffQ.data?.data ?? [];
   const roleCounts = staffRows.reduce((acc, s) => {
     acc[s.staff_roletype || "unknown"] = (acc[s.staff_roletype || "unknown"] ?? 0) + 1;
@@ -308,7 +331,10 @@ function AdminDashboardInner() {
     .sort((a, b) => (Number(b.currentlimit) || 0) - (Number(a.currentlimit) || 0))
     .slice(0, 5);
   const totalDistributors = distributorsCountQ.data?.total ?? dealerRows.length;
-  const distributorRows = distributorResponse?.data ?? [];
+  const distributorRows = useMemo(() => (distributorResponse?.data ?? []).map((dealer) => ({
+    ...dealer,
+    status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
+  })), [distributorResponse?.data, statusMap]);
   const distributorTotal = distributorResponse?.total ?? ((distributorPage - 1) * 10 + distributorRows.length);
   const distributorTotalPages = distributorResponse?.last_page ?? Math.max(1, Math.ceil(distributorTotal / 10));
   const distributorStartIndex = distributorRows.length > 0 ? (distributorPage - 1) * 10 + 1 : 0;
@@ -360,7 +386,6 @@ function AdminDashboardInner() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { font-family: 'DM Sans', sans-serif; }
         .root { min-height: 100vh; background: #f0f2f5; color: #111827; font-family: 'DM Sans', sans-serif; }
@@ -706,10 +731,9 @@ function AdminDashboardInner() {
                         </tr>
                       ))
                     ) : distributorRows.length > 0 ? distributorRows.map((dealer) => {
-                      const isActive = Number(dealer.status) === 1;
-                      const isPending = Number(dealer.status) === 0;
-                      const statusClass = isActive ? "status-active" : isPending ? "status-pending" : "status-inactive";
-                      const statusLabel = isActive ? "Active" : isPending ? "Pending" : "Inactive";
+                      const isActive = normalizeDealerStatus(dealer.status) === "active";
+                      const statusClass = isActive ? "status-active" : "status-inactive";
+                      const statusLabel = isActive ? "Active" : "Inactive";
                       return (
                         <tr key={dealer.Dealer_Id}>
                           <td>

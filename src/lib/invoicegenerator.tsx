@@ -3,7 +3,7 @@ import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
 import moment from "moment";
 import { hasPriorityTag } from "@/lib/orderPriority";
-import { resolveOrderAmounts } from "@/lib/orderAmounts";
+import { resolveOrderAmounts, resolveOrderDiscountBreakdown, type OrderAmountSource } from "@/lib/orderAmounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -405,6 +405,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const gross = amounts.gross;
     const discount = amounts.discountAmount;
     const net = amounts.netPayable;
+    const discountBreakdown = resolveOrderDiscountBreakdown(displayOrder as OrderAmountSource);
     const invNo = invoiceNumber(displayOrder.order_id);
 
     // Shared inner padding used consistently everywhere
@@ -751,7 +752,13 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const ROW_H = 6;
     const sumItems = [
         { label: "Gross Amount", value: fmt(gross), bold: false },
-        { label: "Discount", value: fmt(discount), bold: false },
+        { label: "Base/Custom Discount", value: fmt(discountBreakdown.baseDiscountAmount), bold: false },
+        ...(discountBreakdown.hasSlabDiscount ? [{
+            label: `Slab Discount${discountBreakdown.slabDiscountPercent ? ` (${discountBreakdown.slabDiscountPercent}%)` : ""}`,
+            value: fmt(discountBreakdown.slabDiscountAmount),
+            bold: false,
+        }] : []),
+        { label: "Total Discount", value: fmt(discount), bold: false },
         { label: "Net Amount", value: fmt(net), bold: true },
     ];
     doc.rect(sx, y, SUM_W, TOTAL_L_H);

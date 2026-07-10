@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast, ToastContainer } from "react-toastify";
 import moment from "moment";
 import { useCartStore } from "@/Store/store";
+import { fetchDealerStatus } from "@/lib/dealerStatus";
 import discountUtils from "@/lib/discount";
 import {
   buildCatalogueIndex,
@@ -383,6 +384,17 @@ function AddOrderPageInner() {
   const [perProductSubmitting, setPerProductSubmitting] = useState<string | null>(null);
 
   const [arr1, setArr] = useState<ProductRow[]>([emptyRow()]);
+
+  const ensureDealerIsActive = async () => {
+    if (!user?.Dealer_Id) {
+      throw new Error("Dealer account is missing.");
+    }
+
+    const dealerStatus = await fetchDealerStatus(String(user.Dealer_Id));
+    if (dealerStatus === "inactive") {
+      throw new Error("This dealer account is inactive. Please contact the administrator.");
+    }
+  };
 
   useEffect(() => {
     const stored = localStorage.getItem("UserData");
@@ -1156,7 +1168,6 @@ function AddOrderPageInner() {
   // ── Submit Order ──────────────────────────────────────────────────────────
   const handleSubmitProductArray = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product"); return; }
-    setLoading(true);
     const payload = arr1.filter(r => r.productname).map(r => {
       const rowDiscountPercent = getRowDiscountPercent(r);
       const quantityPacks = safePositiveNumber(r.producQuanity);
@@ -1188,6 +1199,7 @@ function AddOrderPageInner() {
     fd.append("productorder", JSON.stringify(payload));
     fd.append("Dealer_shipto", shipto);
     fd.append("id", user.Dealer_Id);
+    fd.append("staffid", user.assignedstaff);
     fd.append("discount", String(activeDiscount));
     fd.append("subtotal", payloadAmount(discountPayload.subtotal));
     fd.append("discountPercent", String(discountPayload.discountPercent));
@@ -1224,10 +1236,12 @@ function AddOrderPageInner() {
     if (refno) fd.append("refno", refno);
     if (appliedCoupon) fd.append("coupon_code", appliedCoupon.code);
     
-    const targetApiUrl = `${BACKEND_URL}/PlaceOrderarray?id=${user.Dealer_Id}&staffid=${user.assignedstaff}`;
+    const targetApiUrl = `/api/dealer-order`;
     const phpPayload = readFormData(fd);
 
     try {
+      await ensureDealerIsActive();
+      setLoading(true);
       const { data } = await axios.post(targetApiUrl, fd);
       logPhpExchange("PlaceOrderarray", {
         method: "POST",
@@ -1271,7 +1285,14 @@ function AddOrderPageInner() {
         request: phpPayload,
         error: getAxiosDebugError(error),
       });
-      toast.error("Order failed, please try again.", { autoClose: 5000 });
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as { message?: string; msg?: string } | undefined)?.message
+          ?? (error.response?.data as { message?: string; msg?: string } | undefined)?.msg
+          ?? error.message)
+        : error instanceof Error
+          ? error.message
+          : "Order failed, please try again.";
+      toast.error(message, { autoClose: 5000 });
     } finally {
       setLoading(false);
     }
@@ -1280,14 +1301,15 @@ function AddOrderPageInner() {
   const handleSubmitFile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return;
-    setLoading(true);
     const fd = new FormData();
     fd.append("staffid", user.assignedstaff);
     fd.append("order_dealer", user.Dealer_Id);
     fd.append("exelefile", file);
-    const targetApiUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/importdata`;
+    const targetApiUrl = `/api/dealer-order`;
     const phpPayload = readFormData(fd);
     try {
+      await ensureDealerIsActive();
+      setLoading(true);
       const { data } = await axios.post(targetApiUrl, fd);
       logPhpExchange("importdata", {
         method: "POST",
@@ -1303,7 +1325,14 @@ function AddOrderPageInner() {
         request: phpPayload,
         error: getAxiosDebugError(error),
       });
-      toast.error("Upload failed.");
+      const message = axios.isAxiosError(error)
+        ? String((error.response?.data as { message?: string; msg?: string } | undefined)?.message
+          ?? (error.response?.data as { message?: string; msg?: string } | undefined)?.msg
+          ?? error.message)
+        : error instanceof Error
+          ? error.message
+          : "Upload failed.";
+      toast.error(message);
     } finally {
       setLoading(false);
     }
