@@ -26,14 +26,21 @@ export async function GET(req: NextRequest) {
     const dealerId = req.nextUrl.searchParams.get("dealer_id");
     const staffId = req.nextUrl.searchParams.get("staff_id");
     const status = req.nextUrl.searchParams.get("status");
+    const orderId = req.nextUrl.searchParams.get("order_id") || req.nextUrl.searchParams.get("orderId");
+    const orderNumber = req.nextUrl.searchParams.get("order_number") || req.nextUrl.searchParams.get("orderNumber");
     const reorderable = req.nextUrl.searchParams.get("reorderable");
     const limitParam = Number(req.nextUrl.searchParams.get("limit") || 100);
-    const limit = Number.isFinite(limitParam) ? Math.min(200, Math.max(1, limitParam)) : 100;
+    const limit = Number.isFinite(limitParam) ? Math.min(500, Math.max(1, limitParam)) : 100;
 
     const query: Record<string, string | boolean> = {};
     if (dealerId) query.dealerId = dealerId;
     if (staffId) query.staffId = staffId;
     if (status) query.status = status;
+    if (orderId) {
+      query.orderId = orderId;
+    } else if (orderNumber) {
+      query.orderNumber = orderNumber;
+    }
     if (reorderable === "true") {
       query.status = "approved";
       query.allowReorder = true;
@@ -101,6 +108,10 @@ export async function POST(req: NextRequest) {
       shipto: safeText(body.shipto, 1000),
       refno: safeText(body.refno, 120),
       orderNote: safeText(body.orderNote, 1500),
+      orderId: safeText(body.orderId || body.order_id, 120),
+      order_id: safeText(body.orderId || body.order_id, 120),
+      orderNumber: safeText(body.orderNumber || body.order_number, 160),
+      order_number: safeText(body.orderNumber || body.order_number, 160),
       orderSignature: safeText(body.orderSignature, 400),
       discountBreakdown: body.discountBreakdown && typeof body.discountBreakdown === "object"
         ? body.discountBreakdown

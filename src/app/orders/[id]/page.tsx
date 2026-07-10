@@ -6,7 +6,12 @@ import moment from "moment";
 import * as XLSX from "xlsx";
 import { hasPriorityTag } from "@/lib/orderPriority";
 import { downloadOrderInvoice } from "@/lib/invoicegenerator";
-import { resolveOrderAmounts, resolveOrderDiscountBreakdown } from "@/lib/orderAmounts";
+import {
+  formatAdditionalDiscountBadge,
+  getOrderDiscountSummaryRows,
+  resolveOrderAmounts,
+  resolveOrderDiscountBreakdown,
+} from "@/lib/orderAmounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -73,9 +78,13 @@ type OrderSummaryOverride = Record<string, unknown> & {
   discountPercent?: number | string;
   baseDiscountAmount?: number | string;
   baseDiscountPercent?: number | string;
+  customDiscountAmount?: number | string;
+  customDiscountPercent?: number | string;
   amountBeforeSlab?: number | string;
   slabDiscountAmount?: number | string;
   slabDiscountPercent?: number | string;
+  allocatedDiscountPercent?: number | string;
+  approvedDiscountPercent?: number | string;
 };
 
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -599,10 +608,9 @@ export default function ViewOrderDealerPage() {
     grossAmount: totals.gross,
     discountAmount: totals.discount,
     netPayableAmount: totals.final,
-  });
-  const slabLabel = discountBreakdown.hasSlabDiscount
-    ? `Slab Discount${discountBreakdown.slabDiscountPercent ? ` (${discountBreakdown.slabDiscountPercent}%)` : ""}`
-    : "Slab Discount";
+  }, undefined, { itemDiscountTotal: calculatedTotals.discount });
+  const discountSummaryRows = getOrderDiscountSummaryRows(discountBreakdown);
+  const additionalDiscountBadge = formatAdditionalDiscountBadge(discountBreakdown);
 
   const buildInvoiceOrder = () => ({
     ...(displayOrderMeta ?? {}),
@@ -618,9 +626,15 @@ export default function ViewOrderDealerPage() {
     discountPercent: displayOrderMeta?.discountPercent,
     baseDiscountAmount: discountBreakdown.baseDiscountAmount,
     baseDiscountPercent: discountBreakdown.baseDiscountPercent,
-    amountBeforeSlab: discountBreakdown.amountBeforeSlab,
+    postBaseAmount: discountBreakdown.postBaseAmount,
+    additionalDiscountType: discountBreakdown.additionalDiscountType,
+    additionalDiscountAmount: discountBreakdown.additionalDiscountAmount,
+    customDiscountAmount: discountBreakdown.customDiscountAmount,
+    customDiscountPercent: discountBreakdown.customDiscountPercent,
     slabDiscountAmount: discountBreakdown.slabDiscountAmount,
     slabDiscountPercent: discountBreakdown.slabDiscountPercent,
+    approvedDiscountPercent: displayOrderMeta?.approvedDiscountPercent,
+    allocatedDiscountPercent: displayOrderMeta?.allocatedDiscountPercent,
     Dealer_Name: dealer?.Dealer_Name || firstOrder?.Dealer_Name || displayOrderMeta?.Dealer_Name || "",
     Dealer_Address: dealer?.Dealer_Address || firstOrder?.Dealer_Address || displayOrderMeta?.Dealer_Address || "",
     Dealer_Number: dealer?.Dealer_Number || firstOrder?.Dealer_Number || displayOrderMeta?.Dealer_Number || "",
@@ -784,27 +798,26 @@ export default function ViewOrderDealerPage() {
 
           {/* ── Totals ── */}
           {!loading && orders.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7 gap-3">
-              {[
-                { label: "Total Qty",     value: `${totals.qty}`,                             sub: "packs",           color: "text-gray-900"    },
-                { label: "Total Pieces",  value: `${totals.pieces}`,                          sub: "pcs",             color: "text-gray-900"    },
-                { label: "Gross Amount",  value: `₹${totals.gross.toLocaleString("en-IN")}`, sub: "before discount", color: "text-gray-900"    },
-                { label: "Base/Custom Discount", value: `₹${discountBreakdown.baseDiscountAmount.toLocaleString("en-IN")}`, sub: "custom discount", color: "text-amber-700" },
-                ...(discountBreakdown.hasSlabDiscount ? [{
-                  label: slabLabel,
-                  value: `₹${discountBreakdown.slabDiscountAmount.toLocaleString("en-IN")}`,
-                  sub: "stored slab discount",
-                  color: "text-amber-700",
-                }] : []),
-                { label: "Total Discount", value: `₹${totals.discount.toLocaleString("en-IN")}`, sub: "base + slab", color: "text-amber-700" },
-                { label: "Net Payable",   value: `₹${totals.final.toLocaleString("en-IN")}`,  sub: "after discount",  color: "text-emerald-700" },
-              ].map(s => (
-                <div key={s.label} className="bg-white border border-gray-200 rounded-2xl px-5 py-4">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{s.label}</p>
-                  <p className={`text-[20px] font-bold font-mono mt-1 ${s.color}`}>{s.value}</p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">{s.sub}</p>
+            <div className="space-y-3">
+              {additionalDiscountBadge && (
+                <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[12px] font-semibold text-emerald-700">
+                  {additionalDiscountBadge}
                 </div>
-              ))}
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                {discountSummaryRows.map((row) => (
+                  <div key={row.key} className="bg-white border border-gray-200 rounded-2xl px-5 py-4">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{row.label}</p>
+                    <p className={`text-[20px] font-bold font-mono mt-1 ${
+                      row.key === "gross" ? "text-gray-900"
+                        : row.key === "net" ? "text-emerald-700"
+                          : "text-amber-700"
+                    }`}>
+                      ₹{row.amount.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

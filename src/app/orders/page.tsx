@@ -7,6 +7,7 @@ import moment from "moment";
 import { exportOrdersToSupabase, downloadPDFDirectly } from "@/lib/Exporttopdf";
 import { InvoiceModal } from "@/components/InvoiceModel";
 import { downloadOrderInvoice, uploadOrderInvoiceToSupabase, generateOrderInvoicePDF } from "@/lib/invoicegenerator";
+import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from "@/lib/orderAmounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Order = {
@@ -96,58 +97,6 @@ const getDealerId = () => {
   try { return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225"; }
   catch { return "225"; }
 };
-
-function moneyValue(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  const text = String(value).replace(/,/g, "").trim();
-  if (!text) return null;
-  const amount = Number(text);
-  return Number.isFinite(amount) ? amount : null;
-}
-
-function getOrderHistoryAmounts(order: Order, overlay?: OrderSummaryOverride) {
-  const raw = order as any;
-  const gross = moneyValue(overlay?.grossAmount ?? overlay?.gross_amount ?? overlay?.order_amount ?? raw.order_amount) ?? 0;
-
-  // Legacy PHP stores net payable in `order_discount`, despite the field name.
-  const explicitNet = moneyValue(
-    overlay?.netPayableAmount ??
-    overlay?.net_payable_amount ??
-    overlay?.order_net_amount ??
-    overlay?.order_discount ??
-    raw.order_net_amount ??
-    raw.net_amount ??
-    raw.netPayableAmount
-  );
-  const legacyNet = moneyValue(raw.order_discount);
-  const explicitDiscount = moneyValue(
-    overlay?.discountAmount ??
-    overlay?.discount_amount ??
-    overlay?.order_discount_amount ??
-    raw.order_discount_amount ??
-    raw.discount_amount ??
-    raw.discountAmount
-  );
-
-  const netPayable = explicitNet ?? legacyNet ?? gross;
-  const discountAmount = explicitDiscount ?? Math.max(0, gross - netPayable);
-
-  return { gross, discountAmount, netPayable };
-}
-
-function withOrderHistoryDisplayAmounts(order: Order, overlay?: OrderSummaryOverride): Order {
-  const amounts = getOrderHistoryAmounts(order, overlay);
-  return {
-    ...(order as any),
-    order_amount: String(amounts.gross),
-    order_discount: String(amounts.discountAmount),
-    order_discount_amount: String(amounts.discountAmount),
-    order_net_amount: String(amounts.netPayable),
-    grossAmount: amounts.gross,
-    discountAmount: amounts.discountAmount,
-    netPayableAmount: amounts.netPayable,
-  };
-}
 
 function formatMoney(amount: number) {
   return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -479,7 +428,7 @@ export default function OrderHistoryPage() {
   });
 
   const orders = data?.data ?? [];
-  const ordersForExport = orders.map(order => withOrderHistoryDisplayAmounts(order, summaryOverrides[order.order_id]));
+  const ordersForExport = orders.map(order => withDisplayOrderAmounts(order, summaryOverrides[order.order_id]));
   const totalCount = data?.count ?? 0;
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const orderIdsKey = orders.map((o) => (o as any).order_id ?? (o as any).orderId ?? "").filter(Boolean).join(",");
@@ -660,7 +609,8 @@ export default function OrderHistoryPage() {
                           const noteOverlay = orderNotes[oid];
                           const summaryOverride = summaryOverrides[oid];
                           const historyNote = extractOrderNote(order, noteOverlay?.note);
-                          const amounts = getOrderHistoryAmounts(order, summaryOverride);
+                          const displayOrder = withDisplayOrderAmounts(order, summaryOverride);
+                          const discountBadge = formatAdditionalDiscountBadge(displayOrder);
 
                           return (
                             <tr key={oid || idx} className={`hover:bg-blue-50/30 transition-colors ${isDeleted ? "opacity-60" : ""}`}>
@@ -687,13 +637,16 @@ export default function OrderHistoryPage() {
                                 <p className="text-[11px] text-gray-600 font-mono mt-0.5">{moment(order.order_date).format("hh:mm A")}</p>
                               </td>
                               <td className="px-4 py-3.5 font-mono text-[14px] font-bold text-gray-900">
-                                {formatMoney(amounts.gross)}
+                                {formatMoney(displayOrder.grossAmount)}
                               </td>
                               <td className="px-4 py-3.5 font-mono text-[13px] text-amber-700">
-                                {amounts.discountAmount > 0 ? `−${formatMoney(amounts.discountAmount)}` : "—"}
+                                {displayOrder.discountAmount > 0 ? `−${formatMoney(displayOrder.discountAmount)}` : "—"}
+                                {discountBadge && (
+                                  <p className="mt-1 text-[11px] font-semibold text-indigo-600">{discountBadge}</p>
+                                )}
                               </td>
                               <td className="px-4 py-3.5 font-mono text-[14px] font-bold text-emerald-700">
-                                {formatMoney(amounts.netPayable)}
+                                {formatMoney(displayOrder.netPayableAmount)}
                               </td>
                               <td className="px-4 py-3.5">
                                 <span className="px-2 py-0.5 bg-gray-100 text-gray-800 rounded-lg text-[12px] font-mono font-semibold">
@@ -723,7 +676,7 @@ export default function OrderHistoryPage() {
                                   </button>
 
                                   {/* Invoice button — always present */}
-                                  <InvoiceRowButton order={withOrderHistoryDisplayAmounts(order, summaryOverride)} />
+                                  <InvoiceRowButton order={displayOrder} />
 
                                   {!isDeleted && (
                                     <button

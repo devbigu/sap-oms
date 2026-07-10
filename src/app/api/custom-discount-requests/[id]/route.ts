@@ -101,15 +101,19 @@ export async function PATCH(
   try {
     const body = await req.json();
     const status = safeText(body.status, 40);
-    const isToggleOnly = status === "" && typeof body.allowReorder === "boolean";
-    if (!isToggleOnly && !["approved", "rejected", "pending"].includes(status)) {
+    const orderId = safeText(body.orderId || body.order_id, 120);
+    const orderNumber = safeText(body.orderNumber || body.order_number, 160);
+    const hasOrderLinkUpdate = !!orderId || !!orderNumber;
+    const isToggleOnly = status === "" && typeof body.allowReorder === "boolean" && !hasOrderLinkUpdate;
+    const isOrderLinkOnly = status === "" && hasOrderLinkUpdate && typeof body.allowReorder !== "boolean";
+
+    if (!isToggleOnly && !isOrderLinkOnly && !["approved", "rejected", "pending"].includes(status)) {
       return NextResponse.json({ success: false, message: "Invalid status" }, { status: 400 });
     }
 
     const now = new Date().toISOString();
-    const set: Record<string, any> = isToggleOnly
+    const set: Record<string, any> = isToggleOnly || isOrderLinkOnly
       ? {
-        allowReorder: body.allowReorder,
         updatedAt: now,
       }
       : {
@@ -120,7 +124,23 @@ export async function PATCH(
         updatedAt: now,
       };
 
-    if (!isToggleOnly) {
+    if (isToggleOnly) {
+      set.allowReorder = body.allowReorder;
+    }
+
+    if (hasOrderLinkUpdate) {
+      if (orderId) {
+        set.orderId = orderId;
+        set.order_id = orderId;
+      }
+      if (orderNumber) {
+        set.orderNumber = orderNumber;
+        set.order_number = orderNumber;
+      }
+      set.linkedOrderAt = now;
+    }
+
+    if (!isToggleOnly && !isOrderLinkOnly) {
       if (status === "approved") {
         set.allowReorder = true;
       } else if (status === "rejected") {

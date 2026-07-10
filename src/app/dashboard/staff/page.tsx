@@ -642,7 +642,7 @@ function ExecutiveDashboard() {
                 </div>
                 <div className="panel-sub">Dealers mapped to your staff ID</div>
                 <div className="font-sans font-bold badge-green">{activeDealers} active</div>
-                <Link href="/dashboard/admin/dealer/DealerList" className="quick-action-btn">+ View dealers</Link>
+                <Link href="/dashboard/staff/dealerlist" className="quick-action-btn">+ View dealers</Link>
               </div>
 
               <div className="stat-card">

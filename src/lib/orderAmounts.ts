@@ -1,3 +1,5 @@
+export type AdditionalDiscountType = "slab" | "custom" | null;
+
 export type OrderAmountSource = Record<string, unknown> & {
   order_amount?: string | number;
   order_discount?: string | number;
@@ -11,6 +13,24 @@ export type OrderAmountSource = Record<string, unknown> & {
   base_discount_amount?: string | number;
   baseDiscountPercent?: string | number;
   base_discount_percent?: string | number;
+  postBaseAmount?: string | number;
+  post_base_amount?: string | number;
+  additionalDiscountType?: string | null;
+  additional_discount_type?: string | null;
+  additionalDiscountAmount?: string | number;
+  additional_discount_amount?: string | number;
+  customDiscountAmount?: string | number;
+  custom_discount_amount?: string | number;
+  customDiscountPercent?: string | number;
+  custom_discount_percent?: string | number;
+  approvedDiscountAmount?: string | number;
+  approved_discount_amount?: string | number;
+  approvedDiscountPercent?: string | number;
+  approved_discount_percent?: string | number;
+  allocatedDiscountPercent?: string | number;
+  allocated_discount_percent?: string | number;
+  couponDiscountPercent?: string | number;
+  coupon_discount_percent?: string | number;
   amountBeforeSlab?: string | number;
   amount_before_slab?: string | number;
   slabDiscountAmount?: string | number;
@@ -26,12 +46,38 @@ export type ResolvedOrderAmounts = {
 };
 
 export type ResolvedOrderDiscountBreakdown = ResolvedOrderAmounts & {
+  grossAmount: number;
+  netPayableAmount: number;
   baseDiscountAmount: number;
-  slabDiscountAmount: number;
-  hasSlabDiscount: boolean;
   baseDiscountPercent?: number;
-  slabDiscountPercent?: number;
-  amountBeforeSlab?: number;
+  postBaseAmount: number;
+  additionalDiscountType: AdditionalDiscountType;
+  slabDiscountPercent: number;
+  slabDiscountAmount: number;
+  customDiscountPercent?: number;
+  customDiscountAmount: number;
+  additionalDiscountAmount: number;
+  hasSlabDiscount: boolean;
+  hasCustomDiscount: boolean;
+  hasKnownBaseDiscount: boolean;
+  hasKnownAdditionalDiscount: boolean;
+};
+
+type ResolveOrderDiscountBreakdownOptions = {
+  itemDiscountTotal?: number;
+};
+
+type DiscountSummaryRow = {
+  key: "gross" | "base" | "slab" | "custom" | "total" | "net";
+  label: string;
+  amount: number;
+};
+
+type AdditionalDiscountDisplaySource = {
+  additionalDiscountType: AdditionalDiscountType;
+  slabDiscountPercent: number;
+  slabDiscountAmount: number;
+  customDiscountAmount: number;
 };
 
 export function toMoneyNumber(value: unknown): number | undefined {
@@ -51,6 +97,26 @@ function firstMoney(...values: unknown[]) {
     if (amount !== undefined) return amount;
   }
   return undefined;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function isCloseMoney(a: number, b: number) {
+  return Math.abs(a - b) <= 0.01;
+}
+
+function normalizeAdditionalDiscountType(value: unknown): AdditionalDiscountType {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (["slab", "flat", "flat/slab"].includes(text)) return "slab";
+  if (["custom", "approved", "approved_custom"].includes(text)) return "custom";
+  return null;
+}
+
+function clampMoney(value: number | undefined) {
+  return roundMoney(Math.max(0, value ?? 0));
 }
 
 export function resolveOrderAmounts(
@@ -93,66 +159,337 @@ export function resolveOrderAmounts(
 
   return {
     gross,
-    discountAmount,
-    netPayable,
+    discountAmount: roundMoney(discountAmount),
+    netPayable: roundMoney(netPayable),
   };
+}
+
+function deriveSlabPercent(amount: number, postBaseAmount: number) {
+  if (!(amount > 0) || !(postBaseAmount > 0)) return 0;
+  const percent = roundMoney((amount / postBaseAmount) * 100);
+  if (isCloseMoney(percent, 2)) return 2;
+  if (isCloseMoney(percent, 5)) return 5;
+  return 0;
 }
 
 export function resolveOrderDiscountBreakdown(
   order: OrderAmountSource,
-  override?: OrderAmountSource
+  override?: OrderAmountSource,
+  options?: ResolveOrderDiscountBreakdownOptions
 ): ResolvedOrderDiscountBreakdown {
   const amounts = resolveOrderAmounts(order, override);
+  const grossAmount = amounts.gross;
+  const totalDiscountAmount = amounts.discountAmount;
+  const netPayableAmount = amounts.netPayable;
 
-  const baseDiscountAmount = firstMoney(
+  const explicitType = normalizeAdditionalDiscountType(
+    override?.additionalDiscountType
+    ?? override?.additional_discount_type
+    ?? order.additionalDiscountType
+    ?? order.additional_discount_type
+  );
+
+  const explicitBaseDiscountAmount = firstMoney(
     override?.baseDiscountAmount,
     override?.base_discount_amount,
     order.baseDiscountAmount,
     order.base_discount_amount
   );
 
-  const slabDiscountAmount = firstMoney(
-    override?.slabDiscountAmount,
-    override?.slab_discount_amount,
-    order.slabDiscountAmount,
-    order.slab_discount_amount
-  ) ?? 0;
-
-  const baseDiscountPercent = firstMoney(
+  const explicitBaseDiscountPercent = firstMoney(
     override?.baseDiscountPercent,
     override?.base_discount_percent,
     order.baseDiscountPercent,
-    order.base_discount_percent
+    order.base_discount_percent,
+    override?.allocatedDiscountPercent,
+    override?.allocated_discount_percent,
+    order.allocatedDiscountPercent,
+    order.allocated_discount_percent
   );
 
-  const slabDiscountPercent = firstMoney(
-    override?.slabDiscountPercent,
-    override?.slab_discount_percent,
-    order.slabDiscountPercent,
-    order.slab_discount_percent
-  );
-
-  const amountBeforeSlab = firstMoney(
+  const explicitPostBaseAmount = firstMoney(
+    override?.postBaseAmount,
+    override?.post_base_amount,
+    order.postBaseAmount,
+    order.post_base_amount,
     override?.amountBeforeSlab,
     override?.amount_before_slab,
     order.amountBeforeSlab,
     order.amount_before_slab
   );
 
-  const resolvedBaseDiscountAmount = baseDiscountAmount
-    ?? (slabDiscountAmount > 0
-      ? Math.max(0, amounts.discountAmount - slabDiscountAmount)
-      : amounts.discountAmount);
+  const explicitAdditionalDiscountAmount = firstMoney(
+    override?.additionalDiscountAmount,
+    override?.additional_discount_amount,
+    order.additionalDiscountAmount,
+    order.additional_discount_amount
+  );
+
+  const explicitCustomDiscountAmount = firstMoney(
+    override?.customDiscountAmount,
+    override?.custom_discount_amount,
+    override?.approvedDiscountAmount,
+    override?.approved_discount_amount,
+    order.customDiscountAmount,
+    order.custom_discount_amount,
+    order.approvedDiscountAmount,
+    order.approved_discount_amount
+  );
+
+  const explicitCustomDiscountPercent = firstMoney(
+    override?.customDiscountPercent,
+    override?.custom_discount_percent,
+    override?.approvedDiscountPercent,
+    override?.approved_discount_percent,
+    order.customDiscountPercent,
+    order.custom_discount_percent,
+    order.approvedDiscountPercent,
+    order.approved_discount_percent
+  );
+
+  const explicitSlabDiscountAmount = firstMoney(
+    override?.slabDiscountAmount,
+    override?.slab_discount_amount,
+    order.slabDiscountAmount,
+    order.slab_discount_amount
+  );
+
+  const explicitSlabDiscountPercent = firstMoney(
+    override?.slabDiscountPercent,
+    override?.slab_discount_percent,
+    order.slabDiscountPercent,
+    order.slab_discount_percent
+  );
+
+  const itemDiscountTotal = firstMoney(options?.itemDiscountTotal);
+
+  let baseDiscountAmount = explicitBaseDiscountAmount;
+  if (baseDiscountAmount === undefined && explicitPostBaseAmount !== undefined) {
+    baseDiscountAmount = clampMoney(grossAmount - explicitPostBaseAmount);
+  }
+  if (baseDiscountAmount === undefined && itemDiscountTotal !== undefined) {
+    baseDiscountAmount = clampMoney(itemDiscountTotal);
+  }
+  if (baseDiscountAmount === undefined && explicitBaseDiscountPercent !== undefined) {
+    baseDiscountAmount = clampMoney(grossAmount * (explicitBaseDiscountPercent / 100));
+  }
+
+  let additionalDiscountType: AdditionalDiscountType = explicitType;
+
+  if (!additionalDiscountType) {
+    const hasExplicitCustom = (explicitCustomDiscountAmount ?? 0) > 0 || (explicitCustomDiscountPercent ?? 0) > 0;
+    const hasExplicitSlab = (explicitSlabDiscountAmount ?? 0) > 0 || (explicitSlabDiscountPercent ?? 0) > 0;
+
+    if (hasExplicitCustom !== hasExplicitSlab) {
+      additionalDiscountType = hasExplicitCustom ? "custom" : "slab";
+    } else if ((explicitAdditionalDiscountAmount ?? 0) > 0) {
+      if (hasExplicitCustom && !hasExplicitSlab) additionalDiscountType = "custom";
+      if (hasExplicitSlab && !hasExplicitCustom) additionalDiscountType = "slab";
+    }
+  }
+
+  if (!additionalDiscountType && baseDiscountAmount !== undefined) {
+    const unresolvedAdditionalAmount = roundMoney(Math.max(0, totalDiscountAmount - baseDiscountAmount));
+    if (unresolvedAdditionalAmount <= 0.01) {
+      additionalDiscountType = null;
+    } else if (
+      explicitSlabDiscountAmount !== undefined &&
+      isCloseMoney(unresolvedAdditionalAmount, explicitSlabDiscountAmount)
+    ) {
+      additionalDiscountType = "slab";
+    } else if (
+      explicitCustomDiscountAmount !== undefined &&
+      isCloseMoney(unresolvedAdditionalAmount, explicitCustomDiscountAmount)
+    ) {
+      additionalDiscountType = "custom";
+    } else if (
+      explicitPostBaseAmount !== undefined &&
+      explicitSlabDiscountPercent !== undefined &&
+      isCloseMoney(
+        unresolvedAdditionalAmount,
+        clampMoney(explicitPostBaseAmount * (explicitSlabDiscountPercent / 100))
+      )
+    ) {
+      additionalDiscountType = "slab";
+    }
+  }
+
+  if (baseDiscountAmount === undefined) {
+    if (!additionalDiscountType) {
+      baseDiscountAmount = totalDiscountAmount;
+    } else if (additionalDiscountType === "slab") {
+      const slabAmount = explicitSlabDiscountAmount ?? explicitAdditionalDiscountAmount ?? 0;
+      baseDiscountAmount = clampMoney(totalDiscountAmount - slabAmount);
+    } else {
+      const customAmount = explicitCustomDiscountAmount ?? explicitAdditionalDiscountAmount ?? 0;
+      baseDiscountAmount = clampMoney(totalDiscountAmount - customAmount);
+    }
+  }
+
+  const postBaseAmount = clampMoney(
+    explicitPostBaseAmount
+    ?? (grossAmount - baseDiscountAmount)
+  );
+
+  let slabDiscountAmount = 0;
+  let customDiscountAmount = 0;
+
+  if (additionalDiscountType === "slab") {
+    slabDiscountAmount = clampMoney(
+      explicitSlabDiscountAmount
+      ?? explicitAdditionalDiscountAmount
+      ?? (totalDiscountAmount - baseDiscountAmount)
+    );
+  } else if (additionalDiscountType === "custom") {
+    customDiscountAmount = clampMoney(
+      explicitCustomDiscountAmount
+      ?? explicitAdditionalDiscountAmount
+      ?? (totalDiscountAmount - baseDiscountAmount)
+    );
+  }
+
+  if (!additionalDiscountType) {
+    slabDiscountAmount = 0;
+    customDiscountAmount = 0;
+  }
+
+  const additionalDiscountAmount = clampMoney(
+    additionalDiscountType === "slab" ? slabDiscountAmount
+      : additionalDiscountType === "custom" ? customDiscountAmount
+        : 0
+  );
+
+  const slabDiscountPercent = clampMoney(
+    explicitSlabDiscountPercent
+    ?? deriveSlabPercent(slabDiscountAmount, postBaseAmount)
+  );
+
+  const customDiscountPercent = additionalDiscountType === "custom"
+    ? firstMoney(
+        override?.customDiscountPercent,
+        override?.custom_discount_percent,
+        override?.approvedDiscountPercent,
+        override?.approved_discount_percent,
+        order.customDiscountPercent,
+        order.custom_discount_percent,
+        order.approvedDiscountPercent,
+        order.approved_discount_percent
+      )
+    : undefined;
+
+  const baseDiscountPercent = explicitBaseDiscountPercent
+    ?? (
+      grossAmount > 0 && baseDiscountAmount > 0
+        ? roundMoney((baseDiscountAmount / grossAmount) * 100)
+        : undefined
+    );
 
   return {
     ...amounts,
-    baseDiscountAmount: resolvedBaseDiscountAmount,
-    slabDiscountAmount,
-    hasSlabDiscount: slabDiscountAmount > 0,
+    grossAmount,
+    netPayableAmount,
+    baseDiscountAmount: clampMoney(baseDiscountAmount),
     baseDiscountPercent,
+    postBaseAmount,
+    additionalDiscountType,
     slabDiscountPercent,
-    amountBeforeSlab: amountBeforeSlab ?? (slabDiscountAmount > 0 ? Math.max(0, amounts.gross - resolvedBaseDiscountAmount) : undefined),
+    slabDiscountAmount,
+    customDiscountPercent,
+    customDiscountAmount,
+    additionalDiscountAmount,
+    hasSlabDiscount: additionalDiscountType === "slab" && slabDiscountAmount > 0,
+    hasCustomDiscount: additionalDiscountType === "custom" && customDiscountAmount > 0,
+    hasKnownBaseDiscount: explicitBaseDiscountAmount !== undefined
+      || explicitBaseDiscountPercent !== undefined
+      || explicitPostBaseAmount !== undefined
+      || itemDiscountTotal !== undefined
+      || !additionalDiscountType,
+    hasKnownAdditionalDiscount: additionalDiscountType !== null,
   };
+}
+
+export function getOrderDiscountSummaryRows(
+  breakdown: ResolvedOrderDiscountBreakdown,
+  labels?: { net?: string }
+): DiscountSummaryRow[] {
+  const rows: DiscountSummaryRow[] = [
+    { key: "gross", label: "Gross Amount", amount: breakdown.grossAmount },
+    {
+      key: "base",
+      label: breakdown.baseDiscountPercent !== undefined
+        ? `Base Discount (${breakdown.baseDiscountPercent}%)`
+        : "Base Discount",
+      amount: breakdown.baseDiscountAmount,
+    },
+  ];
+
+  if (breakdown.additionalDiscountType === "slab" && breakdown.slabDiscountAmount > 0) {
+    rows.push({
+      key: "slab",
+      label: breakdown.slabDiscountPercent > 0
+        ? `slab discount (${breakdown.slabDiscountPercent}%)`
+        : "slab discount",
+      amount: breakdown.slabDiscountAmount,
+    });
+  }
+
+  if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
+    rows.push({
+      key: "custom",
+      label: "Approved Custom Discount",
+      amount: breakdown.customDiscountAmount,
+    });
+  }
+
+  rows.push(
+    { key: "total", label: "Total Discount", amount: breakdown.discountAmount },
+    { key: "net", label: labels?.net ?? "Net Payable", amount: breakdown.netPayableAmount }
+  );
+
+  return rows;
+}
+
+export function formatAdditionalDiscountBadge(breakdown: AdditionalDiscountDisplaySource): string | null {
+  if (breakdown.additionalDiscountType === "slab" && breakdown.slabDiscountAmount > 0) {
+    const percentText = breakdown.slabDiscountPercent > 0
+      ? `${breakdown.slabDiscountPercent}%`
+      : "";
+    return `slab ${percentText}`.trim() + ` · ${formatCurrency(breakdown.slabDiscountAmount)}`;
+  }
+
+  if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
+    return `Custom · ${formatCurrency(breakdown.customDiscountAmount)}`;
+  }
+
+  return null;
+}
+
+export function getReadableAdditionalDiscountText(
+  breakdown: AdditionalDiscountDisplaySource
+): string | null {
+  if (breakdown.additionalDiscountType === "slab" && breakdown.slabDiscountAmount > 0) {
+    const percentText = breakdown.slabDiscountPercent > 0
+      ? `${breakdown.slabDiscountPercent}%`
+      : "flat";
+    return `slab discount applied: ${percentText} (Rs. ${formatAmountText(breakdown.slabDiscountAmount)})`;
+  }
+
+  if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
+    return `Approved custom discount applied: Rs. ${formatAmountText(breakdown.customDiscountAmount)}`;
+  }
+
+  return null;
+}
+
+function formatCurrency(amount: number) {
+  return `₹${formatAmountText(amount)}`;
+}
+
+function formatAmountText(amount: number) {
+  return amount.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export function withDisplayOrderAmounts<T extends OrderAmountSource>(
@@ -167,30 +504,40 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
   discountAmount: number;
   netPayableAmount: number;
   baseDiscountAmount: number;
-  slabDiscountAmount: number;
-  hasSlabDiscount: boolean;
   baseDiscountPercent?: number;
-  slabDiscountPercent?: number;
-  amountBeforeSlab?: number;
+  postBaseAmount: number;
+  additionalDiscountType: AdditionalDiscountType;
+  additionalDiscountAmount: number;
+  customDiscountAmount: number;
+  customDiscountPercent?: number;
+  slabDiscountAmount: number;
+  slabDiscountPercent: number;
+  hasSlabDiscount: boolean;
+  hasCustomDiscount: boolean;
   priceSource: "summary_override" | "php";
 } {
   const amounts = resolveOrderDiscountBreakdown(order, override);
 
   return {
     ...order,
-    order_amount: String(amounts.gross),
+    order_amount: String(amounts.grossAmount),
     order_discount: String(amounts.discountAmount),
     order_discount_amount: String(amounts.discountAmount),
-    order_net_amount: String(amounts.netPayable),
-    grossAmount: amounts.gross,
+    order_net_amount: String(amounts.netPayableAmount),
+    grossAmount: amounts.grossAmount,
     discountAmount: amounts.discountAmount,
-    netPayableAmount: amounts.netPayable,
+    netPayableAmount: amounts.netPayableAmount,
     baseDiscountAmount: amounts.baseDiscountAmount,
-    slabDiscountAmount: amounts.slabDiscountAmount,
-    hasSlabDiscount: amounts.hasSlabDiscount,
     baseDiscountPercent: amounts.baseDiscountPercent,
+    postBaseAmount: amounts.postBaseAmount,
+    additionalDiscountType: amounts.additionalDiscountType,
+    additionalDiscountAmount: amounts.additionalDiscountAmount,
+    customDiscountAmount: amounts.customDiscountAmount,
+    customDiscountPercent: amounts.customDiscountPercent,
+    slabDiscountAmount: amounts.slabDiscountAmount,
     slabDiscountPercent: amounts.slabDiscountPercent,
-    amountBeforeSlab: amounts.amountBeforeSlab,
+    hasSlabDiscount: amounts.hasSlabDiscount,
+    hasCustomDiscount: amounts.hasCustomDiscount,
     priceSource: override ? "summary_override" : "php",
   };
 }
