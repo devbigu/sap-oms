@@ -44,6 +44,23 @@ interface JsonProduct {
   }>;
 }
 
+interface CategoryCardItem {
+  label: string;
+  imageUrl: string;
+}
+
+interface CategoryCard {
+  title: string;
+  items: CategoryCardItem[];
+  link: string;
+}
+
+interface RelatedProductDisplay {
+  name: string;
+  image: string;
+  routeSku: string;
+}
+
 interface HotItemDisplay {
   SKU: string;
   Name: string;
@@ -80,9 +97,14 @@ type ApiResponse = {
   data: Order[];
 };
 
+type CatalogRouteResolver = {
+  findRouteSku: (skuOrName: string) => string | null;
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const getDealerId = (): string => {
+  if (typeof window === "undefined") return "225";
   try {
     return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225";
   } catch {
@@ -96,7 +118,7 @@ async function fetchOrders(id: string): Promise<ApiResponse> {
   return r.json();
 }
 
-function firstImage(item: any): string {
+function firstImage(item: { images?: string[]; Images?: string[] } | null | undefined): string {
   return (item?.images ?? item?.Images ?? []).find(Boolean) ?? "";
 }
 
@@ -108,9 +130,20 @@ function productName(product: JsonProduct): string {
   return String(product.name ?? product.Name ?? "").trim();
 }
 
+function normalizeLookupKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildCatalogLookups(products: JsonProduct[]) {
   const imageMap = new Map<string, string>();
   const nameMap = new Map<string, string>();
+  const routeMap = new Map<string, string>();
   const fallbackProducts: HotItemDisplay[] = [];
 
   for (const product of products) {
@@ -121,6 +154,8 @@ function buildCatalogLookups(products: JsonProduct[]) {
 
     imageMap.set(sku.toLowerCase(), image);
     nameMap.set(sku.toLowerCase(), name);
+    routeMap.set(sku.toLowerCase(), sku);
+    routeMap.set(normalizeLookupKey(name), sku);
     if (image) {
       fallbackProducts.push({
         SKU: sku,
@@ -132,13 +167,44 @@ function buildCatalogLookups(products: JsonProduct[]) {
 
     for (const variant of product.variants ?? []) {
       const variantSku = String(variant.sku ?? variant.SKU ?? "").trim();
+      const variantName = String(variant.name ?? variant.Name ?? name).trim() || name;
       if (!variantSku) continue;
       imageMap.set(variantSku.toLowerCase(), firstImage(variant) || image);
-      nameMap.set(variantSku.toLowerCase(), String(variant.name ?? variant.Name ?? name).trim() || name);
+      nameMap.set(variantSku.toLowerCase(), variantName);
+      routeMap.set(variantSku.toLowerCase(), variantSku);
+      routeMap.set(normalizeLookupKey(variantName), variantSku);
     }
   }
 
-  return { imageMap, nameMap, fallbackProducts };
+  const resolver: CatalogRouteResolver = {
+    findRouteSku(skuOrName: string) {
+      const raw = String(skuOrName ?? "").trim();
+      if (!raw) return null;
+
+      return (
+        routeMap.get(raw.toLowerCase()) ||
+        routeMap.get(normalizeLookupKey(raw)) ||
+        null
+      );
+    },
+  };
+
+  return { imageMap, nameMap, fallbackProducts, resolver };
+}
+
+function buildRelatedProducts(products: typeof bottleProducts, resolver: CatalogRouteResolver): RelatedProductDisplay[] {
+  return products
+    .map((product) => {
+      const routeSku = resolver.findRouteSku(product.name);
+      if (!routeSku) return null;
+
+      return {
+        name: product.name,
+        image: product.image,
+        routeSku,
+      } satisfies RelatedProductDisplay;
+    })
+    .filter((product): product is RelatedProductDisplay => product !== null);
 }
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
@@ -242,16 +308,13 @@ export default function Page() {
   const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
   const [hotItems, setHotItems] = useState<HotItemDisplay[]>([]);
+  const [relatedProducts, setRelatedProducts] = useState<RelatedProductDisplay[]>([]);
   const [hotLoading, setHotLoading] = useState(true);
-  const [dealerId, setDealerId] = useState("225");
+  const [dealerId] = useState(getDealerId);
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({});
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
+  const [catalogResolver, setCatalogResolver] = useState<CatalogRouteResolver | null>(null);
   const year = new Date().getFullYear();
-
-  // Read dealer ID on mount
-  useEffect(() => {
-    setDealerId(getDealerId());
-  }, []);
 
   // Read recently viewed (initial + on update events from Header)
   useEffect(() => {
@@ -272,7 +335,9 @@ export default function Page() {
         .catch(() => ({ success: false, data: { items: [] } })),
     ])
       .then(([catalogRes, hotJson]) => {
-        const { imageMap, nameMap, fallbackProducts } = buildCatalogLookups(catalogRes.data);
+        const { imageMap, nameMap, fallbackProducts, resolver } = buildCatalogLookups(catalogRes.data);
+        setCatalogResolver(resolver);
+        setRelatedProducts(buildRelatedProducts(bottleProducts, resolver));
         const publishedItems = ((hotJson.success ? hotJson.data?.items : []) ?? []) as PublishedHotItem[];
         const adminItems = publishedItems.filter((item) => item.active);
         const hasConfiguredHotItems = hotJson.success && !hotJson.data?.isDefault && publishedItems.length > 0;
@@ -296,7 +361,11 @@ export default function Page() {
         }
         setHotLoading(false);
       })
-      .catch(() => setHotLoading(false));
+      .catch(() => {
+        setCatalogResolver(null);
+        setRelatedProducts([]);
+        setHotLoading(false);
+      });
   }, []);
 
   // Fetch real orders
@@ -314,7 +383,6 @@ export default function Page() {
       .filter(Boolean)
     ));
     if (orderIds.length === 0) {
-      setSummaryOverrides({});
       return;
     }
 
@@ -344,9 +412,10 @@ export default function Page() {
   }, [ordersData?.data, summaryOverrides]);
 
   // Navigate to product detail and also record a recently viewed entry
-  const goToProduct = (sku: string, name: string, image?: string) => {
-    pushRecentlyViewed({ SKU: sku, Name: name, image });
-    router.push(`/Products/${sku}`);
+  const goToProduct = (skuOrName: string, name: string, image?: string) => {
+    const routeSku = catalogResolver?.findRouteSku(skuOrName) ?? skuOrName;
+    pushRecentlyViewed({ SKU: routeSku, Name: name, image });
+    router.push(`/Products/${encodeURIComponent(routeSku)}`);
   };
 
   return (
@@ -428,13 +497,13 @@ export default function Page() {
           action={{ label: "All categories", href: "/Products" }}
         />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-          {CATEGORY_CARDS.map((cat: any) => (
+          {CATEGORY_CARDS.map((cat: CategoryCard) => (
             <Link key={cat.title} href={cat.link}
               className="bg-white rounded-lg shadow-sm border border-gray-100 p-4 flex flex-col hover:shadow-md hover:border-indigo-200 transition-all group"
               style={{ textDecoration: "none" }}>
               <h3 className="text-base font-bold text-slate-800 mb-3 group-hover:text-indigo-700 transition-colors">{cat.title}</h3>
               <div className="grid grid-cols-2 gap-2 flex-1">
-                {cat.items.map((item: { label: string; imageUrl: string }) => (
+                {cat.items.map((item) => (
                   <div key={item.label}>
                     <img src={item.imageUrl} alt={item.label} loading="lazy"
                       className="w-full aspect-square object-cover rounded group-hover:opacity-90 transition-opacity" />
@@ -547,18 +616,18 @@ export default function Page() {
           action={{ label: "Browse all", href: "/Products" }}
         />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          {bottleProducts.map((bottle) => (
-            <a key={bottle.name} href={bottle.link}
-              className="group bg-white rounded-lg border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
+          {relatedProducts.map((product) => (
+            <button key={product.routeSku} onClick={() => goToProduct(product.routeSku, product.name, product.image)}
+              className="group bg-white rounded-lg border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow text-left w-full">
               <div className="bg-gray-50 flex items-center justify-center p-3 aspect-square">
-                <img src={bottle.image} alt={bottle.name}
+                <img src={product.image} alt={product.name}
                   className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300" />
               </div>
               <div className="p-2">
-                <p className="text-xs font-medium text-slate-700 line-clamp-2 leading-tight">{bottle.name}</p>
+                <p className="text-xs font-medium text-slate-700 line-clamp-2 leading-tight">{product.name}</p>
                 <span className="mt-1.5 inline-block text-xs text-slate-500 group-hover:text-slate-900 transition-colors">View →</span>
               </div>
-            </a>
+            </button>
           ))}
         </div>
       </section>
