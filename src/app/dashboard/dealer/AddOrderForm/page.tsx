@@ -51,6 +51,10 @@ type CustomDiscountRequest = {
   id: string;
   dealerId?: string;
   status: "pending" | "approved" | "rejected";
+  orderId?: string;
+  order_id?: string;
+  orderNumber?: string;
+  order_number?: string;
   discountScope?: CustomDiscountScope;
   requestedDiscountPercent: number;
   currentDiscountPercent: number;
@@ -673,43 +677,57 @@ function AddOrderPageInner() {
   const baseDiscountPayload = calculateStackedDiscount(subtotal, {
     allocatedDiscountPercent: dealerDiscount,
     couponDiscountPercent: couponDiscount,
-    approvedCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
   });
 
   const getRowDiscountPercent = (row: ProductRow) => {
-    const globalPercent = baseDiscountPayload.baseDiscountPercent;
+    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.baseDiscountPercent;
     const productRequest = getApprovedProductCustomRequest(row);
     if (productRequest) {
       return Math.min(100, Math.max(globalPercent, Number(productRequest.requestedDiscountPercent) || 0));
     }
     return globalPercent;
   };
+  const hasApprovedCustomCandidate = approvedCustomDiscountPercent !== null || productRows.some((row) => !!getApprovedProductCustomRequest(row));
 
-  // Per-row base-discount amounts (slab is NOT included at row level)
+  // Per-row base-discount amounts (additional slab/custom is handled separately)
   const baseDiscountAmountFromRows = productRows.reduce((acc, row) => (
-    acc + (rowSubtotalPaise(row) / 100) * (getRowDiscountPercent(row) / 100)
+    acc + (rowSubtotalPaise(row) / 100) * (baseDiscountPayload.baseDiscountPercent / 100)
   ), 0);
 
-  // amountBeforeSlab from row-level base discounts
-  const amountBeforeSlabFromRows = roundRupees(Math.max(0, subtotal - baseDiscountAmountFromRows));
+  const postBaseAmountFromRows = roundRupees(Math.max(0, subtotal - baseDiscountAmountFromRows));
+  const customDiscountAmountFromRows = hasApprovedCustomCandidate
+    ? roundRupees(productRows.reduce((acc, row) => {
+      const rowSubtotal = rowSubtotalPaise(row) / 100;
+      const additionalPercent = Math.max(0, getRowDiscountPercent(row) - baseDiscountPayload.baseDiscountPercent);
+      return acc + (rowSubtotal * (additionalPercent / 100));
+    }, 0))
+    : 0;
+  const activeAdditionalDiscountType = hasApprovedCustomCandidate ? "custom" : null;
 
-  // Determine slab from the actual amountBeforeSlab
-  const slabPercentFromRows = amountBeforeSlabFromRows >= 500000 ? 5
-    : amountBeforeSlabFromRows >= 250000 ? 2 : 0;
-  const slabAmountFromRows = roundRupees(amountBeforeSlabFromRows * (slabPercentFromRows / 100));
+  const slabPercentFromRows = activeAdditionalDiscountType === "custom"
+    ? 0
+    : postBaseAmountFromRows >= 500000 ? 5
+      : postBaseAmountFromRows >= 250000 ? 2 : 0;
+  const slabAmountFromRows = roundRupees(postBaseAmountFromRows * (slabPercentFromRows / 100));
+  const additionalDiscountAmountFromRows = activeAdditionalDiscountType === "custom"
+    ? customDiscountAmountFromRows
+    : slabAmountFromRows;
 
   // Final payable after sequential application
-  const finalPayableFromRows = roundRupees(Math.max(0, amountBeforeSlabFromRows - slabAmountFromRows));
-  const totalDiscountAmountFromRows = roundRupees(baseDiscountAmountFromRows + slabAmountFromRows);
+  const finalPayableFromRows = roundRupees(Math.max(0, postBaseAmountFromRows - additionalDiscountAmountFromRows));
+  const totalDiscountAmountFromRows = roundRupees(baseDiscountAmountFromRows + additionalDiscountAmountFromRows);
   const effectiveDiscountPercent = subtotal > 0
     ? Number(payloadAmount((totalDiscountAmountFromRows / subtotal) * 100))
     : 0;
 
   const discountPayload = {
     ...baseDiscountPayload,
-    // Override with row-level computed values
     baseDiscountAmount: Number(payloadAmount(baseDiscountAmountFromRows)),
-    amountBeforeSlab: Number(payloadAmount(amountBeforeSlabFromRows)),
+    postBaseAmount: Number(payloadAmount(postBaseAmountFromRows)),
+    amountBeforeSlab: Number(payloadAmount(postBaseAmountFromRows)),
+    additionalDiscountType: activeAdditionalDiscountType ?? (slabPercentFromRows > 0 ? "slab" : null),
+    additionalDiscountAmount: Number(payloadAmount(additionalDiscountAmountFromRows)),
+    customDiscountAmount: Number(payloadAmount(customDiscountAmountFromRows)),
     slabDiscountPercent: slabPercentFromRows,
     slabDiscountAmount: Number(payloadAmount(slabAmountFromRows)),
     discountPercent: effectiveDiscountPercent,
@@ -723,12 +741,12 @@ function AddOrderPageInner() {
   const discountAmountPaise = toPaise(discountPayload.discountAmount);
   const finalPayablePaise = toPaise(discountPayload.finalPayableAmount);
   const discountStatusMessage = getDiscountStatusMessage(discountPayload.slabDiscountPercent);
-  const hasSlabDiscount = discountPayload.slabDiscountPercent > 0;
+  const hasSlabDiscount = discountPayload.additionalDiscountType === "slab" && discountPayload.slabDiscountPercent > 0;
   const hasAnyDiscount = discountPayload.discountPercent > 0;
   const approvedProductCustomRequests = productRows
     .map((row) => getApprovedProductCustomRequest(row))
     .filter((r): r is CustomDiscountRequest => !!r);
-  const hasApprovedCustomDiscount = approvedCustomDiscountPercent !== null || approvedProductCustomRequests.length > 0;
+  const hasApprovedCustomDiscount = hasApprovedCustomCandidate || approvedProductCustomRequests.length > 0;
   const discountRejectionDraftRequest = activeDraftId
     ? customDiscountRequests.find((r) => (
       r.status === "rejected" &&
@@ -770,14 +788,35 @@ function AddOrderPageInner() {
     return json.data ?? [];
   };
 
+  const linkCustomDiscountRequestsToOrder = async (requests: CustomDiscountRequest[], orderId: string) => {
+    const normalizedOrderId = String(orderId || "").trim();
+    if (!normalizedOrderId) return;
+
+    const orderNumber = `OM/${new Date().getFullYear()}/${normalizedOrderId}`;
+    const uniqueIds = Array.from(new Set(
+      requests.map((request) => String(request.id || "").trim()).filter(Boolean)
+    ));
+
+    await Promise.all(uniqueIds.map((requestId) =>
+      fetch(`/api/custom-discount-requests/${encodeURIComponent(requestId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: normalizedOrderId,
+          orderNumber,
+        }),
+      }).catch(() => {})
+    ));
+  };
+
   const handleRequestCustomDiscount = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product before requesting approval."); return; }
     if (customDiscountScope === "product" && !selectedCustomDiscountProduct) {
       toast("Please select a product for product-level discount approval.");
       return;
     }
-    if (requestedCustomDiscountPercent <= baseDiscountPayload.discountPercent) {
-      toast(`Enter a custom discount above the current ${baseDiscountPayload.discountPercent}%.`);
+    if (requestedCustomDiscountPercent <= baseDiscountPayload.baseDiscountPercent) {
+      toast(`Enter a custom discount above the current ${baseDiscountPayload.baseDiscountPercent}%.`);
       return;
     }
 
@@ -804,11 +843,11 @@ function AddOrderPageInner() {
           dealerEmail: user.Dealer_Email,
           dealerPhone: user.Dealer_Number,
           requestedDiscountPercent: requestedCustomDiscountPercent,
-          currentDiscountPercent: baseDiscountPayload.discountPercent,
+          currentDiscountPercent: baseDiscountPayload.baseDiscountPercent,
           subtotal: Number(payloadAmount(scopedSubtotal)),
-          currentDiscountAmount: Number(payloadAmount(scopedSubtotal * (baseDiscountPayload.discountPercent / 100))),
+          currentDiscountAmount: Number(payloadAmount(scopedSubtotal * (baseDiscountPayload.baseDiscountPercent / 100))),
           requestedDiscountAmount: Number(payloadAmount(requestedCustomDiscountAmount)),
-          currentFinalPayable: Number(payloadAmount(Math.max(0, scopedSubtotal - scopedSubtotal * (baseDiscountPayload.discountPercent / 100)))),
+          currentFinalPayable: Number(payloadAmount(Math.max(0, scopedSubtotal - scopedSubtotal * (baseDiscountPayload.baseDiscountPercent / 100)))),
           requestedFinalPayable: Number(payloadAmount(requestedCustomFinalPayable)),
           discountScope: customDiscountScope,
           targetProduct: selectedCustomDiscountProduct ? {
@@ -820,10 +859,11 @@ function AddOrderPageInner() {
           shipto,
           refno,
           orderNote: orderNote.trim(),
+          orderNumber: expectedOrderNumber || "",
           orderSignature: scopedSignature,
           discountBreakdown: {
             allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
-            slabDiscountPercent: baseDiscountPayload.slabDiscountPercent,
+            slabDiscountPercent: discountPayload.slabDiscountPercent,
             couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
             couponCode: appliedCoupon?.code ?? "",
           },
@@ -844,7 +884,7 @@ function AddOrderPageInner() {
 
   const handleRequestProductDiscount = async (row: ProductRow) => {
     const key = getProductKey(row);
-    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
+    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.baseDiscountPercent;
     const productPercent = perProductDiscountInputs[key] ?? globalPercent;
     if (productPercent <= globalPercent) {
       toast(`Enter a product discount above the current ${globalPercent}%.`);
@@ -882,10 +922,11 @@ function AddOrderPageInner() {
           shipto,
           refno,
           orderNote: orderNote.trim(),
+          orderNumber: expectedOrderNumber || "",
           orderSignature: buildProductSignature(row),
           discountBreakdown: {
             allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
-            slabDiscountPercent: baseDiscountPayload.slabDiscountPercent,
+            slabDiscountPercent: discountPayload.slabDiscountPercent,
             couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
             couponCode: appliedCoupon?.code ?? "",
             globalCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
@@ -1119,17 +1160,18 @@ function AddOrderPageInner() {
   const saveOrderSummaryOverride = async (orderId: string) => {
     if (!orderId || !user?.Dealer_Id) return;
 
-    const approvedDiscountPercent = Number(payloadAmount(Math.max(
-      0,
-      discountPayload.discountPercent -
-      discountPayload.allocatedDiscountPercent -
-      discountPayload.slabDiscountPercent -
-      discountPayload.couponDiscountPercent
-    )));
+    const approvedDiscountPercent = hasApprovedCustomDiscount
+      ? Number(payloadAmount(Math.max(0, approvedCustomDiscountPercent ?? 0)))
+      : 0;
+    const readableReason = discountPayload.additionalDiscountType === "custom"
+      ? `Approved custom discount applied: Rs. ${discountPayload.customDiscountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : discountPayload.additionalDiscountType === "slab" && discountPayload.slabDiscountAmount > 0
+        ? `Flat discount applied: ${discountPayload.slabDiscountPercent}% (Rs. ${discountPayload.slabDiscountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+        : "frontend_discount_override";
     const shouldSaveOverride =
       discountPayload.discountAmount > 0 &&
       (
-        discountPayload.slabDiscountPercent > 0 ||
+        discountPayload.additionalDiscountType !== null ||
         discountPayload.couponDiscountPercent > 0 ||
         approvedDiscountPercent > 0 ||
         hasApprovedCustomDiscount ||
@@ -1155,10 +1197,17 @@ function AddOrderPageInner() {
         order_discount: payloadAmount(discountPayload.finalPayableAmount),
         discountPercent: discountPayload.discountPercent,
         allocatedDiscountPercent: discountPayload.allocatedDiscountPercent,
+        baseDiscountPercent: discountPayload.baseDiscountPercent,
+        baseDiscountAmount: payloadAmount(discountPayload.baseDiscountAmount),
+        postBaseAmount: payloadAmount(discountPayload.postBaseAmount),
+        additionalDiscountType: discountPayload.additionalDiscountType,
+        additionalDiscountAmount: payloadAmount(discountPayload.additionalDiscountAmount),
+        customDiscountAmount: payloadAmount(discountPayload.customDiscountAmount),
         slabDiscountPercent: discountPayload.slabDiscountPercent,
+        slabDiscountAmount: payloadAmount(discountPayload.slabDiscountAmount),
         couponDiscountPercent: discountPayload.couponDiscountPercent,
         approvedDiscountPercent,
-        reason: "slab_or_approved_discount",
+        reason: readableReason,
       }),
     }).catch((err) => {
       console.error("[order-summary-overrides] save failed:", err);
@@ -1207,10 +1256,14 @@ function AddOrderPageInner() {
     fd.append("finalPayableAmount", payloadAmount(discountPayload.finalPayableAmount));
     fd.append("allocatedDiscountPercent", String(discountPayload.allocatedDiscountPercent));
     fd.append("couponDiscountPercent", String(discountPayload.couponDiscountPercent));
-    // Sequential slab discount fields — base and slab sent separately
+    // Normalized discount fields
     fd.append("baseDiscountPercent", String(discountPayload.baseDiscountPercent));
     fd.append("baseDiscountAmount", payloadAmount(discountPayload.baseDiscountAmount));
+    fd.append("postBaseAmount", payloadAmount(discountPayload.postBaseAmount));
     fd.append("amountBeforeSlab", payloadAmount(discountPayload.amountBeforeSlab));
+    fd.append("additionalDiscountType", String(discountPayload.additionalDiscountType ?? ""));
+    fd.append("additionalDiscountAmount", payloadAmount(discountPayload.additionalDiscountAmount));
+    fd.append("customDiscountAmount", payloadAmount(discountPayload.customDiscountAmount));
     fd.append("slabDiscountPercent", String(discountPayload.slabDiscountPercent));
     fd.append("slabDiscountAmount", payloadAmount(discountPayload.slabDiscountAmount));
     if (orderNote.trim()) {
@@ -1253,6 +1306,7 @@ function AddOrderPageInner() {
       await Promise.all([
         saveOrderNoteForHistory(placedOrderId),
         saveOrderSummaryOverride(placedOrderId),
+        linkCustomDiscountRequestsToOrder(customDiscountSources, placedOrderId),
       ]);
       if (placedOrderId) setExpectedOrderNumber(buildExpectedOrderNumber(placedOrderId));
       if (reorderRequest) {
@@ -1557,7 +1611,11 @@ function AddOrderPageInner() {
               <div className={`text-[13.5px] font-semibold rounded-xl px-3 py-2.5 border flex items-center justify-between ${hasAnyDiscount ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-slate-600 bg-slate-50 border-slate-200"
                 }`}>
                 <span>{discountPayload.discountPercent}% effective discount</span>
-                <span className="text-[11px] font-medium">{hasApprovedCustomDiscount ? "custom approved" : `${discountPayload.baseDiscountPercent}% base${hasSlabDiscount ? ` + ${discountPayload.slabDiscountPercent}% slab` : ""}`}</span>
+                <span className="text-[11px] font-medium">
+                  {discountPayload.additionalDiscountType === "custom"
+                    ? "approved custom selected"
+                    : `${discountPayload.baseDiscountPercent}% base${hasSlabDiscount ? ` + ${discountPayload.slabDiscountPercent}% flat` : ""}`}
+                </span>
               </div>
             </div>
           </div>
@@ -1577,7 +1635,7 @@ function AddOrderPageInner() {
               <div>
                 <p className="text-[13px] font-semibold text-gray-900">Discount Breakdown</p>
                 <p className={`text-[12px] mt-0.5 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"}`}>
-                  Base discounts applied first, then slab on remaining amount
+                  Base discount applies first, then either flat discount or approved custom discount
                 </p>
               </div>
             </div>
@@ -1616,29 +1674,39 @@ function AddOrderPageInner() {
               <div className="mt-1 space-y-0.5 text-[9px] text-gray-400">
                 {discountPayload.allocatedDiscountPercent > 0 && <p>Allocated: {discountPayload.allocatedDiscountPercent}%</p>}
                 {discountPayload.couponDiscountPercent > 0 && <p>Coupon: {discountPayload.couponDiscountPercent}% {appliedCoupon?.code ? `(${appliedCoupon.code})` : ""}</p>}
-                {(discountPayload.approvedCustomDiscountPercent ?? 0) > 0 && <p>Custom: {discountPayload.approvedCustomDiscountPercent}%</p>}
+                {(approvedCustomDiscountPercent ?? 0) > 0 && <p>Approved custom target: {approvedCustomDiscountPercent}%</p>}
               </div>
             </div>
 
-            {/* 3. Amount Before Slab */}
+            {/* 3. Post Base Amount */}
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 px-3 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Before Slab</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Post Base Amount</p>
               <p className="mt-1 font-mono text-[13px] font-bold text-indigo-700">
-                {fmt(toPaise(discountPayload.amountBeforeSlab))}
+                {fmt(toPaise(discountPayload.postBaseAmount))}
               </p>
-              <p className="mt-0.5 text-[9px] text-indigo-400">Slab determined from this</p>
+              <p className="mt-0.5 text-[9px] text-indigo-400">
+                {discountPayload.additionalDiscountType === "custom" ? "Custom discount applies from here" : "Flat discount is determined from this"}
+              </p>
             </div>
 
-            {/* 4. Slab Discount */}
-            <div className={`rounded-xl border px-3 py-2 ${hasSlabDiscount ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200 bg-white"}`}>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Slab Discount</p>
-              <p className={`mt-1 font-mono text-[13px] font-semibold ${hasSlabDiscount ? "text-emerald-700" : "text-gray-500"}`}>
-                {discountPayload.slabDiscountPercent}%
+            {/* 4. Additional Discount */}
+            <div className={`rounded-xl border px-3 py-2 ${(discountPayload.additionalDiscountAmount > 0) ? "border-emerald-200 bg-emerald-50/50" : "border-gray-200 bg-white"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "Flat Discount"}
+              </p>
+              <p className={`mt-1 font-mono text-[13px] font-semibold ${(discountPayload.additionalDiscountAmount > 0) ? "text-emerald-700" : "text-gray-500"}`}>
+                {discountPayload.additionalDiscountType === "custom"
+                  ? "Approved"
+                  : `${discountPayload.slabDiscountPercent}%`}
               </p>
               <p className="mt-0.5 text-[10px] text-gray-400 font-mono">
-                {discountPayload.slabDiscountAmount > 0 ? `−${fmt(toPaise(discountPayload.slabDiscountAmount))}` : "—"}
+                {discountPayload.additionalDiscountAmount > 0 ? `−${fmt(toPaise(discountPayload.additionalDiscountAmount))}` : "—"}
               </p>
-              <p className="mt-0.5 text-[10px] text-gray-400">{discountStatusMessage}</p>
+              <p className="mt-0.5 text-[10px] text-gray-400">
+                {discountPayload.additionalDiscountType === "custom"
+                  ? "Flat discount is disabled while custom is active"
+                  : discountStatusMessage}
+              </p>
             </div>
 
             {/* 5. Effective Total Discount */}
@@ -1695,7 +1763,7 @@ function AddOrderPageInner() {
               <div className="grid grid-cols-2 gap-2 text-[11px] min-w-[260px]">
                 <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                   <p className="font-bold uppercase tracking-wider text-gray-400">Current</p>
-                  <p className="mt-1 font-mono text-[13px] font-bold text-gray-900">{baseDiscountPayload.discountPercent}%</p>
+                  <p className="mt-1 font-mono text-[13px] font-bold text-gray-900">{baseDiscountPayload.baseDiscountPercent}%</p>
                 </div>
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
                   <p className="font-bold uppercase tracking-wider text-indigo-500">Requested</p>
@@ -1762,7 +1830,7 @@ function AddOrderPageInner() {
                   <button
                     type="button"
                     onClick={handleRequestCustomDiscount}
-                    disabled={customDiscountSubmitting || requestedCustomDiscountPercent <= baseDiscountPayload.discountPercent}
+                    disabled={customDiscountSubmitting || requestedCustomDiscountPercent <= baseDiscountPayload.baseDiscountPercent}
                     className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-[13px] font-bold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {customDiscountSubmitting ? "Sending..." : "Request Approval"}
@@ -1903,7 +1971,7 @@ function AddOrderPageInner() {
                     const metaKey = rowSelection.variantSku || row.productname || row.variantCode;
                     const meta = variantLookup[metaKey] ?? variantLookup[row.productname];
                     const productKey = getProductKey(row);
-                    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.discountPercent;
+                    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.baseDiscountPercent;
                     const approvedProductReq = getApprovedProductCustomRequest(row);
                     const approvedProductTotal = approvedProductReq ? Math.min(100, Math.max(0, Number(approvedProductReq.requestedDiscountPercent) || 0)) : 0;
                     const productExtraPercent = approvedProductReq ? Math.max(0, approvedProductTotal - globalPercent) : 0;
@@ -2205,8 +2273,10 @@ function AddOrderPageInner() {
                   <p className={`text-[12px] font-semibold mt-2 ${hasAnyDiscount ? "text-emerald-700" : "text-gray-500"
                     }`}>
                     Base: {discountPayload.baseDiscountPercent}%
-                    {hasSlabDiscount ? ` → Slab: ${discountPayload.slabDiscountPercent}%` : ""}
-                    {" · "}{discountStatusMessage}
+                    {discountPayload.additionalDiscountType === "custom"
+                      ? " · Approved custom selected"
+                      : hasSlabDiscount ? ` → Flat: ${discountPayload.slabDiscountPercent}%` : ""}
+                    {" · "}{discountPayload.additionalDiscountType === "custom" ? "Flat discount disabled" : discountStatusMessage}
                   </p>
                 </div>
 
@@ -2224,14 +2294,16 @@ function AddOrderPageInner() {
                       </p>
                     </div>
                     <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Amount Before Slab</p>
-                      <p className="mt-1 font-mono text-[14px] font-bold text-indigo-700">{fmt(toPaise(discountPayload.amountBeforeSlab))}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Post Base Amount</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-indigo-700">{fmt(toPaise(discountPayload.postBaseAmount))}</p>
                     </div>
-                    <div className={`rounded-xl border px-4 py-3 ${hasSlabDiscount ? "border-emerald-200 bg-emerald-50/60 text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>
-                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Slab Discount</p>
+                    <div className={`rounded-xl border px-4 py-3 ${discountPayload.additionalDiscountAmount > 0 ? "border-emerald-200 bg-emerald-50/60 text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">
+                        {discountPayload.additionalDiscountType === "custom" ? "Approved Custom Discount" : "Flat Discount"}
+                      </p>
                       <p className="mt-1 font-mono text-[14px] font-semibold">
-                        {discountPayload.slabDiscountPercent}%
-                        {discountPayload.slabDiscountAmount > 0 ? ` · −${fmt(toPaise(discountPayload.slabDiscountAmount))}` : ""}
+                        {discountPayload.additionalDiscountType === "custom" ? "Approved" : `${discountPayload.slabDiscountPercent}%`}
+                        {discountPayload.additionalDiscountAmount > 0 ? ` · −${fmt(toPaise(discountPayload.additionalDiscountAmount))}` : ""}
                       </p>
                     </div>
                     <div className={`rounded-xl border px-4 py-3 ${hasAnyDiscount ? "border-emerald-200 bg-white text-emerald-700" : "border-gray-200 bg-white text-gray-500"}`}>

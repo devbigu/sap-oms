@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { getReadableAdditionalDiscountText } from "@/lib/orderAmounts";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -13,6 +14,14 @@ function safeAmount(value: unknown) {
 
   if (!Number.isFinite(amount)) return undefined;
   return Math.round((amount + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeAdditionalDiscountType(value: unknown) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (["slab", "flat", "flat/slab"].includes(text)) return "slab" as const;
+  if (["custom", "approved", "approved_custom"].includes(text)) return "custom" as const;
+  return null;
 }
 
 function toDoc(doc: any) {
@@ -75,13 +84,17 @@ export async function POST(req: NextRequest) {
     const netPayableAmount = safeAmount(body.netPayableAmount ?? body.net_payable_amount ?? body.order_net_amount);
     const discountPercent = safeAmount(body.discountPercent ?? body.discount_percent) ?? 0;
     const allocatedDiscountPercent = safeAmount(body.allocatedDiscountPercent ?? body.allocated_discount_percent) ?? 0;
+    const baseDiscountPercent = safeAmount(body.baseDiscountPercent ?? body.base_discount_percent);
+    const baseDiscountAmount = safeAmount(body.baseDiscountAmount ?? body.base_discount_amount);
+    const postBaseAmount = safeAmount(body.postBaseAmount ?? body.post_base_amount ?? body.amountBeforeSlab ?? body.amount_before_slab);
+    const additionalDiscountType = normalizeAdditionalDiscountType(body.additionalDiscountType ?? body.additional_discount_type);
+    const rawAdditionalDiscountAmount = safeAmount(body.additionalDiscountAmount ?? body.additional_discount_amount);
+    const customDiscountAmount = safeAmount(body.customDiscountAmount ?? body.custom_discount_amount ?? body.approvedDiscountAmount ?? body.approved_discount_amount);
+    const customDiscountPercent = safeAmount(body.customDiscountPercent ?? body.custom_discount_percent);
     const slabDiscountPercent = safeAmount(body.slabDiscountPercent ?? body.slab_discount_percent) ?? 0;
+    const slabDiscountAmount = safeAmount(body.slabDiscountAmount ?? body.slab_discount_amount);
     const couponDiscountPercent = safeAmount(body.couponDiscountPercent ?? body.coupon_discount_percent) ?? 0;
-    const explicitApprovedDiscountPercent = safeAmount(body.approvedDiscountPercent ?? body.approved_discount_percent);
-    const approvedDiscountPercent = explicitApprovedDiscountPercent ?? Math.max(
-      0,
-      Math.round((discountPercent - allocatedDiscountPercent - slabDiscountPercent - couponDiscountPercent + Number.EPSILON) * 100) / 100
-    );
+    const approvedDiscountPercent = safeAmount(body.approvedDiscountPercent ?? body.approved_discount_percent);
 
     if (!orderId || !dealerId || grossAmount === undefined || discountAmount === undefined || netPayableAmount === undefined) {
       return NextResponse.json(
@@ -90,10 +103,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const normalizedAdditionalType =
+      additionalDiscountType
+      ?? ((customDiscountAmount ?? 0) > 0 && (slabDiscountAmount ?? 0) <= 0 ? "custom" : null)
+      ?? ((slabDiscountAmount ?? 0) > 0 && (customDiscountAmount ?? 0) <= 0 ? "slab" : null);
+
+    const normalizedBaseDiscountAmount = safeAmount(baseDiscountAmount ?? (postBaseAmount !== undefined ? grossAmount - postBaseAmount : undefined));
+    const normalizedPostBaseAmount = safeAmount(postBaseAmount ?? (normalizedBaseDiscountAmount !== undefined ? grossAmount - normalizedBaseDiscountAmount : undefined));
+    const normalizedSlabDiscountAmount = normalizedAdditionalType === "slab"
+      ? safeAmount(slabDiscountAmount ?? rawAdditionalDiscountAmount ?? (normalizedBaseDiscountAmount !== undefined ? discountAmount - normalizedBaseDiscountAmount : undefined)) ?? 0
+      : 0;
+    const normalizedCustomDiscountAmount = normalizedAdditionalType === "custom"
+      ? safeAmount(customDiscountAmount ?? rawAdditionalDiscountAmount ?? (normalizedBaseDiscountAmount !== undefined ? discountAmount - normalizedBaseDiscountAmount : undefined)) ?? 0
+      : 0;
+    const additionalDiscountAmount = normalizedAdditionalType === "slab"
+      ? normalizedSlabDiscountAmount
+      : normalizedAdditionalType === "custom"
+        ? normalizedCustomDiscountAmount
+        : 0;
+
     const hasOverrideReason =
       slabDiscountPercent > 0 ||
       couponDiscountPercent > 0 ||
-      approvedDiscountPercent > 0 ||
+      approvedDiscountPercent !== undefined ||
+      normalizedAdditionalType !== null ||
       discountPercent > allocatedDiscountPercent;
 
     if (!hasOverrideReason) {
@@ -118,10 +151,26 @@ export async function POST(req: NextRequest) {
       netPayableAmount,
       discountPercent,
       allocatedDiscountPercent,
+      baseDiscountPercent,
+      baseDiscountAmount: normalizedBaseDiscountAmount,
+      postBaseAmount: normalizedPostBaseAmount,
+      post_base_amount: normalizedPostBaseAmount,
+      additionalDiscountType: normalizedAdditionalType,
+      additional_discount_type: normalizedAdditionalType,
+      additionalDiscountAmount,
+      additional_discount_amount: additionalDiscountAmount,
+      customDiscountAmount: normalizedCustomDiscountAmount,
+      customDiscountPercent,
       slabDiscountPercent,
+      slabDiscountAmount: normalizedSlabDiscountAmount,
       couponDiscountPercent,
       approvedDiscountPercent,
-      reason: safeText(body.reason, 200) || "frontend_discount_override",
+      reason: safeText(body.reason, 200) || getReadableAdditionalDiscountText({
+        additionalDiscountType: normalizedAdditionalType,
+        slabDiscountPercent,
+        slabDiscountAmount: normalizedSlabDiscountAmount,
+        customDiscountAmount: normalizedCustomDiscountAmount,
+      }) || "frontend_discount_override",
       source: "frontend_order_summary_override",
       updatedAt: now,
     };

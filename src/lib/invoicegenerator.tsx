@@ -3,7 +3,13 @@ import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
 import moment from "moment";
 import { hasPriorityTag } from "@/lib/orderPriority";
-import { resolveOrderAmounts, resolveOrderDiscountBreakdown, type OrderAmountSource } from "@/lib/orderAmounts";
+import {
+    getOrderDiscountSummaryRows,
+    getReadableAdditionalDiscountText,
+    resolveOrderAmounts,
+    resolveOrderDiscountBreakdown,
+    type OrderAmountSource,
+} from "@/lib/orderAmounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -26,6 +32,15 @@ export interface OrderInvoiceData {
     grossAmount?: string | number;
     discountAmount?: string | number;
     netPayableAmount?: string | number;
+    baseDiscountAmount?: string | number;
+    baseDiscountPercent?: string | number;
+    customDiscountAmount?: string | number;
+    customDiscountPercent?: string | number;
+    approvedDiscountPercent?: string | number;
+    allocatedDiscountPercent?: string | number;
+    slabDiscountAmount?: string | number;
+    slabDiscountPercent?: string | number;
+    amountBeforeSlab?: string | number;
 
 }
 
@@ -169,6 +184,7 @@ export function resolveInvoiceRemark({
     orderRemark,
     itemRemarks,
     reason,
+    discountBreakdown,
 }: {
     orderNote?: unknown;
     note?: unknown;
@@ -176,6 +192,7 @@ export function resolveInvoiceRemark({
     orderRemark?: unknown;
     itemRemarks?: unknown[];
     reason?: unknown;
+    discountBreakdown?: Parameters<typeof getReadableAdditionalDiscountText>[0];
 }): string {
     // 1 & 2: direct order note fields
     const direct = String(orderNote || note || "").trim();
@@ -199,6 +216,10 @@ export function resolveInvoiceRemark({
 
     // 6: reason fallback
     const reasonStr = typeof reason === "string" ? reason.trim() : "";
+    if (reasonStr === "slab_or_approved_discount") {
+        const readable = discountBreakdown ? getReadableAdditionalDiscountText(discountBreakdown) : null;
+        if (readable) return readable;
+    }
     if (reasonStr) return reasonStr;
 
     // 7: nothing found
@@ -386,15 +407,6 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         [item.remark, item.remarks].filter(Boolean)
     );
 
-    const invoiceRemark = resolveInvoiceRemark({
-        orderNote: (displayOrder as any).order_note,
-        note: (displayOrder as any).note,
-        savedNote,
-        orderRemark: (displayOrder as any).remark ?? (displayOrder as any).remarks,
-        itemRemarks: itemRemarkStrings,
-        reason: displayOrder.reason,
-    });
-
     const doc = new jsPDF("p", "mm", "a4");
     const PW = doc.internal.pageSize.getWidth();
     const ML = 14;
@@ -405,7 +417,26 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const gross = amounts.gross;
     const discount = amounts.discountAmount;
     const net = amounts.netPayable;
-    const discountBreakdown = resolveOrderDiscountBreakdown(displayOrder as OrderAmountSource);
+    const explicitItemDiscountTotal = orderItems.length > 0 && orderItems.every((item) => {
+        const amount = Number((item as any).discountAmount ?? item.orderdata_discount);
+        return Number.isFinite(amount) && amount >= 0;
+    })
+        ? orderItems.reduce((sum, item) => sum + Number((item as any).discountAmount ?? item.orderdata_discount ?? 0), 0)
+        : undefined;
+    const discountBreakdown = resolveOrderDiscountBreakdown(
+        displayOrder as OrderAmountSource,
+        undefined,
+        explicitItemDiscountTotal !== undefined ? { itemDiscountTotal: explicitItemDiscountTotal } : undefined
+    );
+    const invoiceRemark = resolveInvoiceRemark({
+        orderNote: (displayOrder as any).order_note,
+        note: (displayOrder as any).note,
+        savedNote,
+        orderRemark: (displayOrder as any).remark ?? (displayOrder as any).remarks,
+        itemRemarks: itemRemarkStrings,
+        reason: displayOrder.reason,
+        discountBreakdown,
+    });
     const invNo = invoiceNumber(displayOrder.order_id);
 
     // Shared inner padding used consistently everywhere
@@ -750,17 +781,11 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     // Summary
     const sx = ML + LEFT_W;
     const ROW_H = 6;
-    const sumItems = [
-        { label: "Gross Amount", value: fmt(gross), bold: false },
-        { label: "Base/Custom Discount", value: fmt(discountBreakdown.baseDiscountAmount), bold: false },
-        ...(discountBreakdown.hasSlabDiscount ? [{
-            label: `Slab Discount${discountBreakdown.slabDiscountPercent ? ` (${discountBreakdown.slabDiscountPercent}%)` : ""}`,
-            value: fmt(discountBreakdown.slabDiscountAmount),
-            bold: false,
-        }] : []),
-        { label: "Total Discount", value: fmt(discount), bold: false },
-        { label: "Net Amount", value: fmt(net), bold: true },
-    ];
+    const sumItems = getOrderDiscountSummaryRows(discountBreakdown, { net: "Net Amount" }).map((row) => ({
+        label: row.label,
+        value: fmt(row.amount),
+        bold: row.key === "net",
+    }));
     doc.rect(sx, y, SUM_W, TOTAL_L_H);
     doc.setFont("Helvetica", "bold"); doc.setFontSize(8.5);
     doc.text("Summary", sx + PAD, y + 6);

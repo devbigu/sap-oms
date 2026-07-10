@@ -5,6 +5,11 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import axios from 'axios'
 import { Download, Search, Package } from 'lucide-react'
 import { hasPriorityTag } from '@/lib/orderPriority'
+import {
+  buildCustomDiscountProgressMap,
+  getCustomDiscountProgressKeyForOrder,
+  type CustomDiscountProgress,
+} from '@/lib/customDiscountProgress'
 
 type OrderItem = {
   orderdata_id: string
@@ -35,7 +40,18 @@ type OrderResponse = {
 }
 
 type UserData = {
-  Dealer_Id: string
+  Dealer_Id?: string
+  staff_id?: string
+}
+
+type CustomDiscountRequest = {
+  id: string
+  status?: string | null
+  orderId?: string | null
+  order_id?: string | null
+  orderNumber?: string | null
+  order_number?: string | null
+  lastReorderedOrderId?: string | null
 }
 
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
@@ -53,6 +69,16 @@ function statusBadge(status: string) {
   }
 }
 
+function customDiscountBadge(progress: CustomDiscountProgress) {
+  if (progress === "completely") {
+    return { bg: "bg-emerald-50", text: "text-emerald-700", label: "Completely" }
+  }
+  if (progress === "partially") {
+    return { bg: "bg-amber-50", text: "text-amber-700", label: "Partially" }
+  }
+  return null
+}
+
 export default function DispatchStatusPage() {
   const [user, setUser] = useState<UserData | null>(null)
   const [page, setPage] = useState(1)
@@ -63,7 +89,7 @@ export default function DispatchStatusPage() {
 
   // Load user from localStorage on client only
   useEffect(() => {
-    const stored = localStorage.getItem("UserData")
+    const stored = localStorage.getItem("staffData") || localStorage.getItem("UserData")
     if (stored) setUser(JSON.parse(stored))
   }, [])
 
@@ -80,7 +106,25 @@ export default function DispatchStatusPage() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const { data: customDiscountRequests = [] } = useQuery<CustomDiscountRequest[]>({
+    queryKey: ['dispatchstatus-custom-discount', user?.staff_id, user?.Dealer_Id],
+    queryFn: async () => {
+      const query = user?.staff_id
+        ? `staff_id=${encodeURIComponent(user.staff_id)}`
+        : `dealer_id=${encodeURIComponent(user?.Dealer_Id || "")}`
+      const res = await fetch(`/api/custom-discount-requests?${query}&limit=500`, {
+        cache: "no-store",
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message ?? "Failed to load custom discount requests")
+      return Array.isArray(json.data) ? json.data : []
+    },
+    enabled: !!(user?.staff_id || user?.Dealer_Id),
+    staleTime: 60 * 1000,
+  })
+
   const data: OrderItem[] = response?.data || []
+  const customDiscountProgressMap = buildCustomDiscountProgressMap(customDiscountRequests)
   const total = response?.count ?? 0
   const totalPages =
     response?.last_page ||
@@ -134,7 +178,7 @@ export default function DispatchStatusPage() {
     if (!data.length) return
     const headers = [
       "S.No.", "Order ID", "Cat. No.", "Description", "Quantity",
-      "Priority", "Price", "Discount", "After Discount", "Total Price", "Remark", "Status", "Date/Time"
+      "Priority", "Price", "Discount", "After Discount", "Total Price", "Remark", "Status", "Custom Discount Status", "Date/Time"
     ]
     const rows = data.map((o, i) => [
       (page - 1) * ITEMS_PER_PAGE + i + 1,
@@ -149,6 +193,7 @@ export default function DispatchStatusPage() {
       o.orderdata_totalprice,
       o.remark,
       statusBadge(o.orderdata_status).label,
+      customDiscountBadge(customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(o.orderdata_orderid)]?.customDiscountStatus ?? null)?.label ?? "",
       o.orderdata_datetime,
     ])
     const csv = [headers, ...rows].map(r => r.join(",")).join("\n")
@@ -221,6 +266,7 @@ export default function DispatchStatusPage() {
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Total</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Remark</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Status</th>
+                  <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Custom Discount Status</th>
                   <th className="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Date/Time</th>
                 </tr>
               </thead>
@@ -229,7 +275,7 @@ export default function DispatchStatusPage() {
                 {/* Shimmer */}
                 {isLoading && Array.from({ length: ITEMS_PER_PAGE }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 13 }).map((_, j) => (
+                    {Array.from({ length: 14 }).map((_, j) => (
                       <td key={j} className="px-4 py-4">
                         <div className={`${SHIMMER} h-4 w-full`} />
                       </td>
@@ -240,7 +286,7 @@ export default function DispatchStatusPage() {
                 {/* Empty */}
                 {!isLoading && data.length === 0 && (
                   <tr>
-                    <td colSpan={13} className="px-6 py-16 text-center">
+                    <td colSpan={14} className="px-6 py-16 text-center">
                       <div className="flex flex-col items-center gap-2 text-gray-400">
                         <Package className="w-8 h-8" />
                         <span className="text-sm">No order items found</span>
@@ -253,6 +299,9 @@ export default function DispatchStatusPage() {
                 {!isLoading && data.map((item, i) => {
                   const badge = statusBadge(item.orderdata_status)
                   const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks)
+                  const customBadge = customDiscountBadge(
+                    customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(item.orderdata_orderid)]?.customDiscountStatus ?? null
+                  )
                   return (
                     <tr key={item.orderdata_id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-4 text-gray-400 text-xs">{startIndex + i}</td>
@@ -313,6 +362,16 @@ export default function DispatchStatusPage() {
                         <span className={`${badge.bg} ${badge.text} text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap`}>
                           {badge.label}
                         </span>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        {customBadge ? (
+                          <span className={`${customBadge.bg} ${customBadge.text} text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap`}>
+                            {customBadge.label}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
                       </td>
 
                       <td className="px-4 py-4 text-gray-400 text-xs whitespace-nowrap">

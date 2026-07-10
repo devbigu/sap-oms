@@ -4,6 +4,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
+import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from '@/lib/orderAmounts'
+import {
+  buildCustomDiscountProgressMap,
+  getCustomDiscountProgressKeyForOrder,
+  type CustomDiscountProgress,
+} from '@/lib/customDiscountProgress'
 
 type Role = 'admin' | 'dealer' | 'staff'
 type UserSession = { role: Role; id: string; name: string; roletype?: string; viewRoute: string }
@@ -26,6 +32,16 @@ type OrderSummaryOverride = {
   order_discount?: number | string
   order_discount_amount?: number | string
   order_net_amount?: number | string
+}
+
+type CustomDiscountRequest = {
+  id: string
+  status?: string | null
+  orderId?: string | null
+  order_id?: string | null
+  orderNumber?: string | null
+  order_number?: string | null
+  lastReorderedOrderId?: string | null
 }
 
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
@@ -123,29 +139,15 @@ function mtBadge(s: string) {
   if (value === 'Pending') return { value, cls: 'badge-pending', dot: '#f59e0b', label: 'Pending' }
   return { value, cls: 'badge-noaction', dot: '#94a3b8', label: 'No Action Taken' }
 }
-function moneyValue(value: unknown): number | null {
-  if (value === null || value === undefined) return null
-  const text = String(value).replace(/,/g, '').trim()
-  if (!text) return null
-  const amount = Number(text)
-  return Number.isFinite(amount) ? amount : null
-}
-function getOrderAmounts(order: OrderData, override?: OrderSummaryOverride) {
-  const row = order as any
-  const gross = moneyValue(override?.grossAmount ?? override?.gross_amount ?? override?.order_amount ?? order.order_amount) ?? 0
-  const net = moneyValue(
-    override?.netPayableAmount ??
-    override?.net_payable_amount ??
-    override?.order_net_amount ??
-    override?.order_discount ??
-    order.order_discount
-  ) ?? gross
-  const discount = moneyValue(
-    override?.discountAmount ??
-    override?.discount_amount ??
-    override?.order_discount_amount
-  ) ?? Math.max(0, gross - net)
-  return { gross, discount, net }
+
+function customDiscountBadge(progress: CustomDiscountProgress) {
+  if (progress === 'completely') {
+    return { cls: 'badge-approved', dot: '#10b981', label: 'Completely' }
+  }
+  if (progress === 'partially') {
+    return { cls: 'badge-pending', dot: '#f59e0b', label: 'Partially' }
+  }
+  return null
 }
 function highlight(text: string, query: string) {
   if (!query || !text) return text
@@ -427,8 +429,25 @@ export default function OrdersPage() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const { data: customDiscountRequests = [] } = useQuery<CustomDiscountRequest[]>({
+    queryKey: ['custom-discount-requests', session?.role, session?.id],
+    queryFn: async () => {
+      if (!session || session.role === 'dealer') return []
+      const res = await fetch(`/api/custom-discount-requests?limit=500`, {
+        cache: 'no-store',
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.message ?? 'Failed to load custom discount requests')
+      return Array.isArray(json.data) ? json.data : []
+    },
+    enabled: !!session && session.role !== 'dealer',
+    staleTime: 60 * 1000,
+  })
+
   const allData: OrderData[] = response?.data || []
   const allOrderIdsKey = allData.map(o => o.order_id).filter(Boolean).join(',')
+  const customDiscountProgressMap = buildCustomDiscountProgressMap(customDiscountRequests)
+  const showCustomDiscountCol = !!session && session.role !== 'dealer'
 
   useEffect(() => {
     if (!allOrderIdsKey) { setSummaryOverrides({}); return }
@@ -446,13 +465,13 @@ export default function OrdersPage() {
   }, [allOrderIdsKey])
 
   const filteredAll = allData.filter(o => {
-    const amounts = getOrderAmounts(o, summaryOverrides[o.order_id])
+    const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id])
     if (orderIdInput.trim() && !o.order_id.startsWith(orderIdInput.trim())) return false
     if (dealerInput.trim()  && !(o.Dealer_Name || '').toLowerCase().includes(dealerInput.trim().toLowerCase())) return false
     if (statusSearch !== '' && o.accept_order !== statusSearch) return false
     if (mtFilter     !== '' && mtStatusValue(o.mtstatus) !== mtFilter) return false
-    if (amountMin    !== '' && amounts.gross < Number(amountMin)) return false
-    if (amountMax    !== '' && amounts.gross > Number(amountMax)) return false
+    if (amountMin    !== '' && amounts.grossAmount < Number(amountMin)) return false
+    if (amountMax    !== '' && amounts.grossAmount > Number(amountMax)) return false
     if (dateFrom !== '') { const d = (o.orderDate || o.order_date || '').slice(0, 10); if (d < dateFrom) return false }
     if (dateTo   !== '') { const d = (o.orderDate || o.order_date || '').slice(0, 10); if (d > dateTo)   return false }
     return true
@@ -476,19 +495,29 @@ export default function OrdersPage() {
 
   const exportCSV = () => {
     const rows = (hasClientFilters ? filteredAll : allData).map((o, i) => {
-      const amounts = getOrderAmounts(o, summaryOverrides[o.order_id])
+      const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id])
+      const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(o.order_id)]
       const base: Record<string, string | number> = {
         'S.No.':        i + 1,
         'Order No':     `OM/${YEAR}/${o.order_id}`,
         'Date':         (o.orderDate || o.order_date || '').slice(0, 10),
         'Due Date':     o.outstandingDate || '',
-        'Amount (₹)':   amounts.gross,
-        'Discount (₹)': amounts.discount,
-        'Net (₹)':      amounts.net,
+        'Amount (₹)':   amounts.grossAmount,
+        'Discount (₹)': amounts.discountAmount,
+        'Net (₹)':      amounts.netPayableAmount,
         'Qty':          o.orderdata_item_quantity || '',
         'Confirmation': o.accept_order === '1' ? 'Accepted' : 'Awaiting',
         'MT Status':    mtBadge(o.mtstatus).label,
       }
+      if (showCustomDiscountCol) {
+        base['Custom Discount Status'] = customDiscountSummary?.customDiscountStatus === 'completely'
+          ? 'Completely'
+          : customDiscountSummary?.customDiscountStatus === 'partially'
+            ? 'Partially'
+            : '—'
+      }
+      const additional = formatAdditionalDiscountBadge(amounts)
+      if (additional) base['Additional Discount'] = additional
       if (cfg?.showDealerCol) base['Dealer'] = o.Dealer_Name || ''
       return base
     })
@@ -803,6 +832,7 @@ export default function OrdersPage() {
                         </select>
                       </div>
                     </th>
+                    {showCustomDiscountCol && <th>Custom Discount Status</th>}
                     {cfg.showActions && <th>Actions</th>}
                   </tr>
                 </thead>
@@ -810,7 +840,7 @@ export default function OrdersPage() {
                 <tbody>
                   {isLoading && Array.from({ length: ITEMS_PER_PAGE }).map((_, i) => (
                     <tr key={i}>
-                      {Array.from({ length: cfg.showDealerCol ? 12 : 11 }).map((_, j) => (
+                      {Array.from({ length: cfg.showDealerCol ? (showCustomDiscountCol ? 13 : 12) : (showCustomDiscountCol ? 12 : 11) }).map((_, j) => (
                         <td key={j}><div className="shimmer" style={{ width: j === 2 ? 120 : 70 }} /></td>
                       ))}
                     </tr>
@@ -818,7 +848,7 @@ export default function OrdersPage() {
 
                   {!isLoading && data.length === 0 && (
                     <tr className="empty-row">
-                      <td colSpan={cfg.showDealerCol ? 12 : 11}>
+                      <td colSpan={cfg.showDealerCol ? (showCustomDiscountCol ? 13 : 12) : (showCustomDiscountCol ? 12 : 11)}>
                         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.5" style={{ margin: '0 auto 10px', display: 'block' }}>
                           <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2z" />
                         </svg>
@@ -834,7 +864,10 @@ export default function OrdersPage() {
                     const showAccept = cfg.canAccept(session, order)
                     const hlId       = orderIdInput ? highlight(order.order_id ?? '', orderIdInput) : (order.order_id ?? '')
                     const hlDealer   = dealerInput  ? highlight(order.Dealer_Name || '—', dealerInput) : (order.Dealer_Name || '—')
-                    const amounts    = getOrderAmounts(order, summaryOverrides[order.order_id])
+                    const amounts    = withDisplayOrderAmounts(order, summaryOverrides[order.order_id])
+                    const discountBadge = formatAdditionalDiscountBadge(amounts)
+                    const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(order.order_id)]
+                    const customBadge = customDiscountBadge(customDiscountSummary?.customDiscountStatus ?? null)
 
                     return (
                       <tr key={order.order_id ?? i}>
@@ -854,9 +887,12 @@ export default function OrdersPage() {
                         <td className="mono-sm">{(order.orderDate || order.order_date || '—').slice(0, 10)}</td>
                         <td className="mono-sm">{order.outstandingDate || '—'}</td>
 
-                        <td><span className="amount-pill">₹{amounts.gross.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
-                        <td className="mono-sm">₹{amounts.discount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                        <td className="mono-sm">₹{amounts.net.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                        <td><span className="amount-pill">₹{amounts.grossAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
+                        <td className="mono-sm">
+                          ₹{amounts.discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          {discountBadge && <div className="qty-info" style={{ color: '#4f46e5' }}>{discountBadge}</div>}
+                        </td>
+                        <td className="mono-sm">₹{amounts.netPayableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
 
                         <td style={{ textAlign: 'center', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: '#374151' }}>
                           {order.orderdata_item_quantity || '—'}
@@ -877,6 +913,19 @@ export default function OrdersPage() {
                           <div className="qty-info">Total: {order.orderdata_item_quantity} · Dispatch: {order.readyquantity}</div>
                           {order.reason && <div className="reason-tag">⚠ {order.reason}</div>}
                         </td>
+
+                        {showCustomDiscountCol && (
+                          <td>
+                            {customBadge ? (
+                              <span className={`badge ${customBadge.cls}`}>
+                                <span className="badge-dot" style={{ background: customBadge.dot }} />
+                                {customBadge.label}
+                              </span>
+                            ) : (
+                              <span className="mono-sm">—</span>
+                            )}
+                          </td>
+                        )}
 
                         {cfg.showActions && (
                           <td>
