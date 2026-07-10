@@ -10,7 +10,7 @@ import Link from 'next/link'
 import { useCartStore } from "@/Store/store"
 import { useRouter } from 'next/navigation'
 import { buildCatalogueSearchText } from "@/lib/catalogue"
-import { SIDEBAR_CATEGORIES } from "@/lib/categories"
+import { SIDEBAR_CATEGORIES, matchesCategory } from "@/lib/categories"
 
 // ─────────────────────────────────────────────────────────────
 // TYPES  (matches nested_omsons_products.json schema)
@@ -43,6 +43,11 @@ type HeaderRole = "admin" | "dealer" | "staff" | "accountant" | "unknown"
 type ProductSuggestion = Product & {
   _matchedSku?: string
   _matchedName?: string
+}
+
+type SearchRankResult = {
+  product: ProductSuggestion
+  score: number
 }
 
 const headerCategories = Object.keys(SIDEBAR_CATEGORIES).sort((a, b) =>
@@ -149,19 +154,24 @@ function productMatchesCategory(
 ): boolean {
   if (selectedCategory === "all") return true
 
-  const target = normalizeCategory(selectedCategory)
-
   const productCategories = [
     product.category,
     ...(product.categories ?? []),
-  ]
-    .map(normalizeCategory)
-    .filter(Boolean)
+  ].filter(Boolean) as string[]
 
-  return productCategories.some((category) =>
+  if (matchesCategory(productCategories, selectedCategory)) {
+    return true
+  }
+
+  const target = normalizeCategory(selectedCategory)
+  const normalizedProductCategories = productCategories.map(normalizeCategory)
+
+  return normalizedProductCategories.some((category) =>
     category === target ||
     category.startsWith(`${target} >`) ||
-    category.startsWith(`${target}/`)
+    category.startsWith(`${target}/`) ||
+    target.startsWith(`${category} >`) ||
+    target.startsWith(`${category}/`)
   )
 }
 
@@ -201,6 +211,36 @@ function findMatchingVariant(product: Product, q: string): Variant | undefined {
     variants.find(v => variantMatchLevel(v, q) === 2) ||
     variants.find(v => variantMatchLevel(v, q) === 1)
   )
+}
+
+function rankSearchResults(products: Product[], searchText: string, category: string): SearchRankResult[] {
+  const q = searchText.trim().toLowerCase()
+  if (!q) return []
+
+  const pool = category === "all"
+    ? products
+    : products.filter((product) => productMatchesCategory(product, category))
+
+  return pool
+    .map(p => {
+      const matchedVariant = findMatchingVariant(p, q)
+      return {
+        product: {
+          ...p,
+          _matchedSku: matchedVariant?.sku || matchedVariant?.id,
+          _matchedName: matchedVariant?.name,
+        },
+        score: scoreProduct(p, q),
+      }
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+}
+
+function buildSuggestions(products: Product[], searchText: string, category: string): ProductSuggestion[] {
+  return rankSearchResults(products, searchText, category)
+    .slice(0, 8)
+    .map(({ product }) => product)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -261,10 +301,6 @@ const Header = () => {
   const { city, pincode } = useLocationFromStorage()
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const getSearchPool = (products: Product[], category: string) =>
-    category === "all"
-      ? products
-      : products.filter((product) => productMatchesCategory(product, category))
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -305,32 +341,13 @@ const Header = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
     debounceRef.current = setTimeout(() => {
-      const q = query.trim().toLowerCase()
-      if (!q) {
+      const matched = buildSuggestions(allProducts, query, selectedCategory)
+      if (!query.trim()) {
         setSuggestions([])
         setShowDropdown(false)
         setActiveIndex(-1)
         return
       }
-
-      const pool = getSearchPool(allProducts, selectedCategory)
-
-      const matched = pool
-        .map(p => {
-          const matchedVariant = findMatchingVariant(p, q)
-          return {
-            product: {
-              ...p,
-              _matchedSku: matchedVariant?.sku || matchedVariant?.id,
-              _matchedName: matchedVariant?.name,
-            },
-            score: scoreProduct(p, q),
-          }
-        })
-        .filter(({ score }) => score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 8)
-        .map(({ product }) => product)
 
       setSuggestions(matched)
       setShowDropdown(matched.length > 0)
@@ -365,7 +382,11 @@ const Header = () => {
       setActiveIndex(i => Math.max(i - 1, -1))
     } else if (e.key === "Enter") {
       e.preventDefault()
-      activeIndex >= 0 ? goToProduct(suggestions[activeIndex]) : commitSearch()
+      if (activeIndex >= 0) {
+        goToProduct(suggestions[activeIndex])
+      } else {
+        commitSearch()
+      }
     } else if (e.key === "Escape") {
       setShowDropdown(false); setActiveIndex(-1)
     }
@@ -382,23 +403,7 @@ const Header = () => {
   }
 
   const findBestSearchTarget = (q: string): ProductSuggestion | null => {
-    const lowerQ = q.toLowerCase()
-    const pool = getSearchPool(allProducts, selectedCategory)
-
-    const [best] = pool
-      .map(p => {
-        const matchedVariant = findMatchingVariant(p, lowerQ)
-        return {
-          product: {
-            ...p,
-            _matchedSku: matchedVariant?.sku || matchedVariant?.id,
-            _matchedName: matchedVariant?.name,
-          },
-          score: scoreProduct(p, lowerQ),
-        }
-      })
-      .filter(({ score }) => score > 0)
-      .sort((a, b) => b.score - a.score)
+    const [best] = rankSearchResults(allProducts, q, selectedCategory)
 
     return best?.product ?? null
   }
@@ -435,7 +440,12 @@ const Header = () => {
     setActiveIndex(-1)
 
     if (query.trim()) {
-      setShowDropdown(true)
+      const matched = buildSuggestions(allProducts, query, value)
+      setSuggestions(matched)
+      setShowDropdown(matched.length > 0)
+    } else {
+      setSuggestions([])
+      setShowDropdown(false)
     }
   }
 

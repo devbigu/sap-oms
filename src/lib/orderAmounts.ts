@@ -1,4 +1,4 @@
-export type OrderAmountSource = Record<string, any> & {
+export type OrderAmountSource = Record<string, unknown> & {
   order_amount?: string | number;
   order_discount?: string | number;
   order_discount_amount?: string | number;
@@ -7,12 +7,31 @@ export type OrderAmountSource = Record<string, any> & {
   discountAmount?: string | number;
   netPayableAmount?: string | number;
   total?: string | number;
+  baseDiscountAmount?: string | number;
+  base_discount_amount?: string | number;
+  baseDiscountPercent?: string | number;
+  base_discount_percent?: string | number;
+  amountBeforeSlab?: string | number;
+  amount_before_slab?: string | number;
+  slabDiscountAmount?: string | number;
+  slab_discount_amount?: string | number;
+  slabDiscountPercent?: string | number;
+  slab_discount_percent?: string | number;
 };
 
 export type ResolvedOrderAmounts = {
   gross: number;
   discountAmount: number;
   netPayable: number;
+};
+
+export type ResolvedOrderDiscountBreakdown = ResolvedOrderAmounts & {
+  baseDiscountAmount: number;
+  slabDiscountAmount: number;
+  hasSlabDiscount: boolean;
+  baseDiscountPercent?: number;
+  slabDiscountPercent?: number;
+  amountBeforeSlab?: number;
 };
 
 export function toMoneyNumber(value: unknown): number | undefined {
@@ -79,6 +98,63 @@ export function resolveOrderAmounts(
   };
 }
 
+export function resolveOrderDiscountBreakdown(
+  order: OrderAmountSource,
+  override?: OrderAmountSource
+): ResolvedOrderDiscountBreakdown {
+  const amounts = resolveOrderAmounts(order, override);
+
+  const baseDiscountAmount = firstMoney(
+    override?.baseDiscountAmount,
+    override?.base_discount_amount,
+    order.baseDiscountAmount,
+    order.base_discount_amount
+  );
+
+  const slabDiscountAmount = firstMoney(
+    override?.slabDiscountAmount,
+    override?.slab_discount_amount,
+    order.slabDiscountAmount,
+    order.slab_discount_amount
+  ) ?? 0;
+
+  const baseDiscountPercent = firstMoney(
+    override?.baseDiscountPercent,
+    override?.base_discount_percent,
+    order.baseDiscountPercent,
+    order.base_discount_percent
+  );
+
+  const slabDiscountPercent = firstMoney(
+    override?.slabDiscountPercent,
+    override?.slab_discount_percent,
+    order.slabDiscountPercent,
+    order.slab_discount_percent
+  );
+
+  const amountBeforeSlab = firstMoney(
+    override?.amountBeforeSlab,
+    override?.amount_before_slab,
+    order.amountBeforeSlab,
+    order.amount_before_slab
+  );
+
+  const resolvedBaseDiscountAmount = baseDiscountAmount
+    ?? (slabDiscountAmount > 0
+      ? Math.max(0, amounts.discountAmount - slabDiscountAmount)
+      : amounts.discountAmount);
+
+  return {
+    ...amounts,
+    baseDiscountAmount: resolvedBaseDiscountAmount,
+    slabDiscountAmount,
+    hasSlabDiscount: slabDiscountAmount > 0,
+    baseDiscountPercent,
+    slabDiscountPercent,
+    amountBeforeSlab: amountBeforeSlab ?? (slabDiscountAmount > 0 ? Math.max(0, amounts.gross - resolvedBaseDiscountAmount) : undefined),
+  };
+}
+
 export function withDisplayOrderAmounts<T extends OrderAmountSource>(
   order: T,
   override?: OrderAmountSource
@@ -90,9 +166,15 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
   grossAmount: number;
   discountAmount: number;
   netPayableAmount: number;
+  baseDiscountAmount: number;
+  slabDiscountAmount: number;
+  hasSlabDiscount: boolean;
+  baseDiscountPercent?: number;
+  slabDiscountPercent?: number;
+  amountBeforeSlab?: number;
   priceSource: "summary_override" | "php";
 } {
-  const amounts = resolveOrderAmounts(order, override);
+  const amounts = resolveOrderDiscountBreakdown(order, override);
 
   return {
     ...order,
@@ -103,6 +185,12 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
     grossAmount: amounts.gross,
     discountAmount: amounts.discountAmount,
     netPayableAmount: amounts.netPayable,
+    baseDiscountAmount: amounts.baseDiscountAmount,
+    slabDiscountAmount: amounts.slabDiscountAmount,
+    hasSlabDiscount: amounts.hasSlabDiscount,
+    baseDiscountPercent: amounts.baseDiscountPercent,
+    slabDiscountPercent: amounts.slabDiscountPercent,
+    amountBeforeSlab: amounts.amountBeforeSlab,
     priceSource: override ? "summary_override" : "php",
   };
 }

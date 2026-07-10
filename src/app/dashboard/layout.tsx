@@ -138,8 +138,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
-
         .dl-topbar {
           position: sticky;
           top: 0;
@@ -167,7 +165,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         .dl-sub   { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 1px; }
       `}</style>
 
-      <div style={{ minHeight: "100vh", background: "#f0f2f5", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <div style={{ minHeight: "100vh", background: "#f0f2f5", fontFamily: "Arial, Helvetica, sans-serif" }}>
 
         <Sidebar open={open} onClose={() => setOpen(false)} />
 

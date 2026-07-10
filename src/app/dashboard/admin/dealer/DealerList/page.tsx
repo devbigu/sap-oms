@@ -1,10 +1,18 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
+import {
+  dealerStatusBadge,
+  fetchDealerStatusOverrides,
+  normalizeDealerStatus,
+  saveDealerStatus,
+  type DealerStatus,
+  type DealerStatusDocument,
+} from "@/lib/dealerStatus"
 
 type Dealer = {
   Dealer_Id: string
@@ -45,9 +53,20 @@ const getDealerViewRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)
 const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
 
 function statusBadge(s: string) {
-  return s === "1"
-    ? { bg: "bg-emerald-50", text: "text-emerald-700", label: "Active" }
-    : { bg: "bg-red-50",     text: "text-red-600",     label: "Inactive" }
+  return dealerStatusBadge(normalizeDealerStatus(s))
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url)
+  const text = await res.text()
+  const preview = text.replace(/\s+/g, " ").trim().slice(0, 180)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (/^\s*</.test(text)) throw new Error("Expected JSON but received HTML")
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error(preview ? "Invalid JSON response" : "Empty response")
+  }
 }
 
 function getRole(): AppRole {
@@ -96,14 +115,32 @@ export default function DealerListPage() {
   const { data: response, isLoading, isError, refetch } = useQuery<DealerResponse>({
     queryKey: ['dealers', page, search],
     queryFn: async () => {
-      const res = await fetch(`${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`)
-      return res.json()
+      return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`)
     },
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
-  const data: Dealer[] = response?.data || []
+  const {
+    data: statusResponse,
+    isError: statusLoadError,
+    refetch: refetchStatuses,
+  } = useQuery<DealerStatusDocument[]>({
+    queryKey: ["dealer-statuses"],
+    queryFn: fetchDealerStatusOverrides,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const statusMap = useMemo(() => new Map(
+    (statusResponse ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
+  ), [statusResponse])
+
+  const data: Dealer[] = useMemo(() => {
+    return (response?.data || []).map((dealer) => ({
+      ...dealer,
+      status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
+    }))
+  }, [response?.data, statusMap])
 
   const total =
     typeof response?.total === "number"
@@ -120,8 +157,7 @@ export default function DealerListPage() {
     queryClient.prefetchQuery({
       queryKey: ['dealers', page + 1, search],
       queryFn: async () => {
-        const res = await fetch(`${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`)
-        return res.json()
+        return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`)
       },
     })
   }, [page, search, queryClient])
@@ -149,34 +185,17 @@ export default function DealerListPage() {
   }
 
   const handleStatusToggle = async (dealer: Dealer) => {
-    const nextStatus = dealer.status === "1" ? "0" : "1"
+    const currentStatus = normalizeDealerStatus(dealer.status)
+    const nextStatus: DealerStatus = currentStatus === "active" ? "inactive" : "active"
     setUpdatingDealerId(dealer.Dealer_Id)
     try {
-      const fd = new FormData()
-      fd.append("id", dealer.Dealer_Id)
-      fd.append("Dealer_Id", dealer.Dealer_Id)
-      fd.append("Dealer_Name", dealer.Dealer_Name || "")
-      fd.append("Dealer_Email", dealer.Dealer_Email || "")
-      fd.append("Dealer_Number", dealer.Dealer_Number || "")
-      fd.append("Dealer_City", dealer.Dealer_City || "")
-      fd.append("Dealer_Address", dealer.Dealer_Address || "")
-      fd.append("Dealer_Pincode", dealer.Dealer_Pincode || "")
-      fd.append("Dealer_Username", dealer.Dealer_Username || "")
-      fd.append("Dealer_Password", dealer.Dealer_Password || "")
-      fd.append("Dealer_Dealercode", dealer.Dealer_Dealercode || "")
-      fd.append("Dealer_Notes", dealer.Dealer_Notes || "")
-      fd.append("assignedstaff", dealer.assignedstaff || "")
-      fd.append("staffname", dealer.staffname || "")
-      fd.append("discount", dealer.discount || "")
-      fd.append("gst", dealer.gst || "")
-      fd.append("creditdays", dealer.creditdays || "")
-      fd.append("annualtarget", dealer.annualtarget || "")
-      fd.append("currentlimit", dealer.currentlimit || "")
-      fd.append("status", nextStatus)
-
-      const res = await axios.post(`${BACKEND_URL}/updateDealer`, fd)
-      setToastMsg({ text: res.data.msg || `Dealer marked as ${nextStatus === "1" ? "active" : "inactive"}`, type: 'success' })
-      await refetch()
+      await saveDealerStatus({
+        dealerId: String(dealer.Dealer_Id),
+        status: nextStatus,
+        updatedBy: role,
+      })
+      setToastMsg({ text: `Dealer marked ${nextStatus === "active" ? "active" : "inactive"}`, type: 'success' })
+      await refetchStatuses()
       setOpenMenu(null)
     } catch {
       setToastMsg({ text: "Failed to update dealer status", type: 'error' })
@@ -291,6 +310,12 @@ export default function DealerListPage() {
         {isError && (
           <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
             Failed to load dealers. Please try again.
+          </div>
+        )}
+
+        {statusLoadError && (
+          <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+            Dealer status sync could not load from MongoDB. Showing the last known backend status until it recovers.
           </div>
         )}
 
@@ -416,7 +441,7 @@ export default function DealerListPage() {
                                     >
                                       {updatingDealerId === dealer.Dealer_Id
                                         ? "Updating..."
-                                        : dealer.status === "1"
+                                        : normalizeDealerStatus(dealer.status) === "active"
                                           ? "Mark Inactive"
                                           : "Mark Active"}
                                     </button>

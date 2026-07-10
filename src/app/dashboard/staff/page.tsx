@@ -25,9 +25,9 @@ const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const year = new Date().getFullYear()
 
 const NAV_ITEMS = [
-  { label: "Dealer List",     href: "/Dashboard/admin/dealer/DealerList",        icon: <LayoutDashboard size={15} /> },
+  { label: "Dealer List",     href: "/dashboard/admin/dealer/DealerList",        icon: <LayoutDashboard size={15} /> },
   { label: "Dealer Ledger",   href: "/dashboard/admin/ledger",                   icon: <BookOpen size={15} /> },
-  { label: "Add Dealer",      href: "/Dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} /> },
+  { label: "Add Dealer",      href: "/dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} /> },
   { label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <ClipboardList size={15} /> },
   { label: "Order List",      href: "/Pages/Ordermanagement",                    icon: <ClipboardList size={15} /> },
   { label: "Pending Orders",  href: "/Pages/Ordermanagement/outstandingorders",  icon: <ClipboardList size={15} /> },
@@ -111,8 +111,14 @@ function fmtCurrency(n: number) {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
+  const text = await res.text()
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  if (/^\s*</.test(text)) throw new Error("Expected JSON but received HTML")
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error("Invalid JSON response")
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -396,7 +402,6 @@ function ExecutiveDashboard() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { font-family: 'DM Sans', sans-serif; }
 
@@ -637,7 +642,7 @@ function ExecutiveDashboard() {
                 </div>
                 <div className="panel-sub">Dealers mapped to your staff ID</div>
                 <div className="font-sans font-bold badge-green">{activeDealers} active</div>
-                <Link href="/Dashboard/admin/dealer/DealerList" className="quick-action-btn">+ View dealers</Link>
+                <Link href="/dashboard/admin/dealer/DealerList" className="quick-action-btn">+ View dealers</Link>
               </div>
 
               <div className="stat-card">
@@ -860,7 +865,7 @@ function ExecutiveDashboard() {
                               </span>
                             </td>
                             <td>
-                              <Link href={`/Dashboard/admin/dealer/${d.Dealer_Id}`} className="view-btn">
+                              <Link href={`/dashboard/admin/dealer/${d.Dealer_Id}`} className="view-btn">
                                 <Eye size={11} /> View
                               </Link>
                             </td>

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
+import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+
+export const runtime = "nodejs";
 
 type HotItem = {
   id: string;
@@ -18,6 +20,7 @@ type HotItemsDoc = {
 };
 
 const DOC_ID = "homepage-hot-items";
+const MONGO_OPERATION_TIMEOUT_MS = 5000;
 
 const DEFAULT_ITEMS: HotItem[] = [
   { id: "1", SKU: "163", name: "Adapters Reduction", image: "", badge: "Bestseller", active: true },
@@ -32,18 +35,19 @@ function safeText(value: unknown, max = 300) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function normalizeItem(raw: any, index: number): HotItem | null {
-  const SKU = safeText(raw?.SKU ?? raw?.sku, 120);
-  const name = safeText(raw?.name ?? raw?.Name, 300);
+function normalizeItem(raw: unknown, index: number): HotItem | null {
+  const candidate = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const SKU = safeText(candidate.SKU ?? candidate.sku, 120);
+  const name = safeText(candidate.name ?? candidate.Name, 300);
   if (!SKU || !name) return null;
 
   return {
-    id: safeText(raw?.id, 80) || `${Date.now()}-${index}`,
+    id: safeText(candidate.id, 80) || `${Date.now()}-${index}`,
     SKU,
     name,
-    image: safeText(raw?.image, 1000),
-    badge: safeText(raw?.badge, 80) || "Hot pick",
-    active: raw?.active !== false,
+    image: safeText(candidate.image, 1000),
+    badge: safeText(candidate.badge, 80) || "Hot pick",
+    active: candidate.active !== false,
   };
 }
 
@@ -51,29 +55,43 @@ function toDoc(items: HotItem[], updatedAt?: string, isDefault = false) {
   return { items, updatedAt: updatedAt ?? null, isDefault };
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs = MONGO_OPERATION_TIMEOUT_MS) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error("Mongo operation timed out")), timeoutMs);
+    }),
+  ]);
+}
+
 export async function GET() {
   try {
-    const db = await getDb();
-    const doc = await db.collection<HotItemsDoc>("homepage_content").findOne({ _id: DOC_ID });
+    const db = await withTimeout(getDb());
+    const doc = await withTimeout(db.collection<HotItemsDoc>("homepage_content").findOne({ _id: DOC_ID }));
     const isDefault = !doc;
     const items = Array.isArray(doc?.items) ? doc.items.map(normalizeItem).filter(Boolean) : DEFAULT_ITEMS;
     return NextResponse.json({ success: true, data: toDoc(items as HotItem[], doc?.updatedAt, isDefault) });
-  } catch (e: any) {
-    console.error("[GET /api/hot-items]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+  } catch (error) {
+    console.error("hot-items GET failed", error);
+    return NextResponse.json({
+      success: true,
+      fallback: true,
+      data: toDoc(DEFAULT_ITEMS, undefined, true),
+    });
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
-    const body = await req.json();
-    const items = (Array.isArray(body.items) ? body.items : [])
+    const body: unknown = await req.json();
+    const bodyCandidate = (body && typeof body === "object" ? body : {}) as { items?: unknown };
+    const items = (Array.isArray(bodyCandidate.items) ? bodyCandidate.items : [])
       .slice(0, 50)
       .map(normalizeItem)
       .filter(Boolean) as HotItem[];
 
     const now = new Date().toISOString();
-    const db = await getDb();
+    const db = await withTimeout(getDb());
     await db.collection<HotItemsDoc>("homepage_content").updateOne(
       { _id: DOC_ID },
       {
@@ -89,8 +107,12 @@ export async function PUT(req: NextRequest) {
     );
 
     return NextResponse.json({ success: true, data: toDoc(items, now) });
-  } catch (e: any) {
-    console.error("[PUT /api/hot-items]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+  } catch (error) {
+    console.error("hot-items PUT failed", error);
+    const status = isMongoDependencyError(error) ? 503 : 500;
+    const message = status === 503
+      ? "Hot items database is currently unavailable"
+      : "Unable to save hot items";
+    return NextResponse.json({ success: false, message }, { status });
   }
 }

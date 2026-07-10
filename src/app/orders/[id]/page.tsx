@@ -6,7 +6,7 @@ import moment from "moment";
 import * as XLSX from "xlsx";
 import { hasPriorityTag } from "@/lib/orderPriority";
 import { downloadOrderInvoice } from "@/lib/invoicegenerator";
-import { resolveOrderAmounts } from "@/lib/orderAmounts";
+import { resolveOrderAmounts, resolveOrderDiscountBreakdown } from "@/lib/orderAmounts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -66,11 +66,16 @@ type Remark = {
   datetime: string;
 };
 
-type OrderSummaryOverride = Record<string, any> & {
+type OrderSummaryOverride = Record<string, unknown> & {
   grossAmount?: number | string;
   discountAmount?: number | string;
   netPayableAmount?: number | string;
   discountPercent?: number | string;
+  baseDiscountAmount?: number | string;
+  baseDiscountPercent?: number | string;
+  amountBeforeSlab?: number | string;
+  slabDiscountAmount?: number | string;
+  slabDiscountPercent?: number | string;
 };
 
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -589,6 +594,15 @@ export default function ViewOrderDealerPage() {
         final: overrideAmounts.netPayable,
       }
     : calculatedTotals;
+  const discountBreakdown = resolveOrderDiscountBreakdown({
+    ...(displayOrderMeta ?? {}),
+    grossAmount: totals.gross,
+    discountAmount: totals.discount,
+    netPayableAmount: totals.final,
+  });
+  const slabLabel = discountBreakdown.hasSlabDiscount
+    ? `Slab Discount${discountBreakdown.slabDiscountPercent ? ` (${discountBreakdown.slabDiscountPercent}%)` : ""}`
+    : "Slab Discount";
 
   const buildInvoiceOrder = () => ({
     ...(displayOrderMeta ?? {}),
@@ -602,6 +616,11 @@ export default function ViewOrderDealerPage() {
     discountAmount: totals.discount,
     netPayableAmount: totals.final,
     discountPercent: displayOrderMeta?.discountPercent,
+    baseDiscountAmount: discountBreakdown.baseDiscountAmount,
+    baseDiscountPercent: discountBreakdown.baseDiscountPercent,
+    amountBeforeSlab: discountBreakdown.amountBeforeSlab,
+    slabDiscountAmount: discountBreakdown.slabDiscountAmount,
+    slabDiscountPercent: discountBreakdown.slabDiscountPercent,
     Dealer_Name: dealer?.Dealer_Name || firstOrder?.Dealer_Name || displayOrderMeta?.Dealer_Name || "",
     Dealer_Address: dealer?.Dealer_Address || firstOrder?.Dealer_Address || displayOrderMeta?.Dealer_Address || "",
     Dealer_Number: dealer?.Dealer_Number || firstOrder?.Dealer_Number || displayOrderMeta?.Dealer_Number || "",
@@ -765,12 +784,19 @@ export default function ViewOrderDealerPage() {
 
           {/* ── Totals ── */}
           {!loading && orders.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7 gap-3">
               {[
                 { label: "Total Qty",     value: `${totals.qty}`,                             sub: "packs",           color: "text-gray-900"    },
                 { label: "Total Pieces",  value: `${totals.pieces}`,                          sub: "pcs",             color: "text-gray-900"    },
-                { label: "Gross",         value: `₹${totals.gross.toLocaleString("en-IN")}`, sub: "before discount", color: "text-gray-900"    },
-                { label: "Saved",         value: `₹${totals.discount.toLocaleString("en-IN")}`, sub: "total discount",  color: "text-amber-700"   },
+                { label: "Gross Amount",  value: `₹${totals.gross.toLocaleString("en-IN")}`, sub: "before discount", color: "text-gray-900"    },
+                { label: "Base/Custom Discount", value: `₹${discountBreakdown.baseDiscountAmount.toLocaleString("en-IN")}`, sub: "custom discount", color: "text-amber-700" },
+                ...(discountBreakdown.hasSlabDiscount ? [{
+                  label: slabLabel,
+                  value: `₹${discountBreakdown.slabDiscountAmount.toLocaleString("en-IN")}`,
+                  sub: "stored slab discount",
+                  color: "text-amber-700",
+                }] : []),
+                { label: "Total Discount", value: `₹${totals.discount.toLocaleString("en-IN")}`, sub: "base + slab", color: "text-amber-700" },
                 { label: "Net Payable",   value: `₹${totals.final.toLocaleString("en-IN")}`,  sub: "after discount",  color: "text-emerald-700" },
               ].map(s => (
                 <div key={s.label} className="bg-white border border-gray-200 rounded-2xl px-5 py-4">

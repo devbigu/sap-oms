@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { getDb } from "@/lib/mongodb";
+import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+
+export const runtime = "nodejs";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -80,7 +82,11 @@ export async function GET(
     return NextResponse.json({ success: true, data: toDoc(doc) });
   } catch (e: any) {
     console.error("[GET /api/custom-discount-requests/[id]]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+    const status = isMongoDependencyError(e) ? 503 : 500;
+    return NextResponse.json({
+      success: false,
+      message: status === 503 ? "Custom discount database is currently unavailable" : "Failed to load custom discount request",
+    }, { status });
   }
 }
 
@@ -162,6 +168,10 @@ export async function PATCH(
     return NextResponse.json({ success: true, data: toDoc(updated) });
   } catch (e: any) {
     console.error("[PATCH /api/custom-discount-requests/[id]]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+    const status = isMongoDependencyError(e) ? 503 : 500;
+    return NextResponse.json({
+      success: false,
+      message: status === 503 ? "Custom discount database is currently unavailable" : "Failed to update custom discount request",
+    }, { status });
   }
 }

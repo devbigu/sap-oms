@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import axios from "axios"
 import { AlertTriangle, Eye, EyeOff } from "lucide-react"
+import { fetchDealerStatus } from "@/lib/dealerStatus"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -69,6 +70,25 @@ export default function Login() {
 
       if (data?.status) {
         const userData = data.data || { email, role: roletype }
+        const dealerId = String(userData?.Dealer_Id ?? "").trim()
+
+        if (roletype === "2") {
+          if (!dealerId) {
+            setError("Dealer account is missing an id.")
+            return
+          }
+          try {
+            const dealerStatus = await fetchDealerStatus(dealerId)
+            if (dealerStatus === "inactive") {
+              setError("This dealer account is inactive. Please contact the administrator.")
+              return
+            }
+          } catch (statusError) {
+            console.error("Dealer status verification failed:", statusError)
+            setError("Could not verify dealer status. Please try again.")
+            return
+          }
+        }
 
         localStorage.setItem("status", "true")
         localStorage.setItem("UserData", JSON.stringify(userData))

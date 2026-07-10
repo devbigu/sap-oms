@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { Suspense, useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import axios from 'axios'
@@ -50,7 +50,7 @@ function productMatchesCategory(product: ProductData, selectedCategory: string):
   )
 }
 
-export default function ProductListPage() {
+function ProductListContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const urlQuery = searchParams.get("q") ?? ""
@@ -473,5 +473,13 @@ export default function ProductListPage() {
 
       </div>
     </div>
+  )
+}
+
+export default function ProductListPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#f4f5f9]" />}>
+      <ProductListContent />
+    </Suspense>
   )
 }
