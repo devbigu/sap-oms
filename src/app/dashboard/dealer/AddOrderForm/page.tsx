@@ -1,11 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect */
 // app/order/page.tsx
 "use client";
 
-import React, { useState, useEffect, useRef, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import axios from "axios";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast, ToastContainer } from "react-toastify";
 import moment from "moment";
+import Select, { components, type FilterOptionOption, type StylesConfig } from "react-select";
 import { useCartStore } from "@/Store/store";
 import { fetchDealerStatus } from "@/lib/dealerStatus";
 import discountUtils from "@/lib/discount";
@@ -22,11 +24,14 @@ import {
 import {
   saveDraft,
   updateDraft,
-  getDraftById,
   type DraftProductRow,
 } from "@/lib/drafts";
 import { useDraft } from "@/lib/useDrafts";
 import { buildPriorityRemarks } from "@/lib/orderPriority";
+import {
+  buildOrderRemarks as buildLineRemarks,
+  verifyOrderProductNotesPersistence,
+} from "@/lib/orderProductNotes.mjs";
 
 const { calculateStackedDiscount, getDiscountStatusMessage } = discountUtils;
 
@@ -40,6 +45,7 @@ type ProductRow = {
   price: number; // rupees per unit
   packSize: number;
   isPriority?: boolean;
+  productNote?: string;
   catalogueSection?: string;
   catalogueProductSku?: string;
   catalogueVariantSku?: string;
@@ -78,6 +84,15 @@ type CustomDiscountRequest = {
 
 // ─── Product meta from nested_products.json ───────────────────────────────────
 type ProductMeta = { image: string | null; productName: string; packSize: number };
+
+type CatalogueNumberOption = {
+  value: string;
+  label: string;
+  searchSku: string;
+  productName: string;
+  descriptor: string;
+  specSummary: string;
+};
 
 function buildVariantLookup(data: any[]): Record<string, ProductMeta> {
   const map: Record<string, ProductMeta> = {};
@@ -191,10 +206,17 @@ function buildProductSignature(row: ProductRow): string {
   return buildOrderSignature([row], rowSubtotalPaise(row) / 100);
 }
 
-function buildOrderRemarks(variantCode: string, isPriority: boolean | undefined, orderNote: string): string {
-  const remarks = buildPriorityRemarks(variantCode, isPriority);
-  const note = orderNote.trim();
-  return [remarks, note ? `Order note: ${note}` : ""].filter(Boolean).join(" | ");
+function buildOrderRemarks(
+  variantCode: string,
+  isPriority: boolean | undefined,
+  orderNote: string,
+  productNote?: string,
+): string {
+  return buildLineRemarks(
+    buildPriorityRemarks(variantCode, isPriority),
+    orderNote,
+    String(productNote ?? ""),
+  );
 }
 
 function toDiscountRequestProduct(row: ProductRow) {
@@ -206,6 +228,7 @@ function toDiscountRequestProduct(row: ProductRow) {
     price: row.price,
     packSize: row.packSize,
     priority: !!row.isPriority,
+    productNote: row.productNote ?? "",
     rowSubtotal: payloadAmount(rowSubtotalPaise(row) / 100),
   };
 }
@@ -299,11 +322,24 @@ function parseLogValue(value: string): unknown {
 
 function getAxiosDebugError(error: unknown) {
   if (axios.isAxiosError(error)) {
+    const responseData = error.response?.data;
+    const normalizedResponse =
+      responseData === undefined || responseData === null
+        ? undefined
+        : typeof responseData === "string"
+          ? responseData
+          : Array.isArray(responseData)
+            ? responseData
+            : typeof responseData === "object"
+              ? (Object.keys(responseData).length > 0 ? responseData : "Empty error response object")
+              : responseData;
+
     return {
       message: error.message,
+      code: error.code,
       status: error.response?.status,
       statusText: error.response?.statusText,
-      response: error.response?.data,
+      response: normalizedResponse,
     };
   }
 
@@ -330,6 +366,7 @@ const emptyRow = (): ProductRow => ({
   price: 0,
   packSize: 1,
   isPriority: false,
+  productNote: "",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -407,7 +444,7 @@ function AddOrderPageInner() {
     const u = JSON.parse(stored);
     setUser(u);
     setShipto(u.Dealer_Address[0].toUpperCase() + u.Dealer_Address.slice(1).toLowerCase());
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (!user) return;
@@ -472,6 +509,7 @@ function AddOrderPageInner() {
             price: safePositiveNumber(p.price) || safePositiveNumber(match?.product_price),
             packSize: safePositiveNumber(p.packSize) || 1,
             isPriority: !!(p.priority || p.isPriority),
+            productNote: String(p.productNote ?? ""),
           };
         });
 
@@ -552,6 +590,7 @@ function AddOrderPageInner() {
               price: cartPriceToRupees(item.unitPrice, match?.product_price),
               packSize: catalogueVariant?.pack ?? item.packSize ?? 1,
               isPriority: item.isPriority ?? item.priority ?? false,
+              productNote: "",
               catalogueSection: catalogueProduct ? getCatalogueSection(catalogueProduct) : "",
               catalogueProductSku: catalogueProduct?.sku ?? "",
               catalogueVariantSku: catalogueVariant?.sku ?? "",
@@ -564,7 +603,6 @@ function AddOrderPageInner() {
         }
       })
       .catch(() => toast.error("Could not load cart draft."));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromCart, user, products, catalogueIndex, reorderIdParam]);
 
   // ── Seed rows from cart ───────────────────────────────────────────────────
@@ -605,6 +643,7 @@ function AddOrderPageInner() {
         price,
         packSize,
         isPriority: item.isPriority ?? false,
+        productNote: "",
         catalogueSection: catalogueProduct ? getCatalogueSection(catalogueProduct) : "",
         catalogueProductSku: catalogueProduct?.sku ?? "",
         catalogueVariantSku: catalogueVariant?.sku ?? "",
@@ -612,7 +651,7 @@ function AddOrderPageInner() {
     });
 
     setArr(cartRows);
-  }, [products, cartItems, variantLookup, catalogueIndex, draftIdParam, reorderIdParam]);
+  }, [products, cartItems, variantLookup, catalogueIndex, draftIdParam, reorderIdParam, fromCart]);
 
   // ── Discount ──────────────────────────────────────────────────────────────
   const subtotalPaise = arr1.reduce((acc, row) => acc + rowSubtotalPaise(row), 0);
@@ -949,7 +988,90 @@ function AddOrderPageInner() {
   };
 
   // ── Catalogue hierarchy helpers ───────────────────────────────────────────
-  const catalogueSections = catalogueIndex?.sections ?? [];
+  const optionList = useMemo<CatalogueNumberOption[]>(() => {
+    if (!catalogueIndex) return [];
+
+    return catalogueIndex.products.flatMap((product) =>
+      (product.variants ?? []).map((variant) => {
+        const descriptor = getCatalogueProductDescriptor(product);
+        const specSummary = getVariantLabel(product, variant)
+          .replace(`${variant.sku} - `, "")
+          .replace(/ - Pack of \d+$/, "")
+          .trim();
+
+        return {
+          value: variant.sku,
+          label: variant.sku,
+          searchSku: variant.sku.toLowerCase(),
+          productName: product.name,
+          descriptor,
+          specSummary,
+        };
+      })
+    );
+  }, [catalogueIndex]);
+
+  const catalogueFilter = (option: FilterOptionOption<CatalogueNumberOption>, inputValue: string) => {
+    const needle = inputValue.trim().toLowerCase();
+    if (!needle) return true;
+    return option.data.searchSku.includes(needle);
+  };
+
+  const catalogueSelectStyles: StylesConfig<CatalogueNumberOption, false> = {
+    control: (base, state) => ({
+      ...base,
+      minHeight: 40,
+      borderRadius: 12,
+      borderColor: state.isFocused ? "#818cf8" : "#e5e7eb",
+      boxShadow: state.isFocused ? "0 0 0 2px #e0e7ff" : "none",
+      "&:hover": { borderColor: state.isFocused ? "#818cf8" : "#d1d5db" },
+    }),
+    valueContainer: (base) => ({
+      ...base,
+      padding: "2px 12px",
+    }),
+    input: (base) => ({
+      ...base,
+      margin: 0,
+      padding: 0,
+      color: "#111827",
+      fontSize: 12,
+    }),
+    placeholder: (base) => ({
+      ...base,
+      color: "#9ca3af",
+      fontSize: 12,
+    }),
+    singleValue: (base) => ({
+      ...base,
+      color: "#111827",
+      fontSize: 12,
+      fontWeight: 600,
+    }),
+    menu: (base) => ({
+      ...base,
+      borderRadius: 14,
+      overflow: "hidden",
+      boxShadow: "0 16px 40px rgba(15, 23, 42, 0.14)",
+      zIndex: 9999,
+    }),
+    menuPortal: (base) => ({
+      ...base,
+      zIndex: 9999,
+    }),
+    menuList: (base) => ({
+      ...base,
+      padding: 6,
+      maxHeight: 260,
+    }),
+    option: (base) => ({
+      ...base,
+      backgroundColor: "transparent",
+      color: "#111827",
+      padding: 0,
+      cursor: "pointer",
+    }),
+  };
 
   const resolveRowSelection = (row: ProductRow) => {
     const lookupSku = String(row.catalogueVariantSku || row.productname || row.variantCode || "").trim();
@@ -963,14 +1085,6 @@ function AddOrderPageInner() {
     return { section, productSku, variantSku, product, variant };
   };
 
-  const getProductsForSection = (section: string) =>
-    catalogueSections.find((item) => item.section === section)?.products ?? [];
-
-  const getVariantsForProduct = (productSku: string) => {
-    const product = catalogueIndex?.productsBySku[String(productSku)] ?? null;
-    return product?.variants ?? [];
-  };
-
   const resetRowSelection = (idx: number) => {
     setArr((prev) => {
       const next = [...prev];
@@ -981,6 +1095,7 @@ function AddOrderPageInner() {
         variantCode: "",
         price: 0,
         packSize: 1,
+        productNote: "",
         catalogueSection: "",
         catalogueProductSku: "",
         catalogueVariantSku: "",
@@ -989,44 +1104,12 @@ function AddOrderPageInner() {
     });
   };
 
-  const handleSectionSelect = (idx: number, section: string) => {
-    setArr((prev) => {
-      const next = [...prev];
-      next[idx] = {
-        ...next[idx],
-        catalogueSection: section,
-        catalogueProductSku: "",
-        catalogueVariantSku: "",
-        productname: "",
-        displayName: "",
-        variantCode: "",
-        price: 0,
-        packSize: 1,
-      };
-      return next;
-    });
-  };
+  const handleChangeSelect = (idx: number, variantSku: string) => {
+    if (!variantSku) {
+      resetRowSelection(idx);
+      return;
+    }
 
-  const handleProductSelect = (idx: number, productSku: string) => {
-    const product = catalogueIndex?.productsBySku[String(productSku)];
-    setArr((prev) => {
-      const next = [...prev];
-      next[idx] = {
-        ...next[idx],
-        catalogueSection: product ? getCatalogueSection(product) : next[idx].catalogueSection ?? "",
-        catalogueProductSku: productSku,
-        catalogueVariantSku: "",
-        productname: "",
-        displayName: product ? getCatalogueProductLabel(product) : "",
-        variantCode: "",
-        price: 0,
-        packSize: 1,
-      };
-      return next;
-    });
-  };
-
-  const handleVariantSelect = (idx: number, variantSku: string) => {
     const entry = catalogueIndex ? findCatalogueEntry(catalogueIndex, variantSku) : null;
     const product = entry?.product;
     const variant = entry?.variant;
@@ -1053,6 +1136,15 @@ function AddOrderPageInner() {
   const updateQuantity = (i: number, val: number) => {
     const v = Math.max(1, val || 1);
     setArr((prev) => { const n = [...prev]; n[i] = { ...n[i], producQuanity: v }; return n; });
+  };
+
+  const updateProductNote = (i: number, note: string) => {
+    const normalizedNote = note.slice(0, 500);
+    setArr((prev) => {
+      const n = [...prev];
+      n[i] = { ...n[i], productNote: normalizedNote };
+      return n;
+    });
   };
 
   const togglePriority = (i: number) => {
@@ -1113,7 +1205,7 @@ function AddOrderPageInner() {
     }
   };
 
-  const fetchLatestOrderId = async () => {
+  const getLatestOrderIdForDealer = async () => {
     if (!user?.Dealer_Id) return "";
     try {
       const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
@@ -1129,8 +1221,18 @@ function AddOrderPageInner() {
     let active = true;
 
     setExpectedOrderLoading(true);
-    fetchLatestOrderId()
-      .then((latestId) => {
+    const loadLatestOrderId = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+        const json = await res.json();
+        return String(json?.data?.[0]?.order_id ?? "").trim();
+      } catch {
+        return "";
+      }
+    };
+
+    loadLatestOrderId()
+      .then((latestId: string) => {
         if (active) setExpectedOrderNumber(buildExpectedOrderNumber(latestId));
       })
       .finally(() => {
@@ -1215,6 +1317,38 @@ function AddOrderPageInner() {
   };
 
   // ── Submit Order ──────────────────────────────────────────────────────────
+  const verifySubmittedProductNotes = async (orderId: string) => {
+    if (!orderId || !user?.Dealer_Id) return;
+
+    const rowsWithNotes = arr1
+      .filter((row) => row.productname && String(row.productNote ?? "").trim())
+      .map((row) => ({
+        productname: row.productname,
+        variantCode: row.variantCode,
+        productNote: row.productNote ?? "",
+      }));
+
+    if (rowsWithNotes.length === 0) return;
+
+    try {
+      const summary = await verifyOrderProductNotesPersistence({
+        fetchImpl: fetch,
+        backendUrl: BACKEND_URL,
+        actualOrderId: orderId,
+        dealerId: String(user.Dealer_Id),
+        submittedRows: rowsWithNotes,
+      });
+
+      if (summary.failed > 0) {
+        console.warn("[order-product-notes] fallback incomplete", { orderId, summary });
+        toast.warn("Order placed, but some product notes could not be verified.", { autoClose: 5000 });
+      }
+    } catch (error) {
+      console.warn("[order-product-notes] verification failed", { orderId, error });
+      toast.warn("Order placed, but product note verification is still pending.", { autoClose: 5000 });
+    }
+  };
+
   const handleSubmitProductArray = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product"); return; }
     const payload = arr1.filter(r => r.productname).map(r => {
@@ -1238,7 +1372,7 @@ function AddOrderPageInner() {
         discountPercent: String(rowDiscountPercent),
         totalDiscountPercent: String(rowDiscountPercent),
         afterDiscountPrice: payloadAmount(Math.max(0, rowSubtotal - rowDiscountAmount)),
-        remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote),
+        remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote, r.productNote),
         priority: r.isPriority ? "1" : "0",
         isPriority: !!r.isPriority,
       };
@@ -1302,11 +1436,12 @@ function AddOrderPageInner() {
         request: phpPayload,
         response: data,
       });
-      const placedOrderId = extractOrderIdFromResponse(data) || await fetchLatestOrderId();
-      await Promise.all([
+      const placedOrderId = extractOrderIdFromResponse(data) || await getLatestOrderIdForDealer();
+      await Promise.allSettled([
         saveOrderNoteForHistory(placedOrderId),
         saveOrderSummaryOverride(placedOrderId),
         linkCustomDiscountRequestsToOrder(customDiscountSources, placedOrderId),
+        verifySubmittedProductNotes(placedOrderId),
       ]);
       if (placedOrderId) setExpectedOrderNumber(buildExpectedOrderNumber(placedOrderId));
       if (reorderRequest) {
@@ -1967,7 +2102,6 @@ function AddOrderPageInner() {
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
                     const rowSelection = resolveRowSelection(row);
                     const selectedProduct = rowSelection.product ?? catalogueIndex?.productsBySku[String(rowSelection.productSku)] ?? null;
-                    const selectedVariants = selectedProduct?.variants ?? [];
                     const metaKey = rowSelection.variantSku || row.productname || row.variantCode;
                     const meta = variantLookup[metaKey] ?? variantLookup[row.productname];
                     const productKey = getProductKey(row);
@@ -2016,49 +2150,58 @@ function AddOrderPageInner() {
                             </div>
                           )}
                           <div className="flex flex-col gap-2">
-                            <select
-                              value={rowSelection.section}
-                              onChange={(e) => handleSectionSelect(idx, e.target.value)}
-                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                            >
-                              <option value="">Catalogue Section</option>
-                              {catalogueSections.map((section) => (
-                                <option key={section.section} value={section.section}>
-                                  {section.section}
-                                </option>
-                              ))}
-                            </select>
-
-                            <select
-                              value={rowSelection.productSku}
-                              onChange={(e) => handleProductSelect(idx, e.target.value)}
-                              disabled={!rowSelection.section}
-                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all disabled:cursor-not-allowed disabled:bg-gray-50 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                            >
-                              <option value="">Main Product</option>
-                              {getProductsForSection(rowSelection.section).map((product) => {
-                                const descriptor = getCatalogueProductDescriptor(product);
-                                return (
-                                  <option key={product.sku} value={product.sku}>
-                                    {descriptor ? `${product.name} - ${descriptor}` : product.name}
-                                  </option>
-                                );
-                              })}
-                            </select>
-
-                            <select
-                              value={rowSelection.variantSku}
-                              onChange={(e) => handleVariantSelect(idx, e.target.value)}
-                              disabled={!rowSelection.productSku}
-                              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-900 outline-none transition-all disabled:cursor-not-allowed disabled:bg-gray-50 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                            >
-                              <option value="">Variant / Catalogue No.</option>
-                              {selectedVariants.map((variant) => (
-                                <option key={variant.sku} value={variant.sku}>
-                                  {getVariantLabel(selectedProduct ?? { id: "", sku: "", name: "", variants: [] }, variant)}
-                                </option>
-                              ))}
-                            </select>
+                            <Select<CatalogueNumberOption, false>
+                              options={optionList}
+                              value={optionList.find((option) => option.value === rowSelection.variantSku) ?? null}
+                              onChange={(option) => handleChangeSelect(idx, option?.value ?? "")}
+                              filterOption={catalogueFilter}
+                              isClearable
+                              placeholder="Search Catalogue No."
+                              noOptionsMessage={() => "No catalogue number found"}
+                              styles={catalogueSelectStyles}
+                              menuPortalTarget={typeof window !== "undefined" ? document.body : null}
+                              menuPosition="fixed"
+                              menuPlacement="auto"
+                              maxMenuHeight={260}
+                              menuShouldScrollIntoView={false}
+                              components={{
+                                IndicatorSeparator: () => null,
+                                Option: (props) => (
+                                  <components.Option {...props}>
+                                    <div
+                                      className={`mx-1 my-1 rounded-xl border px-3 py-2.5 transition-all ${
+                                        props.isFocused
+                                          ? "border-indigo-200 bg-indigo-50 shadow-sm"
+                                          : props.isSelected
+                                            ? "border-emerald-200 bg-emerald-50"
+                                            : "border-transparent bg-white"
+                                      }`}
+                                    >
+                                      <div className="text-[12px] font-bold font-mono text-gray-900">
+                                        {props.data.value}
+                                      </div>
+                                      <div className="mt-0.5 text-[11px] text-gray-600 leading-tight">
+                                        {props.data.productName}
+                                      </div>
+                                      {(props.data.specSummary || props.data.descriptor) && (
+                                        <div className="mt-0.5 text-[10px] text-gray-400 leading-tight">
+                                          {props.data.specSummary || props.data.descriptor}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </components.Option>
+                                ),
+                                SingleValue: (props) => (
+                                  <components.SingleValue {...props}>
+                                    <div className="flex flex-col">
+                                      <span className="text-[12px] font-bold font-mono text-gray-900">
+                                        {props.data.value}
+                                      </span>
+                                    </div>
+                                  </components.SingleValue>
+                                ),
+                              }}
+                            />
 
                             <button
                               type="button"
@@ -2080,6 +2223,30 @@ function AddOrderPageInner() {
                               </span>
                               {row.isPriority ? "Priority on" : "Priority"}
                             </button>
+
+                            {row.productname && (
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <label
+                                    htmlFor={`product-note-${row.key}`}
+                                    className="text-[10px] font-bold uppercase tracking-[0.12em] text-gray-500"
+                                  >
+                                    Product Note
+                                  </label>
+                                  <span className="text-[10px] text-gray-400">
+                                    {(row.productNote ?? "").length}/500
+                                  </span>
+                                </div>
+                                <textarea
+                                  id={`product-note-${row.key}`}
+                                  value={row.productNote ?? ""}
+                                  onChange={(e) => updateProductNote(idx, e.target.value)}
+                                  maxLength={500}
+                                  placeholder="Add instructions for this product..."
+                                  className="mt-2 min-h-[68px] w-full resize-y rounded-lg border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-700 outline-none transition-colors placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                                />
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="px-3 py-3">

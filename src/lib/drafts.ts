@@ -21,6 +21,7 @@ export type DraftProductRow = {
   price: number;
   packSize: number;
   isPriority?: boolean;
+  productNote?: string;
 };
 
 export type OrderDraft = {

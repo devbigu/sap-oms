@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import moment from "moment";
 import * as XLSX from "xlsx";
@@ -12,6 +12,7 @@ import {
   resolveOrderAmounts,
   resolveOrderDiscountBreakdown,
 } from "@/lib/orderAmounts";
+import { mergeFallbackProductNotes } from "@/lib/orderProductNotes.mjs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -30,6 +31,8 @@ type OrderData = {
   readyquantity: string;
   remark?: string;
   remarks?: string;
+  displayRemark?: string;
+  fallbackProductNote?: string;
   order_note?: string;
   note?: string;
   priority?: string | boolean;
@@ -85,6 +88,15 @@ type OrderSummaryOverride = Record<string, unknown> & {
   slabDiscountPercent?: number | string;
   allocatedDiscountPercent?: number | string;
   approvedDiscountPercent?: number | string;
+};
+
+type OrderProductNote = {
+  orderId?: string;
+  orderItemId?: string | null;
+  sku?: string;
+  normalizedSku?: string;
+  occurrence?: number;
+  note?: string;
 };
 
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -361,6 +373,7 @@ function ItemCard({ o, idx, year, packLookup, orderMeta, onTrack }: { o: OrderDa
           </div>
           <h3 className="text-[14px] font-bold text-gray-900 truncate">{o.product_name || "—"}</h3>
           {o.product_discription && <p className="text-[12px] text-gray-500 truncate mt-0.5">{o.product_discription}</p>}
+          {o.displayRemark && <p className="mt-2 text-[11px] leading-5 text-gray-600">{o.displayRemark}</p>}
         </div>
         <StatusPill code={o.orderdata_status} />
       </div>
@@ -436,6 +449,7 @@ export default function ViewOrderDealerPage() {
   const [packLookup, setPackLookup] = useState<Record<string, number>>({});
   const [orderMeta, setOrderMeta] = useState<any>(null);
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
+  const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -544,6 +558,20 @@ export default function ViewOrderDealerPage() {
 
   useEffect(() => {
     if (!id) return;
+    fetch(`/api/order-product-notes?orderId=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) {
+          setFallbackProductNotes(json.data);
+        } else {
+          setFallbackProductNotes([]);
+        }
+      })
+      .catch(() => setFallbackProductNotes([]));
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
     fetch(`/api/order-summary-overrides?order_id=${encodeURIComponent(id)}`, { cache: "no-store" })
       .then(r => r.json())
       .then(json => {
@@ -568,16 +596,21 @@ export default function ViewOrderDealerPage() {
       .catch(() => {});
   }, []);
 
+  const displayOrders = useMemo(
+    () => mergeFallbackProductNotes(orders, fallbackProductNotes) as OrderData[],
+    [orders, fallbackProductNotes]
+  );
+
   const handleExport = () => {
     if (!tableRef.current) return;
     const wb = XLSX.utils.table_to_book(tableRef.current, { sheet: "Order Details" });
     XLSX.writeFile(wb, `order-${id}-${moment().format("YYYY-MM-DD")}.xlsx`);
   };
 
-  const firstOrder = orders[0];
+  const firstOrder = displayOrders[0];
   const displayOrderMeta = summaryOverride ? { ...(orderMeta ?? {}), ...summaryOverride } : orderMeta;
   // Compute totals from the same row pricing used by the table and cards.
-  const calculatedTotals = orders.reduce((acc, o) => {
+  const calculatedTotals = displayOrders.reduce((acc, o) => {
     const pricing = getRowPricing(o, packLookup, displayOrderMeta);
 
     return {
@@ -642,7 +675,7 @@ export default function ViewOrderDealerPage() {
     orderdata_item_quantity: String(totals.qty),
     mtstatus: displayOrderMeta?.mtstatus || firstOrder?.orderdata_status || "",
     outstandingDate: displayOrderMeta?.outstandingDate || "",
-    items: orders.map((o) => {
+    items: displayOrders.map((o) => {
       const pricing = getRowPricing(o, packLookup, displayOrderMeta);
       return {
         id: o.orderdata_id,
@@ -658,8 +691,8 @@ export default function ViewOrderDealerPage() {
         finalPrice: pricing.final,
         totalDiscountPercent: pricing.pct,
         unit: o.product_unit || "Pcs",
-        remark: o.remark,
-        remarks: o.remarks,
+        remark: o.displayRemark ?? o.remark,
+        remarks: o.displayRemark ?? o.remarks,
         priority: o.priority,
         isPriority: o.isPriority,
         is_priority: o.is_priority,
@@ -668,7 +701,7 @@ export default function ViewOrderDealerPage() {
   });
 
   const handleDownloadInvoice = async () => {
-    if (orders.length === 0 || invoiceLoading) return;
+    if (displayOrders.length === 0 || invoiceLoading) return;
     setInvoiceLoading(true);
     const result = await downloadOrderInvoice(buildInvoiceOrder() as any);
     setInvoiceLoading(false);
@@ -698,7 +731,7 @@ export default function ViewOrderDealerPage() {
   ] : [];
 
   const visibleDealerFields = dealerFields.filter(f => f.value);
-  const orderNote = extractOrderNote(orders, localOrderNote);
+  const orderNote = extractOrderNote(displayOrders, localOrderNote);
 
   return (
     <>
@@ -739,7 +772,7 @@ export default function ViewOrderDealerPage() {
           </div>
           <div className="flex items-center gap-3">
             <ViewToggle mode={viewMode} onChange={setViewMode} />
-            <button onClick={handleDownloadInvoice} disabled={invoiceLoading || loading || orders.length === 0}
+            <button onClick={handleDownloadInvoice} disabled={invoiceLoading || loading || displayOrders.length === 0}
               className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 text-[13px] font-semibold rounded-xl border border-gray-200 transition-colors">
               {invoiceLoading ? (
                 <div className="w-3.5 h-3.5 border-2 border-gray-200 border-t-gray-700 rounded-full animate-spin" />
@@ -797,7 +830,7 @@ export default function ViewOrderDealerPage() {
           )}
 
           {/* ── Totals ── */}
-          {!loading && orders.length > 0 && (
+          {!loading && displayOrders.length > 0 && (
             <div className="space-y-3">
               {additionalDiscountBadge && (
                 <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[12px] font-semibold text-emerald-700">
@@ -830,7 +863,7 @@ export default function ViewOrderDealerPage() {
           )}
 
           {/* ── Empty ── */}
-          {!loading && orders.length === 0 && (
+          {!loading && displayOrders.length === 0 && (
             <div className="bg-white border border-gray-200 rounded-2xl flex flex-col items-center justify-center py-20 gap-3 text-gray-400">
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
@@ -841,9 +874,9 @@ export default function ViewOrderDealerPage() {
           )}
 
           {/* ── Card View ── */}
-          {!loading && orders.length > 0 && viewMode === "cards" && (
+          {!loading && displayOrders.length > 0 && viewMode === "cards" && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {orders.map((o, idx) => {
+              {displayOrders.map((o, idx) => {
                 const pricing = getRowPricing(o, packLookup, displayOrderMeta);
                 return (
                   <ItemCard key={o.orderdata_id} o={o} idx={idx} year={year} packLookup={packLookup} orderMeta={displayOrderMeta}
@@ -854,7 +887,7 @@ export default function ViewOrderDealerPage() {
           )}
 
           {/* ── Table View ── */}
-          {!loading && orders.length > 0 && viewMode === "table" && (
+          {!loading && displayOrders.length > 0 && viewMode === "table" && (
             <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
               <div className="overflow-x-auto">
                 <table ref={tableRef} className="w-full text-sm border-collapse">
@@ -866,7 +899,7 @@ export default function ViewOrderDealerPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {orders.map((o, idx) => {
+                    {displayOrders.map((o, idx) => {
                       const pricing = getRowPricing(o, packLookup, displayOrderMeta);
                       const left = pricing.left;
                       const isDeleted = o.del_status === "1";
@@ -892,6 +925,9 @@ export default function ViewOrderDealerPage() {
                           </td>
                           <td className="px-4 py-3.5 max-w-[140px]">
                             <span className="block truncate text-[12px] text-gray-600">{o.product_discription || "—"}</span>
+                            {o.displayRemark && (
+                              <span className="mt-1 block text-[11px] leading-5 text-gray-500">{o.displayRemark}</span>
+                            )}
                           </td>
                           <td className="px-4 py-3.5 font-mono font-bold text-gray-900">{pricing.packs}</td>
                           <td className="px-4 py-3.5 font-mono font-bold text-amber-700">{pricing.packs} × {pricing.packSize}</td>
