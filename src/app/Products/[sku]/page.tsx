@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { useCartStore } from "@/Store/store";
 import {
@@ -86,6 +87,7 @@ function CartToast({ item, onDone }: { item: { name: string; sku: string; bulk?:
   const [vis, setVis] = useState(false);
   useEffect(() => {
     if (!item) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVis(true);
     const t = setTimeout(() => { setVis(false); setTimeout(onDone, 300); }, 2500);
     return () => clearTimeout(t);
@@ -170,6 +172,7 @@ function RelatedCard({ product }: { product: Product }) {
 // ─────────────────────────────────────────────────────────────
 export default function ProductDetailsPage({ params }: { params: Promise<{ sku: string }> }) {
   const sku = decodeURIComponent(React.use(params).sku);
+  const router = useRouter();
 
   const [allProducts,         setAllProducts]         = useState<Product[]>([]);
   const [product,             setProduct]             = useState<Product | null>(null);
@@ -177,7 +180,6 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   const [notFound,            setNotFound]            = useState(false);
   const [selectedVariantSKU,  setSelectedVariantSKU]  = useState<string | null>(null);
   const [selectedImageIdx,    setSelectedImageIdx]    = useState(0);
-  const [quantity,            setQuantity]            = useState(0);
   const [rowPacks,            setRowPacks]            = useState<Record<string, number>>({});
   const [toast,               setToast]               = useState<{ name: string; sku: string; bulk?: boolean } | null>(null);
 
@@ -186,6 +188,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
   // Sync row quantities from cart
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRowPacks(prev => {
       const u = { ...prev };
       cart.forEach(item => { if (item.id in u) u[item.id] = item.quantity ?? u[item.id]; });
@@ -224,12 +227,15 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
   // ── Derived ───────────────────────────────────────────────
   const selectedVariant   = product?.variants?.find(v => v.sku === selectedVariantSKU) ?? null;
+  const selectedQuantity  = selectedVariantSKU
+    ? Math.max(0, rowPacks[selectedVariantSKU] ?? 0)
+    : 0;
   const displayPricePaise = variantPricePaise(selectedVariant);   // per unit (paise)
   const selectedPackSize  = selectedVariant?.pack ?? 1;
   const packPricePaise    = displayPricePaise !== null ? displayPricePaise * selectedPackSize : null;
   const perUnitPaise      = displayPricePaise;                    // price IS already per unit
   const lineTotalPaise    = displayPricePaise !== null
-    ? displayPricePaise * quantity * selectedPackSize : null;     // price × total units
+    ? displayPricePaise * selectedQuantity * selectedPackSize : null;     // price × total units
 
   // Spec keys from all variants → variant table columns
   const specKeys = product?.variants?.length ? getSpecKeys(product.variants) : [];
@@ -253,6 +259,39 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   const stickyInCart = cart.some(c => c.id === selectedVariantSKU);
   const sectionLabel = product ? getCatalogueSection(product) : "";
   const descriptor = product ? getCatalogueProductDescriptor(product) : "";
+  const canBuyNow = Boolean(
+    selectedVariantSKU &&
+    selectedVariant &&
+    displayPricePaise !== null &&
+    selectedQuantity > 0 &&
+    selectedVariant.inStock
+  );
+
+  const updateSelectedQuantity = (
+    nextValue: number | ((current: number) => number)
+  ) => {
+    if (!selectedVariantSKU) return;
+
+    setRowPacks((previous) => {
+      const current = Math.max(
+        0,
+        previous[selectedVariantSKU] ?? 0
+      );
+
+      const next =
+        typeof nextValue === "function"
+          ? nextValue(current)
+          : nextValue;
+
+      return {
+        ...previous,
+        [selectedVariantSKU]: Math.max(
+          0,
+          Number.isFinite(next) ? Math.floor(next) : 0
+        ),
+      };
+    });
+  };
 
   // ── Cart actions ──────────────────────────────────────────
   const addVariant = (vSku: string, name: string, pricePaise: number, qty: number, packSize: number, image?: string) => {
@@ -275,7 +314,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
       selectedVariantSKU,
       selectedVariant?.name ?? product.name,
       displayPricePaise,
-      quantity,
+      selectedQuantity,
       selectedPackSize,
       getVariantImage(product, selectedVariant)
     );
@@ -287,6 +326,30 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     const { numPacks, packSize, unitPaise } = rowCalc(variantSku);
     addVariant(variantSku, vm?.name ?? product.name, unitPaise, numPacks, packSize, getVariantImage(product, vm));
     setSelectedVariantSKU(variantSku);
+  };
+
+  const handleBuyNow = () => {
+    if (
+      !selectedVariantSKU ||
+      !selectedVariant ||
+      !product ||
+      displayPricePaise === null ||
+      selectedQuantity <= 0 ||
+      !selectedVariant.inStock
+    ) {
+      return;
+    }
+
+    addToCart({
+      id: selectedVariantSKU,
+      name: selectedVariant.name ?? product.name,
+      price: displayPricePaise,
+      packSize: selectedPackSize,
+      image: getVariantImage(product, selectedVariant),
+      initialQty: selectedQuantity,
+    });
+
+    router.push("/dashboard/dealer/AddOrderForm");
   };
 
   // ── Guards ────────────────────────────────────────────────
@@ -419,7 +482,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                         ? Object.values(v.specs ?? {}).join(" / ") || v.sku
                         : (Object.values(v.specs ?? {})[0] ?? v.sku);
                       return (
-                        <button key={`${v.sku}-${idx}`} onClick={() => { setSelectedVariantSKU(v.sku); setQuantity(0); }}
+                        <button key={`${v.sku}-${idx}`} onClick={() => { setSelectedVariantSKU(v.sku); }}
                           style={{ position: "relative", padding: "6px 12px", fontSize: 12, borderRadius: 6,
                             border: `2px solid ${isSel ? "#6A5ACD" : inCart ? "#22c55e" : "#e2e8f0"}`,
                             background: isSel ? "#6A5ACD" : inCart ? "#f0fdf4" : "#fff",
@@ -513,11 +576,11 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                         </span>
                       )}
                     </div>
-                    {quantity > 0 && lineTotalPaise !== null && (
+                    {selectedQuantity > 0 && lineTotalPaise !== null && (
                       <p style={{ fontSize: 12, color: "#64748b", margin: "6px 0 0" }}>
                         {selectedPackSize > 1
-                          ? `${quantity} packs × ${selectedPackSize} Pcs. = `
-                          : `${quantity} Pcs. × `}
+                          ? `${selectedQuantity} packs × ${selectedPackSize} Pcs. = `
+                          : `${selectedQuantity} Pcs. × `}
                         <strong>{fmt(lineTotalPaise)}</strong>
                       </p>
                     )}
@@ -547,14 +610,14 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                   {selectedPackSize > 1 ? "Packs:" : "Quantity:"}
                 </p>
                 <div style={{ display: "flex", alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 8, width: "fit-content" }}>
-                  <button onClick={() => setQuantity(q => Math.max(0, q - 1))} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>−</button>
+                  <button onClick={() => updateSelectedQuantity(current => Math.max(0, current - 1))} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>−</button>
                    <input 
                     type="number" 
-                    value={quantity} 
-                    onChange={(e) => setQuantity(parseInt(e.target.value) || 0)} 
+                    value={selectedQuantity} 
+                    onChange={(e) => updateSelectedQuantity(parseInt(e.target.value) || 0)} 
                     style={{ padding: "1px 1px", fontSize: 15, fontWeight: 700, borderLeft: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0", width:60, textAlign: "center" }} 
                   />
-                  <button onClick={() => setQuantity(q => q + 1)} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>+</button>
+                  <button onClick={() => updateSelectedQuantity(current => current + 1)} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>+</button>
                 </div>
               </div>
 
@@ -568,11 +631,14 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                 {stickyInCart ? "✓ Added — Add More" : "Add to Cart"}
               </button>
 
-              <button style={{ width: "100%", padding: "13px 0", fontSize: 14, fontWeight: 700, borderRadius: 10, border: "2px solid #0f172a", background: "#fff", cursor: "pointer", color: "#0f172a", transition: "background .15s" }}
-                onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
-                onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
+              {/* <button
+                onClick={handleBuyNow}
+                disabled={!canBuyNow}
+                style={{ width: "100%", padding: "13px 0", fontSize: 14, fontWeight: 700, borderRadius: 10, border: "2px solid #0f172a", background: "#fff", cursor: canBuyNow ? "pointer" : "not-allowed", color: "#0f172a", transition: "background .15s", opacity: canBuyNow ? 1 : 0.5 }}
+                onMouseEnter={e => { if (canBuyNow) e.currentTarget.style.background = "#f8fafc"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "#fff"; }}>
                 Buy Now
-              </button>
+              </button> */}
 
               {product.variants && product.variants.length > 1 && (
                 <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, textAlign: "center" }}>
