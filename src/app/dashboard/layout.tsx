@@ -1,54 +1,113 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
-import Sidebar from "@/components/layout/sidebar";
+import DashboardSmartSearch from "@/components/dashboard/DashboardSmartSearch";
 import SmartSearchBar from "@/components/SartSearchBar";
+import Sidebar from "@/components/layout/sidebar";
+
 type Role = "admin" | "dealer" | "staff" | "accountant";
+
+type DashboardUser = {
+  role?: Role;
+  name?: string;
+  username?: string;
+  email?: string;
+  id?: string;
+  admin_id?: string;
+  Admin_Id?: string;
+  Dealer_Id?: string;
+  Dealer_Name?: string;
+  Dealer_City?: string;
+  staff_id?: string;
+  staff_name?: string;
+  staff_location?: string;
+  staff_designation?: string;
+  staff_roletype?: string;
+};
 
 const DEMO_ACCOUNTANT_ID = "demo000000000000000000000";
 
-function decodeJWTPayload(token: string): Record<string, any> | null {
+function decodeJWTPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
     const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(base64));
+    return JSON.parse(atob(base64)) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-function resolveNonAccountantUser(): any {
+function readStoredObject(key: string): Record<string, unknown> | null {
   if (typeof window === "undefined") return null;
+
   try {
-    const staffRaw = localStorage.getItem("staffData");
-    if (staffRaw) {
-      const p = JSON.parse(staffRaw);
-      if (p?.staff_id) return { role: (p.staff_roletype === "0" ? "admin" : "staff") as Role, ...p };
-    }
-    const userData = localStorage.getItem("UserData");
-    if (userData) {
-      const p = JSON.parse(userData);
-      if (p?.Dealer_Id) return { role: "dealer" as Role, ...p };
-      if (p?.staff_id) return { role: (p.staff_roletype === "0" ? "admin" : "staff") as Role, ...p };
-      if (localStorage.getItem("roletype") === "3" && p && Object.keys(p).length > 0)
-        return { role: "admin" as Role, ...p };
-    }
-    const adminRaw = localStorage.getItem("AdminData") || localStorage.getItem("admin");
-    if (adminRaw) {
-      const p = JSON.parse(adminRaw);
-      if (p && Object.keys(p).length > 0) return { role: "admin" as Role, ...p };
-    }
-  } catch (_) { }
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function asUser(role: Role, value: Record<string, unknown> | null): DashboardUser | null {
+  return value ? { role, ...(value as DashboardUser) } : null;
+}
+
+function resolveNonAccountantUser(): DashboardUser | null {
+  if (typeof window === "undefined") return null;
+
+  const staff = readStoredObject("staffData");
+  if (typeof staff?.staff_id === "string" && staff.staff_id) {
+    return asUser(staff.staff_roletype === "0" ? "admin" : "staff", staff);
+  }
+
+  const userData = readStoredObject("UserData");
+  if (typeof userData?.Dealer_Id === "string" && userData.Dealer_Id) {
+    return asUser("dealer", userData);
+  }
+  if (typeof userData?.staff_id === "string" && userData.staff_id) {
+    return asUser(userData.staff_roletype === "0" ? "admin" : "staff", userData);
+  }
+  if (localStorage.getItem("roletype") === "3" && userData && Object.keys(userData).length > 0) {
+    return asUser("admin", userData);
+  }
+
+  const admin = readStoredObject("AdminData") ?? readStoredObject("admin");
+  if (admin && Object.keys(admin).length > 0) {
+    return asUser("admin", admin);
+  }
+
   return null;
+}
+
+function resolveInitialUser(): DashboardUser | null {
+  if (typeof window === "undefined") return null;
+
+  const token = localStorage.getItem("accountant_token");
+  if (token) {
+    const payload = decodeJWTPayload(token);
+    const id = typeof payload?.sub === "string" ? payload.sub : undefined;
+
+    if (id === DEMO_ACCOUNTANT_ID) {
+      const accountant = readStoredObject("AccountantData");
+      return asUser("accountant", accountant ?? { name: "Demo Accountant", email: "demo@omsons.com" });
+    }
+
+    const accountant = readStoredObject("AccountantData");
+    if (accountant) return asUser("accountant", accountant);
+  }
+
+  return resolveNonAccountantUser();
 }
 
 let ledgerWarmupStarted = false;
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<DashboardUser | null>(() => resolveInitialUser());
 
   useEffect(() => {
     if (ledgerWarmupStarted) return;
@@ -62,78 +121,80 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     const token = localStorage.getItem("accountant_token");
-    if (token) {
-      const payload = decodeJWTPayload(token);
-      const id = payload?.sub as string | undefined;
+    if (!token) return;
 
-      if (id === DEMO_ACCOUNTANT_ID) {
-        // Demo account has no DB record — use localStorage
-        try {
-          const raw = localStorage.getItem("AccountantData");
-          const data = raw ? JSON.parse(raw) : { name: "Demo Accountant", email: "demo@omsons.com" };
-          setUser({ role: "accountant", ...data });
-        } catch {
-          setUser({ role: "accountant", name: "Demo Accountant", email: "demo@omsons.com" });
+    const payload = decodeJWTPayload(token);
+    const id = typeof payload?.sub === "string" ? payload.sub : undefined;
+    if (!id || id === DEMO_ACCOUNTANT_ID) return;
+
+    fetch(`/api/accountants/${id}`)
+      .then((response) => response.json())
+      .then((json) => {
+        if (json.success && json.data && typeof json.data === "object") {
+          setUser({ role: "accountant", ...(json.data as DashboardUser) });
+          return;
         }
-        return;
-      }
 
-      if (id) {
-        // Real accountant — fetch fresh from MongoDB
-        fetch(`/api/accountants/${id}`)
-          .then(r => r.json())
-          .then(json => {
-            if (json.success) {
-              setUser({ role: "accountant", ...json.data });
-            } else {
-              // Fallback to localStorage if API fails
-              try {
-                const raw = localStorage.getItem("AccountantData");
-                if (raw) setUser({ role: "accountant", ...JSON.parse(raw) });
-              } catch { /* ignore */ }
-            }
-          })
-          .catch(() => {
-            try {
-              const raw = localStorage.getItem("AccountantData");
-              if (raw) setUser({ role: "accountant", ...JSON.parse(raw) });
-            } catch { /* ignore */ }
-          });
-        return;
-      }
-    }
-
-    setUser(resolveNonAccountantUser());
+        const accountant = readStoredObject("AccountantData");
+        if (accountant) {
+          setUser({ role: "accountant", ...(accountant as DashboardUser) });
+        }
+      })
+      .catch(() => {
+        const accountant = readStoredObject("AccountantData");
+        if (accountant) {
+          setUser({ role: "accountant", ...(accountant as DashboardUser) });
+        }
+      });
   }, []);
 
   const role: Role = user?.role ?? "admin";
 
-  // ── Display name — matches embedded logic per role ──
   const displayName =
-    role === "accountant" ? (user?.name || "Accountant") :
-    role === "dealer"     ? (user?.Dealer_Name || "Dealer") :
-    role === "staff"      ? (user?.staff_name || "Staff") :
-      user?.name ?? user?.username ?? "Admin";
+    role === "accountant"
+      ? user?.name || "Accountant"
+      : role === "dealer"
+        ? user?.Dealer_Name || "Dealer"
+        : role === "staff"
+          ? user?.staff_name || "Staff"
+          : user?.name ?? user?.username ?? "Admin";
 
-  // ── Subtitle ──
   const displaySub =
-    role === "accountant" ? (user?.email ?? "Finance portal") :
-    role === "dealer"     ? user?.Dealer_City ?? "Dealer dashboard" :
-    role === "staff"      ? [user?.staff_location, user?.staff_designation].filter(Boolean).join(" · ") || `ID: ${user?.staff_id ?? ""}` :
-      "System administration dashboard";
+    role === "accountant"
+      ? user?.email ?? "Finance portal"
+      : role === "dealer"
+        ? user?.Dealer_City ?? "Dealer dashboard"
+        : role === "staff"
+          ? [user?.staff_location, user?.staff_designation].filter(Boolean).join(" · ") || `ID: ${user?.staff_id ?? ""}`
+          : "System administration dashboard";
 
-  // ── Per-role search placeholder ──
   const searchPlaceholder =
-    role === "admin"       ? "Search orders, dealers, staff…" :
-    role === "dealer"      ? "Search orders, products…" :
-    role === "accountant"  ? "Search orders, payments…" :
-      "Search orders, dealers…";
+    role === "admin"
+      ? "Search products, orders, dealers, staff..."
+      : role === "dealer"
+        ? "Search products and your orders..."
+        : role === "accountant"
+          ? "Search orders, payments..."
+          : "Search products and assigned orders...";
 
-  // ── User ID for API calls that need an id param ──
   const userId =
-    role === "dealer" ? user?.Dealer_Id :
-      role === "staff" ? user?.staff_id :
-        undefined;
+    role === "dealer"
+      ? user?.Dealer_Id
+      : role === "staff"
+        ? user?.staff_id
+        : undefined;
+
+  const dashboardActorId =
+    role === "dealer"
+      ? user?.Dealer_Id
+      : role === "staff"
+        ? user?.staff_id
+        : user?.staff_id ?? user?.id ?? user?.admin_id ?? user?.Admin_Id ?? user?.email ?? "";
+
+  const dashboardRoleType =
+    role === "admin"
+      ? String(user?.staff_roletype ?? "0")
+      : String(user?.staff_roletype ?? "");
 
   return (
     <>
@@ -152,32 +213,44 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         }
         .dl-hamburger {
           flex-shrink: 0;
-          width: 38px; height: 38px;
+          width: 38px;
+          height: 38px;
           border-radius: 10px;
           border: 1px solid rgba(255,255,255,0.15);
           background: rgba(255,255,255,0.06);
-          display: flex; align-items: center; justify-content: center;
-          cursor: pointer; color: #fff;
-          transition: background .15s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          color: #fff;
+          transition: background 0.15s;
         }
-        .dl-hamburger:hover { background: rgba(255,255,255,0.12); }
-        .dl-title { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .dl-sub   { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 1px; }
+        .dl-hamburger:hover {
+          background: rgba(255,255,255,0.12);
+        }
+        .dl-title {
+          font-size: 15px;
+          font-weight: 600;
+          color: #fff;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dl-sub {
+          font-size: 11px;
+          color: rgba(255,255,255,0.5);
+          margin-top: 1px;
+        }
       `}</style>
 
       <div style={{ minHeight: "100vh", background: "#f0f2f5", fontFamily: "Arial, Helvetica, sans-serif" }}>
-
         <Sidebar open={open} onClose={() => setOpen(false)} />
 
         <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-
-          {/* ── Topbar ── */}
           <header className="dl-topbar">
-
-            {/* Hamburger */}
             <button
               className="dl-hamburger"
-              onClick={() => setOpen((v) => !v)}
+              onClick={() => setOpen((value) => !value)}
               aria-label="Toggle sidebar"
             >
               {open ? (
@@ -191,35 +264,34 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               )}
             </button>
 
-            {/* Logo */}
             <img
               src="https://omsonsapp.vercel.app/headicon.png"
               alt="Omsons"
               style={{ height: 44, flexShrink: 0 }}
             />
 
-            {/* Welcome + subtitle */}
             <div style={{ minWidth: 0 }}>
-              <div className="dl-title">
-                {user ? `Welcome, ${displayName}` : "Dashboard"}
-              </div>
+              <div className="dl-title">{user ? `Welcome, ${displayName}` : "Dashboard"}</div>
               {displaySub && <div className="dl-sub">{displaySub}</div>}
             </div>
 
-            {/* ── Smart Search (replaces original dumb search box) ── */}
-            <SmartSearchBar
-              role={role}
-              userId={userId}
-              placeholder={searchPlaceholder}
-            />
-
+            {role === "accountant" ? (
+              <SmartSearchBar
+                role={role}
+                userId={userId}
+                placeholder={searchPlaceholder}
+              />
+            ) : (
+              <DashboardSmartSearch
+                role={role}
+                actorId={dashboardActorId}
+                roletype={dashboardRoleType}
+                placeholder={searchPlaceholder}
+              />
+            )}
           </header>
 
-          {/* Page content */}
-          <main style={{ flex: 1 }}>
-            {children}
-          </main>
-
+          <main style={{ flex: 1 }}>{children}</main>
         </div>
       </div>
     </>

@@ -339,5 +339,5 @@ test("Draft and reorder source paths still carry productNote fields", async () =
   assert.match(addOrderSource, /productNote:\s*row\.productNote \?\? ""/);
   assert.match(addOrderSource, /maxLength=\{500\}/);
   assert.match(orderDetailSource, /api\/order-product-notes\?orderId=/);
-  assert.match(orderDetailSource, /getremark\?id=/);
+  assert.doesNotMatch(orderDetailSource, /getremark\?id=/);
 });

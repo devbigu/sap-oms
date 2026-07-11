@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useMemo, useRef, useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import moment from "moment";
 import * as XLSX from "xlsx";
 import { hasPriorityTag } from "@/lib/orderPriority";
-import { downloadOrderInvoice } from "@/lib/invoicegenerator";
+import { downloadOrderInvoice, type OrderInvoiceData } from "@/lib/invoicegenerator";
 import {
   formatAdditionalDiscountBadge,
   getOrderDiscountSummaryRows,
@@ -13,6 +13,14 @@ import {
   resolveOrderDiscountBreakdown,
 } from "@/lib/orderAmounts";
 import { mergeFallbackProductNotes } from "@/lib/orderProductNotes.mjs";
+import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
+import {
+  mergeOrderItemsWithDispatchRecords,
+  canUserEditDispatch,
+  type DispatchUserSession,
+  type OrderDispatchRecord,
+  type DispatchStatus,
+} from "@/lib/orderDispatch";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -41,10 +49,49 @@ type OrderData = {
   discount: string;
   order_discount: string;
   del_status: string;
+  accept_order?: string;
+  staffid?: string;
+  assignedstaff?: string;
+  orderdata_dealerid?: string;
   Dealer_Name?: string;
   Dealer_Address?: string;
   Dealer_Number?: string;
   gst?: string;
+  order_dealer?: string;
+  packSize?: number | string;
+  pack_size?: number | string;
+  totalPieces?: number | string;
+  total_pieces?: number | string;
+  quantityPacks?: number | string;
+  quantity_packs?: number | string;
+  unitPrice?: number | string;
+  unit_price?: number | string;
+  listPriceTotal?: number | string;
+  list_price_total?: number | string;
+  listPrice?: number | string;
+  list_price?: number | string;
+  discountAmount?: number | string;
+  discount_amount?: number | string;
+  finalPrice?: number | string;
+  final_price?: number | string;
+  totalDiscountPercent?: number | string;
+  total_discount_percentage?: number | string;
+  total_discount?: number | string;
+  orderItemId?: string | null;
+  orderedQuantity?: number;
+  dispatchedQuantity?: number;
+  remainingQuantity?: number;
+  dispatchStatus?: DispatchStatus;
+  dispatchHistory?: Array<{
+    id: string;
+    quantity: number;
+    remark: string;
+    status: DispatchStatus;
+    actorId: string;
+    actorRole: "staff" | "admin";
+    createdAt: string | Date;
+  }>;
+  occurrence?: number;
 };
 
 type DealerInfo = {
@@ -65,13 +112,6 @@ type DealerInfo = {
   // annualtarget?: string;
   staffname?: string;
   currentlimit?: string;
-};
-
-type Remark = {
-  remark: string;
-  readyquantity: string;
-  status: string;
-  datetime: string;
 };
 
 type OrderSummaryOverride = Record<string, unknown> & {
@@ -99,6 +139,95 @@ type OrderProductNote = {
   note?: string;
 };
 
+type OrderMeta = Record<string, unknown> & {
+  accept_order?: string;
+  staffid?: string;
+  assignedstaff?: string;
+  order_dealer?: string;
+  orderdata_dealerid?: string;
+  del_status?: string;
+  order_status?: string;
+  Dealer_Name?: string;
+  Dealer_Address?: string;
+  Dealer_Number?: string;
+  gst?: string;
+  mtstatus?: string;
+  order_date?: string;
+  outstandingDate?: string;
+  totalDiscountPercentage?: number | string;
+  discountPercent?: number | string;
+  allocatedDiscountPercent?: number | string;
+  allocatedDiscount?: number | string;
+  approvedDiscountPercent?: number | string;
+  items?: unknown[];
+};
+
+type OrderApiItem = Record<string, unknown> & {
+  productId?: unknown;
+  id?: unknown;
+  orderId?: unknown;
+  catNo?: unknown;
+  orderdata_cat_no?: unknown;
+  quantityPacks?: unknown;
+  quantity?: unknown;
+  orderdata_item_quantity?: unknown;
+  unitPrice?: unknown;
+  unit_price?: unknown;
+  orderdata_price?: unknown;
+  discountAmount?: unknown;
+  orderdata_discount?: unknown;
+  finalPrice?: unknown;
+  final_price?: unknown;
+  orderdata_afterDisPrice?: unknown;
+  status?: unknown;
+  orderdata_status?: unknown;
+  documentDate?: unknown;
+  orderdata_datetime?: unknown;
+  productName?: unknown;
+  product_name?: unknown;
+  productDescription?: unknown;
+  product_discription?: unknown;
+  unit?: unknown;
+  product_unit?: unknown;
+  packSize?: unknown;
+  pack_size?: unknown;
+  totalPieces?: unknown;
+  total_pieces?: unknown;
+  readyQuantity?: unknown;
+  readyquantity?: unknown;
+  remark?: unknown;
+  remarks?: unknown;
+  priority?: unknown;
+  isPriority?: unknown;
+  is_priority?: unknown;
+  totalDiscountPercent?: unknown;
+  discount?: unknown;
+  del_status?: unknown;
+  accept_order?: unknown;
+  staffid?: unknown;
+  assignedstaff?: unknown;
+  order_dealer?: unknown;
+  orderdata_dealerid?: unknown;
+};
+
+type DispatchRecordResponse = OrderDispatchRecord & {
+  remainingQuantity?: number;
+};
+
+type OrderDispatchAccessMeta = {
+  accept_order?: string;
+  staffid?: string;
+  assignedstaff?: string;
+  del_status?: string;
+  order_status?: string;
+  order_dealer?: string;
+};
+
+type OrderDispatchAccessState = {
+  key: string;
+  meta: OrderDispatchAccessMeta | null;
+};
+
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
 
 type PhpExchangeLog = {
@@ -119,6 +248,114 @@ function logPhpExchange(label: string, details: PhpExchangeLog) {
   console.groupEnd();
 }
 
+function firstNonEmptyString(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+async function fetchOrderDispatchAccessMeta(orderId: string, dealerId: string): Promise<OrderDispatchAccessMeta | null> {
+  const url = `${BACKEND}/orderhispegination?page=1&limit=20&search=${encodeURIComponent(orderId)}&id=${encodeURIComponent(dealerId)}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`orderhispegination failed with ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const matched = rows.find((entry: Record<string, unknown>) => String(entry?.order_id ?? "").trim() === String(orderId).trim()) ?? rows[0];
+  if (!matched) return null;
+
+  return {
+    accept_order: firstNonEmptyString(matched.accept_order),
+    staffid: firstNonEmptyString(matched.staffid),
+    assignedstaff: firstNonEmptyString(matched.assignedstaff),
+    del_status: firstNonEmptyString(matched.del_status),
+    order_status: firstNonEmptyString(matched.order_status),
+    order_dealer: firstNonEmptyString(matched.order_dealer),
+  };
+}
+
+function resolveCurrentUser(): DispatchUserSession | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const staffRaw = localStorage.getItem("staffData");
+    if (staffRaw) {
+      const parsed = JSON.parse(staffRaw);
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+    }
+
+    const userRaw = localStorage.getItem("UserData");
+    if (userRaw) {
+      const parsed = JSON.parse(userRaw);
+      if (parsed?.Dealer_Id) {
+        return {
+          role: "dealer",
+          id: String(parsed.Dealer_Id),
+          name: parsed.Dealer_Name || "",
+        };
+      }
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+      if (localStorage.getItem("roletype") === "3" && parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || ""),
+          name: parsed.name || parsed.email || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+
+    const adminRaw = localStorage.getItem("AdminData") || localStorage.getItem("admin");
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw);
+      if (parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || ""),
+          name: parsed.name || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function buildDispatchHeaders(user: DispatchUserSession | null): HeadersInit {
+  return {
+    ...(user?.id ? { "x-omsons-actor-id": user.id } : {}),
+    ...(user?.role ? { "x-omsons-actor-role": user.role } : {}),
+    ...(user?.roletype ? { "x-omsons-actor-roletype": user.roletype } : {}),
+  };
+}
+
+function buildDispatchRecordFallbackKey(record: Partial<OrderDispatchRecord>) {
+  return [
+    String(record.orderId ?? "").trim(),
+    String(record.normalizedSku ?? record.sku ?? "").trim().toLowerCase(),
+    String(record.occurrence ?? ""),
+  ].join("::");
+}
+
 // ─── Status config ─────────────────────────────────────────────────────────────
 const itemStatusMap: Record<string, { label: string; dot: string; text: string; bg: string }> = {
   "0": { label: "In Process",   dot: "bg-amber-400",   text: "text-amber-700",   bg: "bg-amber-50"   },
@@ -126,10 +363,11 @@ const itemStatusMap: Record<string, { label: string; dot: string; text: string; 
   "2": { label: "Dispatched",   dot: "bg-indigo-400",  text: "text-indigo-700",  bg: "bg-indigo-50"  },
   "3": { label: "Not in Stock", dot: "bg-red-400",     text: "text-red-700",     bg: "bg-red-50"     },
   "4": { label: "Successful",   dot: "bg-emerald-400", text: "text-emerald-700", bg: "bg-emerald-50" },
-};
-
-const remarkStatusMap: Record<string, string> = {
-  "1": "Packing", "2": "Dispatch", "3": "Not in Stock", "4": "Successful",
+  pending: { label: "Pending", dot: "bg-amber-400", text: "text-amber-700", bg: "bg-amber-50" },
+  packing: { label: "Packing", dot: "bg-blue-400", text: "text-blue-700", bg: "bg-blue-50" },
+  dispatched: { label: "Dispatched", dot: "bg-indigo-400", text: "text-indigo-700", bg: "bg-indigo-50" },
+  not_in_stock: { label: "Not in Stock", dot: "bg-red-400", text: "text-red-700", bg: "bg-red-50" },
+  successful: { label: "Successful", dot: "bg-emerald-400", text: "text-emerald-700", bg: "bg-emerald-50" },
 };
 
 function StatusPill({ code }: { code: string }) {
@@ -186,21 +424,28 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function asStringOrNumber(value: unknown): string | number | undefined {
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
 function closeTo(a: number, b: number): boolean {
   return Math.abs(a - b) <= Math.max(0.01, Math.abs(b) * 0.01);
 }
 
-function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMeta?: any) {
-  const item: any = o;
-  const orderedQuantity = num(item.orderdata_item_quantity);
-  const ready = num(item.readyquantity);
-  const unitPrice = num(item.unitPrice ?? item.unit_price ?? item.orderdata_price);
-  const packSize = num(item.packSize ?? item.pack_size ?? packLookup[item.orderdata_cat_no]) || 1;
-  const explicitPieces = num(item.totalPieces ?? item.total_pieces);
-  const explicitPacks = num(item.quantityPacks ?? item.quantity_packs);
+function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMeta?: OrderMeta | null) {
+  const orderedQuantity = num(o.orderdata_item_quantity);
+  const ready = num(o.dispatchedQuantity ?? o.readyquantity);
+  const unitPrice = num(o.unitPrice ?? o.unit_price ?? o.orderdata_price);
+  const packSize = num(o.packSize ?? o.pack_size ?? packLookup[o.orderdata_cat_no]) || 1;
+  const explicitPieces = num(o.totalPieces ?? o.total_pieces);
+  const explicitPacks = num(o.quantityPacks ?? o.quantity_packs);
 
-  const storedDiscount = num(item.discountAmount ?? item.discount_amount ?? item.orderdata_discount ?? item.order_discount);
-  const storedNet = num(item.finalPrice ?? item.final_price ?? item.orderdata_afterDisPrice);
+  const storedDiscount = num(o.discountAmount ?? o.discount_amount ?? o.orderdata_discount ?? o.order_discount);
+  const storedNet = num(o.finalPrice ?? o.final_price ?? o.orderdata_afterDisPrice);
   const storedGross = storedDiscount + storedNet;
   const quantityGross = orderedQuantity * unitPrice;
   const packGross = quantityGross * packSize;
@@ -216,10 +461,10 @@ function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMe
     packs = orderedQuantity;
   }
 
-  const explicitGross = num(item.listPriceTotal ?? item.list_price_total ?? item.listPrice ?? item.list_price);
+  const explicitGross = num(o.listPriceTotal ?? o.list_price_total ?? o.listPrice ?? o.list_price);
   const gross = explicitGross > 0 ? explicitGross : storedGross > 0 ? storedGross : unitPrice * pieces;
 
-  const perItemPct = num(item.totalDiscountPercent ?? item.total_discount_percentage ?? item.total_discount ?? item.discount);
+  const perItemPct = num(o.totalDiscountPercent ?? o.total_discount_percentage ?? o.total_discount ?? o.discount);
   const orderPct = num(orderMeta?.totalDiscountPercentage ?? orderMeta?.discountPercent ?? orderMeta?.allocatedDiscountPercent ?? orderMeta?.allocatedDiscount);
   const derivedPct = gross > 0 && storedDiscount > 0 ? Math.round((storedDiscount / gross) * 10000) / 100 : 0;
   const pct = perItemPct || orderPct || derivedPct;
@@ -230,7 +475,7 @@ function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMe
   return {
     orderedQuantity,
     ready,
-    left: orderedQuantity - ready,
+    left: typeof o.remainingQuantity === "number" ? o.remainingQuantity : orderedQuantity - ready,
     pieces,
     packs,
     packSize,
@@ -242,88 +487,53 @@ function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMe
   };
 }
 
-function TrackingModal({ orderId, itemName, leftQty, onClose }: {
-  orderId: string; itemName: string; leftQty: number; onClose: () => void;
-}) {
-  const [remarks, setRemarks] = useState<Remark[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`${BACKEND}/getremark?id=${orderId}`)
-      .then(r => r.json())
-      .then(d => { setRemarks(d.data ?? []); setLoading(false); });
-  }, [orderId]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backdropFilter: "blur(12px)", background: "rgba(0,0,0,0.3)" }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="bg-white rounded-3xl shadow-xl w-full max-w-xl border border-gray-100"
-        style={{ animation: "popIn 0.2s cubic-bezier(0.34,1.56,0.64,1)" }}>
-        <div className="px-6 pt-6 pb-4">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Tracking History</p>
-              <h3 className="text-[16px] font-bold text-gray-900 leading-tight">{itemName}</h3>
-              <p className="text-[13px] text-gray-500 mt-0.5">
-                {leftQty > 0
-                  ? <span className="text-red-600 font-semibold">{leftQty} units pending</span>
-                  : <span className="text-emerald-600 font-semibold">Fully dispatched</span>}
-              </p>
-            </div>
-            <button onClick={onClose}
-              className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors flex-shrink-0">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div className="border-t border-gray-100 overflow-auto max-h-[50vh]">
-          {loading ? (
-            <div className="flex items-center justify-center py-12 gap-2 text-gray-400 text-sm">
-              <div className="w-4 h-4 border-2 border-gray-200 border-t-gray-500 rounded-full animate-spin" />
-              Loading…
-            </div>
-          ) : remarks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-2 text-gray-400">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" />
-              </svg>
-              <p className="text-[13px]">No tracking history yet.</p>
-            </div>
-          ) : (
-            <div className="px-6 py-4 flex flex-col gap-3">
-              {remarks.map((r, i) => (
-                <div key={i} className="flex gap-4 items-start">
-                  <div className="flex flex-col items-center pt-0.5 flex-shrink-0">
-                    <div className="w-2 h-2 rounded-full bg-gray-900" />
-                    {i < remarks.length - 1 && <div className="w-px flex-1 bg-gray-200 mt-1.5 min-h-[24px]" />}
-                  </div>
-                  <div className="flex-1 pb-3">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
-                        {remarkStatusMap[r.status] ?? r.status}
-                      </span>
-                      <span className="text-[11px] text-gray-400 font-mono">{r.readyquantity} ready</span>
-                      <span className="text-[11px] text-gray-400 ml-auto">{moment(r.datetime).format("DD MMM, hh:mm A")}</span>
-                    </div>
-                    {r.remark && <p className="text-[13px] text-gray-700">{r.remark}</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+export function LegacyTrackingModal() {
+  return null;
 }
 
 // ─── View Toggle ───────────────────────────────────────────────────────────────
+function TrackingModal({
+  isOpen,
+  orderId,
+  dealerId,
+  assignedStaffId,
+  acceptOrder,
+  delStatus,
+  items,
+  currentUser,
+  selectedItemId,
+  onClose,
+  onRecordSaved,
+}: {
+  isOpen: boolean;
+  orderId: string;
+  dealerId?: string;
+  assignedStaffId?: string;
+  acceptOrder?: string;
+  delStatus?: string;
+  items: OrderData[];
+  currentUser: DispatchUserSession | null;
+  selectedItemId: string | null;
+  onClose: () => void;
+  onRecordSaved: (record: OrderDispatchRecord) => void;
+}) {
+  return (
+    <ProductDispatchPanel
+      isOpen={isOpen}
+      orderId={orderId}
+      dealerId={dealerId}
+      assignedStaffId={assignedStaffId}
+      acceptOrder={acceptOrder}
+      delStatus={delStatus}
+      items={items}
+      currentUser={currentUser}
+      selectedItemId={selectedItemId}
+      onClose={onClose}
+      onRecordSaved={onRecordSaved}
+    />
+  );
+}
+
 type ViewMode = "table" | "cards";
 
 function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
@@ -350,10 +560,25 @@ function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode
 }
 
 // ─── Card View ─────────────────────────────────────────────────────────────────
-function ItemCard({ o, idx, year, packLookup, orderMeta, onTrack }: { o: OrderData; idx: number; year: number; packLookup: Record<string, number>; orderMeta?: any; onTrack: () => void }) {
+function ItemCard({
+  o,
+  idx,
+  packLookup,
+  orderMeta,
+  onDispatch,
+  dispatchLabel,
+}: {
+  o: OrderData;
+  idx: number;
+  packLookup: Record<string, number>;
+  orderMeta?: OrderMeta | null;
+  onDispatch: () => void;
+  dispatchLabel: string;
+}) {
   const pricing = getRowPricing(o, packLookup, orderMeta);
   const left    = pricing.left;
   const isDeleted = o.del_status === "1";
+  const originalRemarksText = [o.remark, o.remarks].filter(Boolean).join(" | ");
   const progressPct = pricing.orderedQuantity > 0
     ? Math.round((pricing.ready / pricing.orderedQuantity) * 100) : 0;
   const isPriority = hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks);
@@ -373,9 +598,10 @@ function ItemCard({ o, idx, year, packLookup, orderMeta, onTrack }: { o: OrderDa
           </div>
           <h3 className="text-[14px] font-bold text-gray-900 truncate">{o.product_name || "—"}</h3>
           {o.product_discription && <p className="text-[12px] text-gray-500 truncate mt-0.5">{o.product_discription}</p>}
-          {o.displayRemark && <p className="mt-2 text-[11px] leading-5 text-gray-600">{o.displayRemark}</p>}
+          {o.fallbackProductNote && <p className="mt-2 text-[11px] leading-5 text-indigo-700">Product Note: {o.fallbackProductNote}</p>}
+          {originalRemarksText && <p className="mt-2 text-[11px] leading-5 text-gray-600">{originalRemarksText}</p>}
         </div>
-        <StatusPill code={o.orderdata_status} />
+        <StatusPill code={String(o.dispatchStatus ?? o.orderdata_status ?? "0")} />
       </div>
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -409,12 +635,12 @@ function ItemCard({ o, idx, year, packLookup, orderMeta, onTrack }: { o: OrderDa
       </div>
       <div className="flex items-center justify-between border-t border-gray-100 pt-3">
         <span className="text-[11px] text-gray-400 font-mono">{o.orderdata_datetime || "—"}</span>
-        <button onClick={onTrack} disabled={isDeleted}
+        <button onClick={onDispatch} disabled={isDeleted}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-all ${isDeleted ? "opacity-40 cursor-not-allowed bg-gray-50 text-gray-400 border-gray-200" : "bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50"}`}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
           </svg>
-          Track
+          {dispatchLabel}
         </button>
       </div>
     </div>
@@ -442,27 +668,43 @@ export default function ViewOrderDealerPage() {
 
   const [orders,    setOrders   ] = useState<OrderData[]>([]);
   const [loading,   setLoading  ] = useState(true);
-  const [trackItem, setTrackItem] = useState<{ id: string; name: string; leftQty: number } | null>(null);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
-  const [dealer,    setDealer   ] = useState<DealerInfo | null>(null);
   const [localOrderNote, setLocalOrderNote] = useState("");
   const [packLookup, setPackLookup] = useState<Record<string, number>>({});
-  const [orderMeta, setOrderMeta] = useState<any>(null);
+  const [orderMeta, setOrderMeta] = useState<OrderMeta | null>(null);
+  const [orderAccessState, setOrderAccessState] = useState<OrderDispatchAccessState>({ key: "", meta: null });
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
+  const [dispatchRecords, setDispatchRecords] = useState<DispatchRecordResponse[]>([]);
+  const [activeDispatchItemId, setActiveDispatchItemId] = useState<string | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
-  // Read dealer info from localStorage
-  useEffect(() => {
+  const dealer = useMemo<DealerInfo | null>(() => {
+    if (typeof window === "undefined") return null;
     try {
       const raw = localStorage.getItem("UserData");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.Dealer_Id) setDealer(parsed as DealerInfo);
-      }
-    } catch (_) {}
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed?.Dealer_Id ? parsed as DealerInfo : null;
+    } catch {
+      return null;
+    }
   }, []);
+  const currentUser = useMemo<DispatchUserSession | null>(() => resolveCurrentUser(), []);
+  const orderAccessDealerId = useMemo(
+    () => firstNonEmptyString(
+      orders[0]?.order_dealer,
+      orders[0]?.orderdata_dealerid,
+      orderMeta?.order_dealer,
+      orderMeta?.orderdata_dealerid
+    ),
+    [orderMeta, orders]
+  );
+  const orderAccessKey = useMemo(
+    () => (id && orderAccessDealerId ? `${id}:${orderAccessDealerId}` : ""),
+    [id, orderAccessDealerId]
+  );
+  const orderAccessMeta = orderAccessState.key === orderAccessKey ? orderAccessState.meta : null;
 
   useEffect(() => {
     if (!id) return;
@@ -480,29 +722,28 @@ export default function ViewOrderDealerPage() {
         // - legacy: d.data = [ { orderdata_... } , ... ]
         // - new   : d.data = { ...orderFields, items: [ { productId, productName, quantityPacks, packSize, totalPieces, ... } ] }
         try {
-          const raw = d.data;
-          let items: any[] = [];
+          const raw: unknown = d.data;
+          let items: OrderApiItem[] = [];
+          const rawMeta = Array.isArray(raw) ? asRecord(raw[0]) : asRecord(raw);
+
           if (Array.isArray(raw)) {
-            if (raw.length === 0) items = [];
-            else if (raw[0] && (raw[0].productId || raw[0].productName || raw[0].quantityPacks !== undefined)) {
-              // array of new-style items
-              items = raw as any[];
-            } else if (raw[0] && raw[0].items && Array.isArray(raw[0].items)) {
-              items = raw[0].items;
+            if (raw.length === 0) {
+              items = [];
+            } else if (rawMeta.productId || rawMeta.productName || rawMeta.quantityPacks !== undefined) {
+              items = raw.map((entry) => asRecord(entry) as OrderApiItem);
+            } else if (Array.isArray(rawMeta.items)) {
+              items = rawMeta.items.map((entry) => asRecord(entry) as OrderApiItem);
             } else {
-              // assume legacy array of OrderData
               setOrders(raw as OrderData[]);
-              setOrderMeta(raw[0] ?? null);
+              setOrderMeta(rawMeta as OrderMeta);
               setLoading(false);
               return;
             }
-          } else if (raw && typeof raw === "object") {
-            if (Array.isArray(raw.items)) items = raw.items;
-            else items = [];
+          } else if (Array.isArray(rawMeta.items)) {
+            items = rawMeta.items.map((entry) => asRecord(entry) as OrderApiItem);
           }
 
-          // Map new-style items into OrderData shape expected by the UI
-          const mapped: OrderData[] = (items ?? []).map((it: any, idx: number) => ({
+          const mapped: OrderData[] = items.map((it, idx) => ({
             orderdata_id: String(it.productId ?? it.id ?? `new-${idx}`),
             orderdata_orderid: String(it.orderId ?? id),
             orderdata_cat_no: String(it.productId ?? it.catNo ?? it.orderdata_cat_no ?? ""),
@@ -511,40 +752,60 @@ export default function ViewOrderDealerPage() {
             orderdata_discount: String(it.discountAmount ?? it.orderdata_discount ?? 0),
             orderdata_afterDisPrice: String(it.finalPrice ?? it.final_price ?? it.orderdata_afterDisPrice ?? 0),
             orderdata_status: String(it.status ?? it.orderdata_status ?? "0"),
-            orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? d?.order_date ?? new Date().toISOString()),
+            orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? rawMeta.order_date ?? new Date().toISOString()),
             product_name: String(it.productName ?? it.product_name ?? ""),
             product_discription: String(it.productDescription ?? it.product_discription ?? ""),
             product_unit: String(it.unit ?? it.product_unit ?? "Pcs"),
-            // keep original pack info when available for later calculations
-            packSize: it.packSize ?? it.pack_size ?? undefined,
-            totalPieces: it.totalPieces ?? it.total_pieces ?? undefined,
+            packSize: asStringOrNumber(it.packSize) ?? asStringOrNumber(it.pack_size),
+            totalPieces: asStringOrNumber(it.totalPieces) ?? asStringOrNumber(it.total_pieces),
             readyquantity: String(it.readyQuantity ?? it.readyquantity ?? 0),
-            remark: it.remark ?? it.remarks ?? undefined,
-            remarks: it.remarks ?? it.remark ?? undefined,
-            priority: it.priority ?? false,
-            isPriority: it.isPriority ?? undefined,
-            is_priority: it.is_priority ?? undefined,
+            remark: typeof it.remark === "string" ? it.remark : typeof it.remarks === "string" ? it.remarks : undefined,
+            remarks: typeof it.remarks === "string" ? it.remarks : typeof it.remark === "string" ? it.remark : undefined,
+            priority: typeof it.priority === "string" || typeof it.priority === "boolean" ? it.priority : false,
+            isPriority: typeof it.isPriority === "string" || typeof it.isPriority === "boolean" ? it.isPriority : undefined,
+            is_priority: typeof it.is_priority === "string" || typeof it.is_priority === "boolean" ? it.is_priority : undefined,
             discount: String(it.totalDiscountPercent ?? it.discount ?? 0),
             order_discount: String(it.discountAmount ?? 0),
             del_status: String(it.del_status ?? "0"),
-            Dealer_Name: d?.Dealer_Name ?? undefined,
-            Dealer_Address: d?.Dealer_Address ?? undefined,
-            Dealer_Number: d?.Dealer_Number ?? undefined,
-            gst: d?.gst ?? undefined,
+            accept_order: String(it.accept_order ?? rawMeta.accept_order ?? ""),
+            staffid: String(it.staffid ?? rawMeta.staffid ?? ""),
+            assignedstaff: String(it.assignedstaff ?? rawMeta.assignedstaff ?? ""),
+            orderdata_dealerid: String(it.orderdata_dealerid ?? rawMeta.orderdata_dealerid ?? ""),
+            Dealer_Name: typeof rawMeta.Dealer_Name === "string" ? rawMeta.Dealer_Name : undefined,
+            Dealer_Address: typeof rawMeta.Dealer_Address === "string" ? rawMeta.Dealer_Address : undefined,
+            Dealer_Number: typeof rawMeta.Dealer_Number === "string" ? rawMeta.Dealer_Number : undefined,
+            gst: typeof rawMeta.gst === "string" ? rawMeta.gst : undefined,
+            order_dealer: String(it.order_dealer ?? rawMeta.order_dealer ?? it.orderdata_dealerid ?? rawMeta.orderdata_dealerid ?? ""),
           }));
 
           setOrders(mapped);
-          // capture order-level metadata if present
-          const meta = (Array.isArray(raw) ? (raw[0] ?? {}) : raw) ?? {};
+          setOrderMeta(rawMeta as OrderMeta);
+        } catch {
+          setOrders(Array.isArray(d.data) ? (d.data as OrderData[]) : []);
+          const meta = (Array.isArray(d.data) ? asRecord(d.data[0]) : asRecord(d.data)) as OrderMeta;
           setOrderMeta(meta);
-        } catch (err) {
-            setOrders(d.data ?? []);
-            const meta = (Array.isArray(d.data) ? (d.data[0] ?? {}) : d.data) ?? {};
-            setOrderMeta(meta);
         }
         setLoading(false);
       });
   }, [id]);
+
+  useEffect(() => {
+    if (!id || !orderAccessDealerId || !orderAccessKey) return;
+
+    let cancelled = false;
+
+    fetchOrderDispatchAccessMeta(id, orderAccessDealerId)
+      .then((meta) => {
+        if (!cancelled) setOrderAccessState({ key: orderAccessKey, meta });
+      })
+      .catch(() => {
+        if (!cancelled) setOrderAccessState({ key: orderAccessKey, meta: null });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, orderAccessDealerId, orderAccessKey]);
 
   useEffect(() => {
     if (!id) return;
@@ -580,14 +841,32 @@ export default function ViewOrderDealerPage() {
       .catch(() => {});
   }, [id]);
 
+  useEffect(() => {
+    if (!id || !currentUser?.id) return;
+
+    fetch(`/api/order-dispatch?orderId=${encodeURIComponent(id)}`, {
+      cache: "no-store",
+      headers: buildDispatchHeaders(currentUser),
+    })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((json) => {
+        if (json.success && Array.isArray(json.data)) {
+          setDispatchRecords(json.data);
+        } else {
+          setDispatchRecords([]);
+        }
+      })
+      .catch(() => setDispatchRecords([]));
+  }, [currentUser, id]);
+
   // Load product pack sizes (catNo → packSize) from local product data
   useEffect(() => {
     fetch('/data/products.json')
       .then(r => r.json())
-      .then((data: any[]) => {
+      .then((data: Array<Record<string, unknown>>) => {
         const map: Record<string, number> = {};
         (data ?? []).forEach(product => {
-          const desc = product.Description ?? product.Description ?? "";
+          const desc = String(product.Description ?? "");
           const pmap = parsePackSizes(desc);
           Object.assign(map, pmap);
         });
@@ -596,10 +875,27 @@ export default function ViewOrderDealerPage() {
       .catch(() => {});
   }, []);
 
-  const displayOrders = useMemo(
-    () => mergeFallbackProductNotes(orders, fallbackProductNotes) as OrderData[],
-    [orders, fallbackProductNotes]
-  );
+  const displayOrders = useMemo(() => {
+    const withProductNotes = mergeFallbackProductNotes(orders, fallbackProductNotes) as OrderData[];
+    return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
+  }, [dispatchRecords, fallbackProductNotes, orders]);
+
+  const handleDispatchRecordSaved = (record: OrderDispatchRecord) => {
+    const nextRecord = record as DispatchRecordResponse;
+    setDispatchRecords((previous) => {
+      const index = previous.findIndex((entry) =>
+        String(entry.orderItemId ?? "") && String(record.orderItemId ?? "")
+          ? entry.orderItemId === record.orderItemId
+          : buildDispatchRecordFallbackKey(entry) === buildDispatchRecordFallbackKey(record)
+      );
+
+      if (index === -1) return [nextRecord, ...previous];
+
+      const copy = [...previous];
+      copy[index] = nextRecord;
+      return copy;
+    });
+  };
 
   const handleExport = () => {
     if (!tableRef.current) return;
@@ -609,6 +905,40 @@ export default function ViewOrderDealerPage() {
 
   const firstOrder = displayOrders[0];
   const displayOrderMeta = summaryOverride ? { ...(orderMeta ?? {}), ...summaryOverride } : orderMeta;
+  const assignedStaffId = firstNonEmptyString(
+    orderAccessMeta?.assignedstaff,
+    orderAccessMeta?.staffid,
+    firstOrder?.assignedstaff,
+    firstOrder?.staffid,
+    displayOrderMeta?.assignedstaff,
+    displayOrderMeta?.staffid
+  );
+  const acceptOrder = firstNonEmptyString(
+    orderAccessMeta?.accept_order,
+    firstOrder?.accept_order,
+    displayOrderMeta?.accept_order,
+    "0"
+  );
+  const orderDeleted = firstNonEmptyString(
+    orderAccessMeta?.del_status,
+    firstOrder?.del_status,
+    displayOrderMeta?.del_status,
+    "0"
+  );
+  const dealerIdForDispatch = firstNonEmptyString(
+    orderAccessMeta?.order_dealer,
+    firstOrder?.order_dealer,
+    firstOrder?.orderdata_dealerid,
+    displayOrderMeta?.order_dealer,
+    displayOrderMeta?.orderdata_dealerid,
+    dealer?.Dealer_Id
+  );
+  const canEditDispatchDetails = canUserEditDispatch(currentUser, {
+    dealerId: dealerIdForDispatch,
+    assignedStaffId,
+    acceptOrder,
+    delStatus: orderDeleted,
+  });
   // Compute totals from the same row pricing used by the table and cards.
   const calculatedTotals = displayOrders.reduce((acc, o) => {
     const pricing = getRowPricing(o, packLookup, displayOrderMeta);
@@ -703,7 +1033,7 @@ export default function ViewOrderDealerPage() {
   const handleDownloadInvoice = async () => {
     if (displayOrders.length === 0 || invoiceLoading) return;
     setInvoiceLoading(true);
-    const result = await downloadOrderInvoice(buildInvoiceOrder() as any);
+    const result = await downloadOrderInvoice(buildInvoiceOrder() as OrderInvoiceData);
     setInvoiceLoading(false);
     setInvoiceToast({
       type: result.success ? "success" : "error",
@@ -877,10 +1207,10 @@ export default function ViewOrderDealerPage() {
           {!loading && displayOrders.length > 0 && viewMode === "cards" && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {displayOrders.map((o, idx) => {
-                const pricing = getRowPricing(o, packLookup, displayOrderMeta);
                 return (
-                  <ItemCard key={o.orderdata_id} o={o} idx={idx} year={year} packLookup={packLookup} orderMeta={displayOrderMeta}
-                    onTrack={() => setTrackItem({ id: o.orderdata_id, name: o.product_name || o.orderdata_cat_no, leftQty: pricing.left })} />
+                  <ItemCard key={o.orderdata_id} o={o} idx={idx} packLookup={packLookup} orderMeta={displayOrderMeta}
+                    dispatchLabel={canEditDispatchDetails ? "Update Dispatch" : "View Dispatch"}
+                    onDispatch={() => setActiveDispatchItemId(o.orderdata_id)} />
                 );
               })}
             </div>
@@ -925,8 +1255,11 @@ export default function ViewOrderDealerPage() {
                           </td>
                           <td className="px-4 py-3.5 max-w-[140px]">
                             <span className="block truncate text-[12px] text-gray-600">{o.product_discription || "—"}</span>
-                            {o.displayRemark && (
-                              <span className="mt-1 block text-[11px] leading-5 text-gray-500">{o.displayRemark}</span>
+                            {o.fallbackProductNote && (
+                              <span className="mt-1 block text-[11px] leading-5 text-indigo-700">Product Note: {o.fallbackProductNote}</span>
+                            )}
+                            {([o.remark, o.remarks].filter(Boolean).join(" | ")) && (
+                              <span className="mt-1 block text-[11px] leading-5 text-gray-500">{[o.remark, o.remarks].filter(Boolean).join(" | ")}</span>
                             )}
                           </td>
                           <td className="px-4 py-3.5 font-mono font-bold text-gray-900">{pricing.packs}</td>
@@ -940,18 +1273,18 @@ export default function ViewOrderDealerPage() {
                           <td className="px-4 py-3.5 font-mono text-gray-500 line-through text-[12px]">₹{pricing.gross.toLocaleString("en-IN")}</td>
                           <td className="px-4 py-3.5 font-mono text-amber-700 font-semibold">−₹{pricing.discount.toLocaleString("en-IN")}</td>
                           <td className="px-4 py-3.5 font-mono font-bold text-emerald-700">₹{pricing.final.toLocaleString("en-IN")}</td>
-                          <td className="px-4 py-3.5"><StatusPill code={o.orderdata_status} /></td>
+                          <td className="px-4 py-3.5"><StatusPill code={String(o.dispatchStatus ?? o.orderdata_status ?? "0")} /></td>
                           <td className="px-4 py-3.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{o.orderdata_datetime || "—"}</td>
                           <td className="px-4 py-3.5 w-px">
                             <div className="track-btn">
                               <button
-                                onClick={() => !isDeleted && setTrackItem({ id: o.orderdata_id, name: o.product_name || o.orderdata_cat_no, leftQty: left })}
+                                onClick={() => !isDeleted && setActiveDispatchItemId(o.orderdata_id)}
                                 disabled={isDeleted}
                                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all whitespace-nowrap ${isDeleted ? "opacity-30 cursor-not-allowed bg-gray-50 text-gray-400 border-gray-100" : "bg-white text-gray-600 border-gray-200 hover:border-indigo-200 hover:text-indigo-600 hover:bg-indigo-50"}`}>
                                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
                                 </svg>
-                                Track
+                                {canEditDispatchDetails ? "Update Dispatch" : "View Dispatch"}
                               </button>
                             </div>
                           </td>
@@ -976,9 +1309,19 @@ export default function ViewOrderDealerPage() {
         </div>
       )}
 
-      {trackItem && (
-        <TrackingModal orderId={trackItem.id} itemName={trackItem.name} leftQty={trackItem.leftQty} onClose={() => setTrackItem(null)} />
-      )}
+      <TrackingModal
+        isOpen={!!activeDispatchItemId}
+        orderId={id}
+        dealerId={dealerIdForDispatch}
+        assignedStaffId={assignedStaffId}
+        acceptOrder={acceptOrder}
+        delStatus={orderDeleted}
+        items={displayOrders}
+        currentUser={currentUser}
+        selectedItemId={activeDispatchItemId}
+        onClose={() => setActiveDispatchItemId(null)}
+        onRecordSaved={handleDispatchRecordSaved}
+      />
     </>
   );
 }

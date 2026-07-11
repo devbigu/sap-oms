@@ -1438,8 +1438,8 @@ export default function OrdersPage() {
                             <ActionMenu
                               showDelete={showDelete}
                               showAccept={showAccept}
-                              showDispatch={session.role === 'staff'}
-                              dispatchDisabled={session.role === 'staff' && (order.accept_order !== '1' || order.del_status !== '0')}
+                              showDispatch={false}
+                              dispatchDisabled={true}
                               acceptOrder={order.accept_order}
                               // ── unified route: same detail page as order history ──
                               onView={() => router.push(`/orders/${order.order_id}`)}
