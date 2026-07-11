@@ -76,6 +76,15 @@ test("item note is used before reason", () => {
   }), "Pack carefully");
 });
 
+test("Product note text does not leak into the invoice Remarks section", () => {
+  assert.equal(resolveInvoiceRemark({
+    itemRemarks: [
+      "Cat. No: 50/1 | Product note: Pack separately | Order note: Deliver before Friday",
+    ],
+    reason: "Fallback reason",
+  }), "Deliver before Friday");
+});
+
 test("slab technical reason becomes readable text", () => {
   assert.equal(resolveInvoiceRemark({
     reason: "slab_or_approved_discount",

@@ -15,6 +15,9 @@ import {
     reconcileInvoiceRowAmounts,
     type InvoiceRowStage,
 } from "@/lib/invoiceRowReconciliation";
+import {
+    mergeProductNotesIntoInvoiceItems,
+} from "@/lib/orderProductNotes.mjs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -79,6 +82,7 @@ const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
 interface OrderItem {
     orderdata_id: string;
+    orderdata_orderid?: string;
     orderdata_cat_no: string;
     orderdata_item_quantity: string;
     orderdata_price: string;
@@ -93,6 +97,43 @@ interface OrderItem {
     priority?: string | boolean;
     isPriority?: string | boolean;
     is_priority?: string | boolean;
+    productNote?: string;
+}
+
+type InvoiceDescriptionMeta = {
+    mainText: string;
+    noteText: string;
+};
+
+type InvoiceDisplayRow = InvoiceRowStage & {
+    descriptionMainText: string;
+    descriptionNoteText: string;
+};
+
+function buildInvoiceDescriptionMeta({
+    productName,
+    catalogueNumber,
+    productNote,
+    isPriority,
+}: {
+    productName: string;
+    catalogueNumber: string;
+    productNote: string;
+    isPriority: boolean;
+}): InvoiceDescriptionMeta {
+    const baseName = String(productName || catalogueNumber || "—").trim();
+    const catNumber = String(catalogueNumber || "").trim();
+    const normalizedNote = String(productNote || "").trim();
+
+    const mainLines = [
+        `${baseName}${productName && catNumber ? ` — Cat. No: ${catNumber}` : ""}`,
+        isPriority ? "[PRIORITY DELIVERY]" : "",
+    ].filter(Boolean);
+
+    return {
+        mainText: mainLines.join("\n"),
+        noteText: normalizedNote ? `(${normalizedNote})` : "",
+    };
 }
 
 async function fetchOrderSummaryOverride(order: OrderInvoiceData): Promise<Record<string, any> | null> {
@@ -138,6 +179,7 @@ async function fetchOrderItems(orderId: string): Promise<OrderItem[]> {
         // Normalize new-style items into OrderItem shape used below
         return (items ?? []).map((it: any, idx: number) => ({
             orderdata_id: String(it.productId ?? it.id ?? `i-${idx}`),
+            orderdata_orderid: String(it.orderdata_orderid ?? it.orderId ?? orderId),
             orderdata_cat_no: resolveCatalogueNumber(it),
             orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
             orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
@@ -246,6 +288,22 @@ async function fetchSavedOrderNote(orderId: string): Promise<string> {
         return typeof note === "string" ? note.trim() : "";
     } catch {
         return "";
+    }
+}
+
+async function fetchOrderProductNotes(orderId: string): Promise<Array<Record<string, any>>> {
+    try {
+        const response = await fetch(
+            `/api/order-product-notes?orderId=${encodeURIComponent(orderId)}`,
+            { cache: "no-store" }
+        );
+
+        if (!response.ok) return [];
+
+        const json = await response.json();
+        return Array.isArray(json?.data) ? json.data : [];
+    } catch {
+        return [];
     }
 }
 
@@ -381,6 +439,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         const raw = (displayOrder as any).items as any[];
         orderItems = raw.map((it: any, idx: number) => ({
             orderdata_id: String(it.productId ?? it.id ?? `i-${idx}`),
+            orderdata_orderid: String(it.orderdata_orderid ?? it.orderId ?? displayOrder.order_id),
             orderdata_cat_no: String(it.productId ?? it.catNo ?? it.orderdata_cat_no ?? ""),
             orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
             orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
@@ -403,6 +462,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     } else {
         orderItems = await fetchOrderItems(displayOrder.order_id);
     }
+
+    const productNotes = await fetchOrderProductNotes(String(displayOrder.order_id));
+    orderItems = mergeProductNotesIntoInvoiceItems(orderItems, productNotes) as OrderItem[];
 
     // Resolve the order note used in the invoice Remarks section.
     const savedNote = await fetchSavedOrderNote(String(displayOrder.order_id));
@@ -571,7 +633,7 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     const itemRows: any[][] = [];
     let totalQty = 0;
     let totalPieces = 0;
-    const stagedRows: InvoiceRowStage[] = [];
+    const stagedRows: InvoiceDisplayRow[] = [];
 
     // Build pack lookup from products.json (public data)
     const packLookup: Record<string, number> = {};
@@ -626,7 +688,12 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             const isPriority = hasPriorityTag(item.priority, item.isPriority, item.is_priority, item.remark, item.remarks);
             const productName = String(item.product_name || "").trim();
             const catalogueNumber = resolveCatalogueNumber(itemAny);
-            const description = `${productName || catalogueNumber || "\u2014"}${productName && catalogueNumber ? ` \u2014 Cat. No: ${catalogueNumber}` : ""}${isPriority ? "\n[PRIORITY DELIVERY]" : ""}`;
+            const descriptionMeta = buildInvoiceDescriptionMeta({
+                productName,
+                catalogueNumber,
+                productNote: String(item.productNote ?? ""),
+                isPriority,
+            });
 
             totalQty += qty;
             totalPieces += pieces;
@@ -637,7 +704,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
                 quantity: qty,
                 packSize: pack,
                 pieces,
-                description,
+                description: [descriptionMeta.mainText, descriptionMeta.noteText].filter(Boolean).join("\n"),
+                descriptionMainText: descriptionMeta.mainText,
+                descriptionNoteText: descriptionMeta.noteText,
                 productUnit: item.product_unit || "Pcs",
             });
         });
@@ -656,9 +725,17 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         });
 
         reconciled.rows.forEach((row, idx) => {
+            const displayRow = stagedRows[idx];
             itemRows.push([
                 { content: String(idx + 1).padStart(2, "0"), styles: { halign: "center" } },
-                { content: row.description, styles: { halign: "left" } },
+                {
+                    content: row.description,
+                    styles: { halign: "left", textColor: [255, 255, 255] },
+                    customDescription: {
+                        mainText: displayRow.descriptionMainText,
+                        noteText: displayRow.descriptionNoteText,
+                    },
+                },
                 { content: String(row.quantity), styles: { halign: "center" } },
                 { content: `${row.quantity} x ${row.packSize}`, styles: { halign: "center" } },
                 { content: String(row.pieces), styles: { halign: "center" } },
@@ -686,9 +763,25 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
         const fpack = Number(packLookup[(displayOrder as any).orderdata_cat_no] ?? 1) || 1;
         const fpieces = totalQty * fpack;
         totalPieces = fpieces;
+        const fallbackDescription = buildInvoiceDescriptionMeta({
+            productName: String(displayOrder.product_name || "").trim(),
+            catalogueNumber: String((displayOrder as any).orderdata_cat_no || "").trim(),
+            productNote: String((displayOrder as any).productNote ?? ""),
+            isPriority: hasPriorityTag(
+                (displayOrder as any).priority,
+                (displayOrder as any).isPriority,
+                (displayOrder as any).is_priority,
+                (displayOrder as any).remark,
+                (displayOrder as any).remarks,
+            ),
+        });
         itemRows.push([
             { content: "01", styles: { halign: "center" } },
-            { content: (() => { const pn = String(displayOrder.product_name || "").trim(); const cn = String((displayOrder as any).orderdata_cat_no || "").trim(); return `${pn || cn || "Omsons Glassware Products"}${pn && cn ? ` \u2014 Cat. No: ${cn}` : ""}`; })(), styles: { halign: "left" } },
+            {
+                content: [fallbackDescription.mainText, fallbackDescription.noteText].filter(Boolean).join("\n"),
+                styles: { halign: "left", textColor: [255, 255, 255] },
+                customDescription: fallbackDescription,
+            },
             { content: String(totalQty), styles: { halign: "center" } },
             { content: `${totalQty} x ${fpack}`, styles: { halign: "center" } },
             { content: String(fpieces), styles: { halign: "center" } },
@@ -749,6 +842,39 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
             lineColor: [0, 0, 0], lineWidth: 0.2, valign: "middle", minCellHeight: 10,
         },
         alternateRowStyles: { fillColor: [255, 255, 255] },
+        didDrawCell: (data) => {
+            const rawCell = data.cell.raw as { customDescription?: InvoiceDescriptionMeta } | undefined;
+            const descriptionMeta = rawCell?.customDescription;
+
+            if (data.section !== "body" || data.column.index !== 1 || !descriptionMeta) {
+                return;
+            }
+
+            const availableWidth = data.cell.width - data.cell.padding("left") - data.cell.padding("right");
+            const mainLines = doc.splitTextToSize(descriptionMeta.mainText, availableWidth) as string[];
+            const noteLines = descriptionMeta.noteText
+                ? doc.splitTextToSize(descriptionMeta.noteText, availableWidth) as string[]
+                : [];
+            const lineHeight = ((data.cell.styles.fontSize ?? 8) * 0.352778) * 1.15;
+            let cursorY = data.cell.y + data.cell.padding("top") + ((data.cell.styles.fontSize ?? 8) * 0.352778);
+            const textX = data.cell.x + data.cell.padding("left");
+
+            doc.setTextColor(0, 0, 0);
+            doc.setFont("Helvetica", "normal");
+            mainLines.forEach((line) => {
+                doc.text(line, textX, cursorY);
+                cursorY += lineHeight;
+            });
+
+            if (noteLines.length > 0) {
+                doc.setFont("Helvetica", "italic");
+                noteLines.forEach((line) => {
+                    doc.text(line, textX, cursorY);
+                    cursorY += lineHeight;
+                });
+                doc.setFont("Helvetica", "normal");
+            }
+        },
     });
 
     y = (doc as any).lastAutoTable.finalY + 3;

@@ -210,12 +210,10 @@ function buildOrderRemarks(
   variantCode: string,
   isPriority: boolean | undefined,
   orderNote: string,
-  productNote?: string,
 ): string {
   return buildLineRemarks(
     buildPriorityRemarks(variantCode, isPriority),
     orderNote,
-    String(productNote ?? ""),
   );
 }
 
@@ -1372,7 +1370,7 @@ function AddOrderPageInner() {
         discountPercent: String(rowDiscountPercent),
         totalDiscountPercent: String(rowDiscountPercent),
         afterDiscountPrice: payloadAmount(Math.max(0, rowSubtotal - rowDiscountAmount)),
-        remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote, r.productNote),
+        remarks: buildOrderRemarks(r.variantCode, r.isPriority, orderNote),
         priority: r.isPriority ? "1" : "0",
         isPriority: !!r.isPriority,
       };

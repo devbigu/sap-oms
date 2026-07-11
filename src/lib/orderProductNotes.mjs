@@ -30,15 +30,12 @@ export function isExpectedOrderNumber(value) {
 /**
  * @param {string} priorityRemarks
  * @param {string} orderNote
- * @param {string} productNote
  */
-export function buildOrderRemarks(priorityRemarks, orderNote, productNote) {
-  const lineNote = normalizeProductNote(productNote);
+export function buildOrderRemarks(priorityRemarks, orderNote) {
   const generalNote = String(orderNote ?? "").trim();
 
   return [
     String(priorityRemarks ?? "").trim(),
-    lineNote ? `Product note: ${lineNote}` : "",
     generalNote ? `Order note: ${generalNote}` : "",
   ]
     .filter(Boolean)
@@ -242,6 +239,29 @@ export function buildFallbackLookupKey(orderId, normalizedSku, occurrence) {
 }
 
 /**
+ * @param {unknown} value
+ */
+export function extractLegacyProductNote(value) {
+  if (typeof value !== "string") return "";
+
+  const match = value.match(/(?:^|\|)\s*Product note:\s*([^|]+)/i);
+  return match?.[1]?.trim() || "";
+}
+
+/**
+ * @param {string} productName
+ * @param {string} productNote
+ */
+export function buildInvoiceProductName(productName, productNote) {
+  const normalizedName = String(productName ?? "").trim();
+  const normalizedNote = normalizeProductNote(productNote);
+
+  return normalizedName && normalizedNote
+    ? `${normalizedName}\n(${normalizedNote})`
+    : normalizedName;
+}
+
+/**
  * @param {Array<Record<string, any>>} items
  * @param {Array<Record<string, any>>} fallbackNotes
  */
@@ -289,6 +309,55 @@ export function mergeFallbackProductNotes(items, fallbackNotes) {
         remarks: item?.remarks,
         fallbackNote,
       }),
+    };
+  });
+}
+
+/**
+ * @param {Array<Record<string, any>>} items
+ * @param {Array<Record<string, any>>} fallbackNotes
+ */
+export function mergeProductNotesIntoInvoiceItems(items, fallbackNotes) {
+  const byOrderItemId = new Map();
+  const bySkuOccurrence = new Map();
+
+  for (const note of fallbackNotes ?? []) {
+    const noteText = normalizeProductNote(note?.note);
+    if (!noteText) continue;
+
+    const orderItemId = normalizeOrderItemId(note?.orderItemId);
+    if (orderItemId) byOrderItemId.set(orderItemId, noteText);
+
+    const orderId = String(note?.orderId ?? "").trim();
+    const normalizedSku = normalizeSku(note?.normalizedSku ?? note?.sku);
+    const occurrence = Number(note?.occurrence) || 1;
+    if (orderId && normalizedSku) {
+      bySkuOccurrence.set(buildFallbackLookupKey(orderId, normalizedSku, occurrence), noteText);
+    }
+  }
+
+  /** @type {Map<string, number>} */
+  const occurrenceCounts = new Map();
+
+  return (items ?? []).map((item) => {
+    const normalizedSku = resolveNormalizedSku(item);
+    const occurrence = normalizedSku
+      ? (occurrenceCounts.get(normalizedSku) ?? 0) + 1
+      : 1;
+
+    if (normalizedSku) occurrenceCounts.set(normalizedSku, occurrence);
+
+    const orderId = resolveOrderId(item);
+    const orderItemId = normalizeOrderItemId(item?.orderdata_id ?? item?.orderItemId ?? item?.id);
+    const mongoNote = orderItemId && byOrderItemId.has(orderItemId)
+      ? byOrderItemId.get(orderItemId)
+      : bySkuOccurrence.get(buildFallbackLookupKey(orderId, normalizedSku, occurrence)) ?? "";
+    const legacyNote = extractLegacyProductNote(getCombinedRemarkText(item));
+    const productNote = mongoNote || legacyNote;
+
+    return {
+      ...item,
+      productNote,
     };
   });
 }
