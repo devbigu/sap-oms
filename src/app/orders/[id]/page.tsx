@@ -1033,7 +1033,9 @@ export default function ViewOrderDealerPage() {
   const handleDownloadInvoice = async () => {
     if (displayOrders.length === 0 || invoiceLoading) return;
     setInvoiceLoading(true);
-    const result = await downloadOrderInvoice(buildInvoiceOrder() as OrderInvoiceData);
+    const result = await downloadOrderInvoice(buildInvoiceOrder() as OrderInvoiceData, {
+      normalizedRole: currentUser?.role,
+    });
     setInvoiceLoading(false);
     setInvoiceToast({
       type: result.success ? "success" : "error",

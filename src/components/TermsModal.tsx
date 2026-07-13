@@ -104,7 +104,7 @@ export default function TermsModal({
           </TermsSection>
 
           <TermsSection title="5. Prohibited Activities">
-            You are prohibited from using the platform to transmit any unsolicited or unauthorized advertising or promotional material, engage in any conduct that restricts or inhibits anyone's use or enjoyment of the platform, or use the platform in any way that violates any applicable local, national, or international law or regulation.
+            You are prohibited from using the platform to transmit any unsolicited or unauthorized advertising or promotional material, engage in any conduct that restricts or inhibits anyone&apos;s use or enjoyment of the platform, or use the platform in any way that violates any applicable local, national, or international law or regulation.
           </TermsSection>
 
           <TermsSection title="6. Disclaimer">

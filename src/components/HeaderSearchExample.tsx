@@ -87,7 +87,7 @@ export function storeCategoryFilter(value: string) {
   } catch { /* ignore */ }
 }
 
-export function userName() {
+export function UserName() {
   const [value, setValue] = useState(null);
   useEffect(() => {
     try {
@@ -97,7 +97,7 @@ export function userName() {
       setValue(data?.Dealer_Name ?? data?.city ?? data?.District ?? data?.district ?? null)
     } catch { /* ignore */ }
   }, [])
-  return <div className='font-bold uppercase'>{value}</div>;
+  return <span className="font-bold uppercase">{value}</span>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -256,7 +256,11 @@ const Header = () => {
       setActiveIndex(i => Math.max(i - 1, -1))
     } else if (e.key === "Enter") {
       e.preventDefault()
-      activeIndex >= 0 ? goToProduct(suggestions[activeIndex]) : commitSearch()
+      if (activeIndex >= 0) {
+        goToProduct(suggestions[activeIndex])
+      } else {
+        commitSearch()
+      }
     } else if (e.key === "Escape") {
       setShowDropdown(false); setActiveIndex(-1)
     }
@@ -408,7 +412,7 @@ const Header = () => {
         {/* ACCOUNT */}
         <div className="flex flex-col border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer relative group">
           <div className="flex flex-col">
-            <span className="text-xs text-gray-300 flex">Hello, <div className='font-bold uppercase'>{userName()}</div></span>
+            <span className="text-xs text-gray-300 flex">Hello, <UserName /></span>
             <span className="text-sm font-bold">Account &amp; Lists</span>
           </div>
           <div className="absolute right-0 top-full mt-1 w-106 hidden group-hover:block z-60 bg-white shadow-lg border border-gray-200 rounded p-3 transition-all">

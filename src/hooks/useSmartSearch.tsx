@@ -123,7 +123,7 @@ function mapResultsToSearchItems(
     let label = "";
     let sublabel = "";
     let route = "/";
-    let id = item.id || item.Dealer_Id || item.staff_id || item.order_id || item.Order_Id || "";
+      const id = item.id || item.Dealer_Id || item.staff_id || item.order_id || item.Order_Id || "";
 
     if (category === "dealers") {
       label = item.Dealer_Name || item.name || "Dealer";

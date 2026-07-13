@@ -51,7 +51,7 @@ export async function PUT(
 
   try {
     const body = await req.json();
-    const { dealer_id, name, rows, shipto, refno, order_note, coupon_code, coupon_pct } = body;
+    const { dealer_id, name, rows, shipto, refno, order_note, coupon_code, coupon_pct, approval_state, source, source_request_id } = body;
 
     if (!dealer_id)
       return NextResponse.json({ success: false, message: "dealer_id required" }, { status: 400 });
@@ -64,6 +64,9 @@ export async function PUT(
     if (order_note  !== undefined) set.order_note  = order_note;
     if (coupon_code !== undefined) set.coupon_code = coupon_code;
     if (coupon_pct  !== undefined) set.coupon_pct  = coupon_pct;
+    if (approval_state !== undefined) set.approval_state = approval_state;
+    if (source !== undefined) set.source = source;
+    if (source_request_id !== undefined) set.source_request_id = source_request_id;
 
     const db     = await getDb();
     const result = await db

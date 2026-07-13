@@ -77,6 +77,10 @@ export interface InvoiceResult {
     error?: string;
 }
 
+type InvoiceDownloadOptions = {
+    normalizedRole?: string | null;
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
@@ -428,7 +432,7 @@ function resolveCatalogueNumber(item: any): string {
 
 
 // ─── Main PDF Generator ───────────────────────────────────────────────────────
-export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<Blob> {
+export async function generateOrderInvoicePDF(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<Blob> {
     const dp = getDealerProfile();
     const summaryOverride = await fetchOrderSummaryOverride(order);
     const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
@@ -540,7 +544,9 @@ export async function generateOrderInvoicePDF(order: OrderInvoiceData): Promise<
     doc.setFont("Helvetica", "bold");
     doc.setFontSize(11);
     const isApproved = (displayOrder as any).accept_order === "1" || Number(displayOrder.mtstatus ?? 0) >= 2 || String(displayOrder.mtstatus ?? "").toLowerCase().includes("completed");
-    const titleStr = isApproved ? "ORDER INVOICE" : "PURCHASE ORDER";
+    const normalizedRole = String(options?.normalizedRole ?? "").trim().toLowerCase();
+    const documentTitle = normalizedRole === "staff" ? "SALES ORDER" : "PURCHASE ORDER";
+    const titleStr = isApproved ? "ORDER INVOICE" : documentTitle;
     const titleW = doc.getTextWidth(titleStr);
     const titleX = PW / 2;
     doc.text(titleStr, titleX, y, { align: "center" });
@@ -1056,9 +1062,9 @@ export async function uploadOrderInvoiceToSupabase(
 }
 
 // ─── Download to device ────────────────────────────────────────────────────────
-export async function downloadOrderInvoice(order: OrderInvoiceData): Promise<InvoiceResult> {
+export async function downloadOrderInvoice(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<InvoiceResult> {
     try {
-        const blob = await generateOrderInvoicePDF(order);
+        const blob = await generateOrderInvoicePDF(order, options);
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;

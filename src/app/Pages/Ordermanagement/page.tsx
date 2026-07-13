@@ -191,6 +191,35 @@ function customDiscountBadge(progress: CustomDiscountProgress) {
   }
   return null
 }
+
+function formatOrderListMoney(amount: number, minimumFractionDigits = 0) {
+  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits, maximumFractionDigits: 2 })}`
+}
+
+function resolveAdditionalDiscountDisplay(amounts: {
+  additionalDiscountType?: string | null
+  customDiscountAmount?: number
+  slabDiscountAmount?: number
+  slabDiscountPercent?: number
+}) {
+  if (amounts.additionalDiscountType === 'custom' && safeNumber(amounts.customDiscountAmount) > 0) {
+    return {
+      label: 'Custom',
+      amountText: formatOrderListMoney(safeNumber(amounts.customDiscountAmount), 2),
+    }
+  }
+
+  if (amounts.additionalDiscountType === 'slab' && safeNumber(amounts.slabDiscountAmount) > 0) {
+    const slabPercent = safeNumber(amounts.slabDiscountPercent)
+    return {
+      label: slabPercent > 0 ? `Slab ${slabPercent}%` : 'Slab',
+      amountText: formatOrderListMoney(safeNumber(amounts.slabDiscountAmount), 2),
+    }
+  }
+
+  return null
+}
+
 function highlight(text: string, query: string) {
   if (!query || !text) return text
   const idx = text.toLowerCase().indexOf(query.toLowerCase())
@@ -1372,6 +1401,9 @@ export default function OrdersPage() {
                     const hlDealer   = dealerInput  ? highlight(order.Dealer_Name || '—', dealerInput) : (order.Dealer_Name || '—')
                     const amounts    = withDisplayOrderAmounts(order, summaryOverrides[order.order_id])
                     const discountBadge = formatAdditionalDiscountBadge(amounts)
+                    const additionalDiscountDisplay = session?.role === 'admin'
+                      ? resolveAdditionalDiscountDisplay(amounts)
+                      : null
                     const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(order.order_id)]
                     const customBadge = customDiscountBadge(customDiscountSummary?.customDiscountStatus ?? null)
 
@@ -1395,8 +1427,19 @@ export default function OrdersPage() {
 
                         <td><span className="amount-pill">₹{amounts.grossAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
                         <td className="mono-sm">
-                          ₹{amounts.discountAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                          {discountBadge && <div className="qty-info" style={{ color: '#4f46e5' }}>{discountBadge}</div>}
+                          {formatOrderListMoney(amounts.discountAmount)}
+                          {additionalDiscountDisplay ? (
+                            <>
+                              <div className="qty-info" style={{ color: '#4f46e5', fontWeight: 600 }}>
+                                {additionalDiscountDisplay.label}
+                              </div>
+                              <div className="qty-info" style={{ color: '#4f46e5' }}>
+                                {additionalDiscountDisplay.amountText}
+                              </div>
+                            </>
+                          ) : (
+                            discountBadge && <div className="qty-info" style={{ color: '#4f46e5' }}>{discountBadge}</div>
+                          )}
                         </td>
                         <td className="mono-sm">₹{amounts.netPayableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
 

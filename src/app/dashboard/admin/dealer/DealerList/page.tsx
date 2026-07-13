@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
+import { confirmAlert } from 'react-confirm-alert'
 import {
   dealerStatusBadge,
   fetchDealerStatusOverrides,
@@ -86,7 +87,8 @@ export default function DealerListPage() {
   const [toastMsg,      setToastMsg]      = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
   const [openMenu, setOpenMenu] = useState<string | null>(null)
-  const [updatingDealerId, setUpdatingDealerId] = useState<string | null>(null)
+  const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null)
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, DealerStatus>>({})
 
   const queryClient = useQueryClient()
 
@@ -124,16 +126,23 @@ export default function DealerListPage() {
   const {
     data: statusResponse,
     isError: statusLoadError,
-    refetch: refetchStatuses,
   } = useQuery<DealerStatusDocument[]>({
     queryKey: ["dealer-statuses"],
     queryFn: fetchDealerStatusOverrides,
     staleTime: 5 * 60 * 1000,
   })
 
-  const statusMap = useMemo(() => new Map(
-    (statusResponse ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
-  ), [statusResponse])
+  const statusMap = useMemo(() => {
+    const nextMap = new Map(
+      (statusResponse ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
+    )
+
+    Object.entries(statusOverrides).forEach(([dealerId, status]) => {
+      nextMap.set(String(dealerId), normalizeDealerStatus(status))
+    })
+
+    return nextMap
+  }, [statusResponse, statusOverrides])
 
   const data: Dealer[] = useMemo(() => {
     return (response?.data || []).map((dealer) => ({
@@ -184,24 +193,115 @@ export default function DealerListPage() {
     }
   }
 
-  const handleStatusToggle = async (dealer: Dealer) => {
-    const currentStatus = normalizeDealerStatus(dealer.status)
-    const nextStatus: DealerStatus = currentStatus === "active" ? "inactive" : "active"
-    setUpdatingDealerId(dealer.Dealer_Id)
+  const updateDealerStatus = async (dealerId: string, nextStatus: DealerStatus) => {
+    const normalizedDealerId = String(dealerId)
+    setStatusUpdatingId(normalizedDealerId)
     try {
-      await saveDealerStatus({
-        dealerId: String(dealer.Dealer_Id),
+      const updatedStatus = await saveDealerStatus({
+        dealerId: normalizedDealerId,
         status: nextStatus,
         updatedBy: role,
       })
-      setToastMsg({ text: `Dealer marked ${nextStatus === "active" ? "active" : "inactive"}`, type: 'success' })
-      await refetchStatuses()
+
+      const normalizedStatus = normalizeDealerStatus(updatedStatus.status)
+
+      setStatusOverrides((prev) => ({
+        ...prev,
+        [normalizedDealerId]: normalizedStatus,
+      }))
+
+      queryClient.setQueryData<DealerStatusDocument[]>(["dealer-statuses"], (previous = []) => {
+        const nextEntry: DealerStatusDocument = {
+          dealerId: normalizedDealerId,
+          status: normalizedStatus,
+          updatedAt: updatedStatus.updatedAt,
+          ...(updatedStatus.updatedBy ? { updatedBy: updatedStatus.updatedBy } : {}),
+        }
+
+        const existingIndex = previous.findIndex((row) => String(row.dealerId) === normalizedDealerId)
+        if (existingIndex === -1) return [nextEntry, ...previous]
+
+        return previous.map((row, index) => (
+          index === existingIndex
+            ? nextEntry
+            : row
+        ))
+      })
+
+      setToastMsg({
+        text: normalizedStatus === "active"
+          ? "Dealer activated successfully."
+          : "Dealer deactivated successfully.",
+        type: 'success',
+      })
       setOpenMenu(null)
-    } catch {
-      setToastMsg({ text: "Failed to update dealer status", type: 'error' })
+    } catch (error) {
+      console.error("Failed to update dealer status", error)
+      setToastMsg({
+        text: error instanceof Error ? error.message : "Failed to update dealer status",
+        type: 'error',
+      })
     } finally {
-      setUpdatingDealerId(null)
+      setStatusUpdatingId(null)
     }
+  }
+
+  const confirmDealerStatusChange = (dealer: Dealer) => {
+    const dealerId = String(dealer.Dealer_Id)
+    const currentStatus = normalizeDealerStatus(dealer.status)
+    const nextStatus: DealerStatus = currentStatus === "active" ? "inactive" : "active"
+    const isDeactivating = nextStatus === "inactive"
+    const dealerName = dealer.Dealer_Name || `Dealer ${dealerId}`
+
+    confirmAlert({
+      customUI: ({ onClose }) => (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
+            <div className="mb-3 flex items-center gap-3">
+              <div className={`flex h-10 w-10 items-center justify-center rounded-full ${isDeactivating ? "bg-red-50" : "bg-emerald-50"}`}>
+                <span className={`text-sm font-semibold ${isDeactivating ? "text-red-600" : "text-emerald-600"}`}>
+                  {isDeactivating ? "!" : "?"}
+                </span>
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">
+                  {isDeactivating ? "Deactivate Dealer" : "Activate Dealer"}
+                </h3>
+                <p className="text-sm text-gray-500">{dealerName}</p>
+              </div>
+            </div>
+
+            <p className="text-sm leading-6 text-gray-600">
+              {isDeactivating
+                ? "This dealer will no longer be able to access the dealer application until the account is activated again."
+                : "This dealer will be able to access the dealer application again after activation."}
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  void updateDealerStatus(dealerId, nextStatus)
+                }}
+                className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition ${
+                  isDeactivating ? "bg-red-500 hover:bg-red-600" : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {isDeactivating ? "Deactivate" : "Activate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ),
+    })
   }
 
   function pageNumbers(): (number | "...")[] {
@@ -318,6 +418,21 @@ export default function DealerListPage() {
             Dealer status sync could not load from MongoDB. Showing the last known backend status until it recovers.
           </div>
         )}
+      
+        <div className="mb-4 flex justify-end gap-2">
+          <Link
+            href={role === "staff" ? "/dashboard/staff/dealer-requests" : "/dashboard/admin/dealer/requests"}
+            className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Dealer Requests
+          </Link>
+          <button
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+            onClick={() => window.location.href = "/dashboard/admin/dealer/AddDealerForm"}
+          >
+            Add dealer
+          </button>
+        </div>
 
         {/* Table Card */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -435,15 +550,15 @@ export default function DealerListPage() {
                                   <>
                                     <Link href={getDealerEditRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); handleStatusToggle(dealer) }}
-                                      disabled={updatingDealerId === dealer.Dealer_Id}
-                                      className="w-full text-left px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      onClick={(e) => { e.stopPropagation(); confirmDealerStatusChange(dealer) }}
+                                      disabled={statusUpdatingId === String(dealer.Dealer_Id)}
+                                      className="w-full text-left px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                      {updatingDealerId === dealer.Dealer_Id
+                                      {statusUpdatingId === String(dealer.Dealer_Id)
                                         ? "Updating..."
                                         : normalizeDealerStatus(dealer.status) === "active"
-                                          ? "Mark Inactive"
-                                          : "Mark Active"}
+                                          ? "Deactivate"
+                                          : "Activate"}
                                     </button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(dealer.Dealer_Id); setOpenMenu(null) }} className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">Delete</button>
                                   </>

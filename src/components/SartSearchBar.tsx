@@ -50,7 +50,6 @@ function Badge({ category }: { category: string }) {
 
 export default function SmartSearchBar({ role, userId, placeholder }: SmartSearchBarProps) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -63,9 +62,6 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
   useEffect(() => {
     if (query.trim().length >= 2) {
       search(query);
-      setOpen(true);
-    } else {
-      setOpen(false);
     }
   }, [query, search]);
 
@@ -73,7 +69,6 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
         setFocused(false);
       }
     }
@@ -110,12 +105,14 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
         setQuery("");
       }
     } else if (e.key === "Escape") {
-      setOpen(false);
       inputRef.current?.blur();
     }
   }
 
-  const showDropdown = open && (loading || results.length > 0 || geminiSuggestion);
+  const showDropdown =
+    focused &&
+    query.trim().length >= 2 &&
+    (loading || results.length > 0 || Boolean(geminiSuggestion));
 
   return (
     <>
@@ -282,7 +279,7 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
           {query && !loading && (
             <button
               className="ss-clear"
-              onClick={() => { setQuery(""); setOpen(false); setActiveIdx(-1); }}
+              onClick={() => { setQuery(""); setActiveIdx(-1); }}
             >×</button>
           )}
         </div>
@@ -296,7 +293,7 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
               return (
                 <div
                   className={`ss-gemini-row${activeIdx === gIdx ? " active" : ""}`}
-                  onClick={() => { navigateToGeminiSuggestion(); setQuery(""); setOpen(false); }}
+                  onClick={() => { navigateToGeminiSuggestion(); setQuery(""); setActiveIdx(-1); }}
                   onMouseEnter={() => setActiveIdx(gIdx)}
                 >
                   <span className="ss-gemini-chip">AI</span>
@@ -324,7 +321,7 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
                         <div
                           key={`${item.category}-${item.id}`}
                           className={`ss-result-row${activeIdx === idx ? " active" : ""}`}
-                          onClick={() => { navigate(item.route); setQuery(""); setOpen(false); }}
+                          onClick={() => { navigate(item.route); setQuery(""); setActiveIdx(-1); }}
                           onMouseEnter={() => setActiveIdx(idx)}
                         >
                           <span className="ss-result-icon">
@@ -346,7 +343,7 @@ export default function SmartSearchBar({ role, userId, placeholder }: SmartSearc
             })() : (
               !loading && (
                 <div className="ss-empty">
-                  No results found for "{query}"
+                  No results found for &ldquo;{query}&rdquo;
                 </div>
               )
             )}

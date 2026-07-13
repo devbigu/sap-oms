@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { buildDraftApprovalState } from "@/lib/customDiscountRequests";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,7 @@ function buildDraftRows(products: any[]) {
       price: safePositiveNumber(product?.price, 0),
       packSize: safePositiveNumber(product?.packSize, 1),
       isPriority: !!(product?.priority || product?.isPriority),
+      productNote: safeText(product?.productNote, 500),
     };
   });
 }
@@ -159,15 +161,24 @@ export async function PATCH(
         dealer_id: existing.dealerId,
         name: buildDraftName(now),
         rows: buildDraftRows(
-          Array.isArray(existing.draftProducts) && existing.draftProducts.length > 0
-            ? existing.draftProducts
-            : existing.products
+          Array.isArray(existing.orderSnapshot?.products) && existing.orderSnapshot.products.length > 0
+            ? existing.orderSnapshot.products
+            : Array.isArray(existing.draftProducts) && existing.draftProducts.length > 0
+              ? existing.draftProducts
+              : existing.products
         ),
         shipto: existing.shipto ?? null,
         refno: existing.refno ?? null,
-        order_note: buildDraftOrderNote(existing.orderNote, set.adminNote),
+        order_note: buildDraftOrderNote(existing.orderSnapshot?.orderNote ?? existing.orderNote, set.adminNote),
         coupon_code: existing.discountBreakdown?.couponCode || null,
         coupon_pct: existing.discountBreakdown?.couponDiscountPercent ?? null,
+        approval_state: buildDraftApprovalState({
+          approvalRequestId: existing._id.toString(),
+          status: "rejected",
+          requestedOrderDiscountPercent: existing.requestedOrderDiscountPercent ?? null,
+          requestedProductDiscounts: existing.requestedProductDiscounts ?? {},
+          updatedAt: now,
+        }),
         source: "custom_discount_rejection",
         source_request_id: existing._id.toString(),
         createdAt: now,
@@ -185,6 +196,27 @@ export async function PATCH(
     );
 
     if (!updated) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+
+    const linkedDraftId = safeText(updated.orderDraftId || updated.order_draft_id, 120);
+    const linkedDraftObjectId = toObjectId(linkedDraftId);
+    if (linkedDraftObjectId) {
+      await db.collection("order_drafts").updateOne(
+        { _id: linkedDraftObjectId, dealer_id: updated.dealerId },
+        {
+          $set: {
+            approval_state: buildDraftApprovalState({
+              approvalRequestId: updated._id.toString(),
+              status: status === "" ? updated.status : status,
+              requestedOrderDiscountPercent: updated.requestedOrderDiscountPercent ?? null,
+              requestedProductDiscounts: updated.requestedProductDiscounts ?? {},
+              updatedAt: now,
+            }),
+            updatedAt: now,
+          },
+        }
+      );
+    }
+
     return NextResponse.json({ success: true, data: toDoc(updated) });
   } catch (e: any) {
     console.error("[PATCH /api/custom-discount-requests/[id]]", e);

@@ -8,7 +8,7 @@ import {
   FileSpreadsheet, Receipt, RefreshCw, X,
 } from "lucide-react";
 import { isAuthenticated } from "@/lib/accountantauth";
-import { downloadOrderInvoice } from "@/lib/invoicegenerator";
+import { downloadOrderInvoice, type OrderInvoiceData } from "@/lib/invoicegenerator";
 import { OrderAmountSource, withDisplayOrderAmounts } from "@/lib/orderAmounts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ function InvoiceBtn({ order }: { order: RawOrder }) {
   const [loading, setLoading] = useState(false);
   const handle = async () => {
     setLoading(true);
-    await downloadOrderInvoice(order as any);
+    await downloadOrderInvoice(order as OrderInvoiceData);
     setLoading(false);
   };
   return (
@@ -300,7 +300,8 @@ export default function OrderBookPage() {
 
   // Totals across all filtered rows
   const totals = useMemo(() => {
-    let taxable = 0, cgstSum = 0, sgstSum = 0, igstSum = 0, grand = 0;
+    let taxable = 0, cgstSum = 0, sgstSum = 0, grand = 0;
+    const igstSum = 0;
     for (const o of filtered) {
       const net = Number(o.order_amount) - Number(o.order_discount);
       grand += net;

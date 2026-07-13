@@ -107,7 +107,13 @@ let ledgerWarmupStarted = false;
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<DashboardUser | null>(() => resolveInitialUser());
+  const [user, setUser] = useState<DashboardUser | null>(null);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setUser(resolveInitialUser());
+    });
+  }, []);
 
   useEffect(() => {
     if (ledgerWarmupStarted) return;
