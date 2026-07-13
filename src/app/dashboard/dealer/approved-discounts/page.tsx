@@ -1,46 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  normalizeCustomDiscountRequestRecord,
+  type NormalizedCustomDiscountRequest,
+} from "@/lib/customDiscountRequests";
 
-type ApprovalProduct = {
-  productname?: string;
-  displayName?: string;
-  variantCode?: string;
-  quantity?: number;
-  price?: number;
-  packSize?: number;
+type TabKey = "pending" | "approved" | "rejected";
+type DealerUser = {
+  Dealer_Id: string;
 };
-
-type ApprovalRequest = {
-  id: string;
-  dealerId: string;
-  requestedDiscountPercent: number;
-  subtotal: number;
-  requestedDiscountAmount: number;
-  requestedFinalPayable: number;
-  discountScope?: "order" | "product";
-  targetProduct?: {
-    productKey?: string;
-    productname?: string;
-    displayName?: string;
-    variantCode?: string;
-  } | null;
-  shipto?: string;
-  orderNote?: string;
-  products: ApprovalProduct[];
-  adminNote?: string;
-  reviewedBy?: string;
-  reviewedAt?: string | null;
-  allowReorder?: boolean;
-  reorderCount?: number;
-  lastReorderedAt?: string | null;
-};
-
-type TabKey = "all" | "reorderable" | "used";
 
 function money(value: number) {
-  return `₹${Number(value || 0).toLocaleString("en-IN", {
+  return `Rs. ${Number(value || 0).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -58,56 +31,72 @@ function resolveDealer() {
   }
 }
 
+function statusBadge(status: string) {
+  if (status === "approved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "rejected") return "border-red-200 bg-red-50 text-red-700";
+  return "border-amber-200 bg-amber-50 text-amber-700";
+}
+
+function statusLabel(status: string) {
+  if (status === "rejected") return "Rejected";
+  if (status === "approved") return "Approved";
+  return "Pending Approval";
+}
+
+function countPieces(request: NormalizedCustomDiscountRequest) {
+  return request.orderSnapshot.products.reduce((sum, product) => sum + Number(product.totalPieces || 0), 0);
+}
+
 export default function ApprovedDiscountsPage() {
   const router = useRouter();
-  const [dealer, setDealer] = useState<any>(null);
-  const [requests, setRequests] = useState<ApprovalRequest[]>([]);
+  const [dealer] = useState<DealerUser | null>(() => resolveDealer());
+  const [requests, setRequests] = useState<NormalizedCustomDiscountRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<TabKey>("all");
+  const [tab, setTab] = useState<TabKey>("pending");
 
   useEffect(() => {
-    const resolved = resolveDealer();
-    if (!resolved?.Dealer_Id) {
+    if (!dealer?.Dealer_Id) {
       router.push("/login");
-      return;
     }
-    setDealer(resolved);
-  }, [router]);
+  }, [dealer, router]);
 
-  const loadRequests = async () => {
+  const loadRequests = useCallback(async () => {
     if (!dealer?.Dealer_Id) return;
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/custom-discount-requests?dealer_id=${encodeURIComponent(dealer.Dealer_Id)}&status=approved&limit=200`);
+      const res = await fetch(`/api/custom-discount-requests?dealer_id=${encodeURIComponent(dealer.Dealer_Id)}&limit=200`);
       const json = await res.json();
-      if (!json.success) throw new Error(json.message ?? "Failed to load approved discounts");
-      setRequests(json.data ?? []);
+      if (!json.success) throw new Error(json.message ?? "Failed to load discount requests");
+      setRequests((json.data ?? []).map(normalizeCustomDiscountRequestRecord));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load approved discounts");
+      setError(e instanceof Error ? e.message : "Failed to load discount requests");
     } finally {
       setLoading(false);
     }
-  };
+  }, [dealer]);
 
-  useEffect(() => { loadRequests(); }, [dealer?.Dealer_Id]);
+  useEffect(() => {
+    if (!dealer?.Dealer_Id) return;
+    queueMicrotask(() => {
+      void loadRequests();
+    });
+  }, [dealer, loadRequests]);
 
   const stats = useMemo(() => ({
-    all: requests.length,
-    reorderable: requests.filter((r) => r.allowReorder).length,
-    used: requests.filter((r) => Number(r.reorderCount || 0) > 0).length,
+    pending: requests.filter((request) => request.normalizedStatus === "pending").length,
+    approved: requests.filter((request) => request.normalizedStatus === "approved").length,
+    rejected: requests.filter((request) => request.normalizedStatus === "rejected").length,
   }), [requests]);
 
-  const visibleRequests = useMemo(() => {
-    if (tab === "reorderable") return requests.filter((r) => r.allowReorder);
-    if (tab === "used") return requests.filter((r) => Number(r.reorderCount || 0) > 0);
-    return requests;
-  }, [requests, tab]);
+  const visibleRequests = useMemo(() => (
+    requests.filter((request) => request.normalizedStatus === tab)
+  ), [requests, tab]);
 
   return (
     <div className="min-h-screen bg-gray-50 px-6 py-6" style={{ fontFamily: "'DM Sans','Helvetica Neue',sans-serif" }}>
-      <div className="mx-auto max-w-[1200px] space-y-5">
+      <div className="mx-auto max-w-[1280px] space-y-5">
         <div className="flex flex-col gap-4 border-b border-gray-200 pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <button
@@ -116,8 +105,8 @@ export default function ApprovedDiscountsPage() {
             >
               Back
             </button>
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Approved Discounted Orders</h1>
-            <p className="mt-1 text-sm text-gray-500">Reorder product lists with discounts already approved by admin.</p>
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Approved Discounts</h1>
+            <p className="mt-1 text-sm text-gray-500">Track pending, approved, and rejected full-order discount requests.</p>
           </div>
 
           <button
@@ -128,11 +117,11 @@ export default function ApprovedDiscountsPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {[
-            { key: "all", label: "All", value: stats.all },
-            { key: "reorderable", label: "Reorderable", value: stats.reorderable },
-            { key: "used", label: "Used", value: stats.used },
+            { key: "pending", label: "Pending Approval", value: stats.pending },
+            { key: "approved", label: "Approved", value: stats.approved },
+            { key: "rejected", label: "Rejected", value: stats.rejected },
           ].map((item) => (
             <button
               key={item.key}
@@ -155,111 +144,182 @@ export default function ApprovedDiscountsPage() {
 
         {loading ? (
           <div className="flex min-h-[260px] items-center justify-center rounded-2xl border border-gray-200 bg-white text-sm text-gray-500">
-            Loading approved discounts...
+            Loading discount requests...
           </div>
         ) : visibleRequests.length === 0 ? (
           <div className="flex min-h-[260px] items-center justify-center rounded-2xl border border-gray-200 bg-white text-sm text-gray-500">
-            No approved discounts found.
+            No {statusLabel(tab).toLowerCase()} requests found.
           </div>
         ) : (
           <div className="space-y-4">
             {visibleRequests.map((request) => {
-              const reordered = Number(request.reorderCount || 0);
+              const totalPieces = countPieces(request);
+              const productCount = request.orderSnapshot.products.length;
               return (
                 <div key={request.id} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
-                          Approved
+                        <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${statusBadge(request.normalizedStatus)}`}>
+                          {statusLabel(request.normalizedStatus)}
                         </span>
                         <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold text-indigo-700">
-                          {(request.discountScope ?? "order") === "product" ? "Product" : "Order"}
+                          {request.discountScope === "product" ? "Product Discount" : "Order Discount"}
                         </span>
-                        <span className="text-[12px] text-gray-500">
-                          {request.reviewedAt ? new Date(request.reviewedAt).toLocaleString("en-IN") : "Approval date unavailable"}
-                        </span>
+                        {request.isLegacySnapshot && (
+                          <span className="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-[11px] font-bold text-gray-600">
+                            Legacy Request
+                          </span>
+                        )}
                       </div>
-                      <p className="mt-2 text-[16px] font-bold text-gray-900">{request.requestedDiscountPercent}% approved discount</p>
-                      {(request.discountScope ?? "order") === "product" && (
-                        <p className="mt-1 text-[12px] font-semibold text-indigo-700">
-                          Applies to: {request.targetProduct?.displayName || request.targetProduct?.variantCode || "Selected product"}
+                      <div>
+                        <p className="text-[16px] font-bold text-gray-900">
+                          Request Ref. {request.requestReference || request.id}
+                        </p>
+                        <p className="mt-1 text-[12px] text-gray-500">
+                          Submitted {request.createdAt ? new Date(request.createdAt).toLocaleString("en-IN") : "-"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-gray-500">
+                        <span>{productCount} products</span>
+                        <span>{totalPieces} pieces</span>
+                        {request.shipto && <span className="max-w-[420px] truncate">Ship To: {request.shipto}</span>}
+                      </div>
+                      {request.adminNote && (
+                        <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-700">
+                          Admin note: {request.adminNote}
                         </p>
                       )}
-                      <p className="mt-1 text-[12px] text-gray-500">
-                        {reordered > 0
-                          ? `Reordered ${reordered}x${request.lastReorderedAt ? ` - Last: ${new Date(request.lastReorderedAt).toLocaleString("en-IN")}` : ""}`
-                          : "Not yet reordered"}
-                      </p>
                     </div>
 
-                    <button
-                      onClick={() => router.push(`/dashboard/dealer/AddOrderForm?reorder=${request.id}`)}
-                      disabled={!request.allowReorder}
-                      title={request.allowReorder ? "Reorder this approved discount" : "Reorder revoked by admin"}
-                      className="rounded-xl bg-emerald-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
-                    >
-                      Reorder
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      {request.normalizedStatus === "pending" && (
+                        <button
+                          type="button"
+                          disabled
+                          className="rounded-xl border border-amber-300 bg-amber-500 px-4 py-2 text-[12px] font-bold text-white cursor-not-allowed"
+                        >
+                          Wait for Approval
+                        </button>
+                      )}
+                      {request.normalizedStatus === "approved" && (
+                        <button
+                          onClick={() => router.push(`/dashboard/dealer/AddOrderForm?reorder=${request.id}`)}
+                          disabled={!request.allowReorder}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
+                        >
+                          Use Approved Order
+                        </button>
+                      )}
+                      {request.normalizedStatus === "rejected" && request.rejectionDraftId && (
+                        <button
+                          onClick={() => router.push(`/dashboard/dealer/AddOrderForm?draft=${request.rejectionDraftId}`)}
+                          className="rounded-xl border border-red-200 bg-white px-4 py-2 text-[12px] font-bold text-red-600 hover:bg-red-50"
+                        >
+                          Open Rejected Draft
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="mt-4 overflow-hidden rounded-xl border border-gray-200">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          {["Cat. No.", "Product", "Packs", "Pack Size", "Price"].map((h) => (
-                            <th key={h} className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {(request.products || []).map((product, idx) => (
-                          <tr key={`${product.productname}-${idx}`}>
-                            <td className="px-3 py-2 font-mono text-[12px] font-bold text-amber-700">{product.variantCode || product.productname || "-"}</td>
-                            <td className="px-3 py-2 text-[12px] font-semibold text-gray-900">{product.displayName || product.productname || "-"}</td>
-                            <td className="px-3 py-2 font-mono text-[12px] text-gray-700">{product.quantity ?? "-"}</td>
-                            <td className="px-3 py-2 font-mono text-[12px] text-gray-700">{product.packSize ?? "-"}</td>
-                            <td className="px-3 py-2 font-mono text-[12px] text-gray-700">{product.price ?? "-"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                     <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Subtotal</p>
-                      <p className="mt-1 font-mono text-[14px] font-bold text-gray-900">{money(request.subtotal)}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Gross Amount</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-gray-900">{money(request.orderSnapshot.grossAmount)}</p>
                     </div>
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Savings</p>
-                      <p className="mt-1 font-mono text-[14px] font-bold text-emerald-700">-{money(request.requestedDiscountAmount)}</p>
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Base Discount</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-amber-700">{money(request.orderSnapshot.baseDiscountAmount)}</p>
+                    </div>
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">Requested Custom</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-indigo-700">{money(request.orderSnapshot.requestedAdditionalDiscountAmount)}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Requested Total Discount</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-gray-900">{money(request.orderSnapshot.totalDiscountAmount)}</p>
                     </div>
                     <div className="rounded-xl border border-gray-900 bg-gray-900 px-4 py-3 text-white">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Final</p>
-                      <p className="mt-1 font-mono text-[14px] font-bold">{money(request.requestedFinalPayable)}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Requested Net Payable</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold">{money(request.orderSnapshot.requestedNetPayableAmount)}</p>
                     </div>
                     <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Reorder</p>
-                      <p className={`mt-1 text-[12px] font-bold ${request.allowReorder ? "text-emerald-700" : "text-red-600"}`}>
-                        {request.allowReorder ? "Allowed" : "Revoked"}
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Requested Discount</p>
+                      <p className="mt-1 font-mono text-[14px] font-bold text-gray-900">
+                        {request.requestedOrderDiscountPercent ?? request.requestedDiscountPercent}%
                       </p>
                     </div>
                   </div>
 
-                  {(request.shipto || request.adminNote || request.orderNote) && (
+                  <details className="mt-4 overflow-hidden rounded-xl border border-gray-200" open>
+                    <summary className="cursor-pointer list-none bg-gray-50 px-4 py-3 text-[12px] font-bold text-gray-700">
+                      Product List ({productCount} products)
+                    </summary>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-white">
+                          <tr className="border-b border-gray-100">
+                            {["Cat. No.", "Product", "Qty", "Pack Size", "Pieces", "Unit Price", "Gross", "Base", "Requested Custom", "Final"].map((header) => (
+                              <th key={header} className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                                {header}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {request.orderSnapshot.products.map((product, index) => (
+                            <tr key={`${request.id}-${product.productKey || product.sku}-${index}`}>
+                              <td className="px-3 py-3 font-mono text-[12px] font-bold text-amber-700">{product.catalogueNumber || product.sku || "-"}</td>
+                              <td className="px-3 py-3">
+                                <p className="text-[12px] font-semibold text-gray-900">{product.productName || "-"}</p>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${product.usesCustomDiscount ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-gray-200 bg-gray-100 text-gray-600"}`}>
+                                    {product.usesCustomDiscount ? "Custom Approval Requested" : "Standard Discount"}
+                                  </span>
+                                  {product.isPriority && (
+                                    <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-700">
+                                      Priority
+                                    </span>
+                                  )}
+                                </div>
+                                {product.productNote && (
+                                  <p className="mt-1 text-[11px] text-gray-500">Product Note: {product.productNote}</p>
+                                )}
+                              </td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-gray-700">{product.quantity}</td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-gray-700">{product.packSize}</td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-gray-700">{product.totalPieces}</td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-gray-700">{money(product.unitPrice)}</td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-gray-900">{money(product.grossAmount)}</td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-amber-700">
+                                {product.baseDiscountPercent}% · -{money(product.baseDiscountAmount)}
+                              </td>
+                              <td className="px-3 py-3 font-mono text-[12px] text-indigo-700">
+                                {product.usesCustomDiscount
+                                  ? `${product.requestedCustomDiscountPercent ?? 0}% · -${money(product.requestedCustomDiscountAmount ?? 0)}`
+                                  : "Standard Discount"}
+                              </td>
+                              <td className="px-3 py-3 font-mono text-[12px] font-bold text-emerald-700">{money(product.finalAmount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+
+                  {(request.orderSnapshot.orderNote || request.shipto || request.refno) && (
                     <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Order Note</p>
+                        <p className="mt-1 whitespace-pre-wrap text-[12px] text-gray-700">{request.orderSnapshot.orderNote || "-"}</p>
+                      </div>
                       <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
                         <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Ship To</p>
                         <p className="mt-1 whitespace-pre-wrap text-[12px] text-gray-700">{request.shipto || "-"}</p>
                       </div>
                       <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Admin Note</p>
-                        <p className="mt-1 whitespace-pre-wrap text-[12px] text-gray-700">{request.adminNote || "-"}</p>
-                      </div>
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Order Note</p>
-                        <p className="mt-1 whitespace-pre-wrap text-[12px] text-gray-700">{request.orderNote || "-"}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Customer Ref No.</p>
+                        <p className="mt-1 whitespace-pre-wrap text-[12px] text-gray-700">{request.refno || "-"}</p>
                       </div>
                     </div>
                   )}

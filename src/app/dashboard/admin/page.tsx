@@ -620,7 +620,7 @@ function AdminDashboardInner() {
 
                 );
               })}
-              <div className="stat-card"><div className="stat-lbl">Today's Sale</div>
+              <div className="stat-card"><div className="stat-lbl">Today&apos;s Sale</div>
                 <div className="font-sans font-bold">₹0</div>
                 <div className="stat-badge badge-green">0</div></div>
             </div>

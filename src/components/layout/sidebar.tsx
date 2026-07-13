@@ -33,6 +33,7 @@ const NAV: Record<Role, NavItem[]> = {
     { section: "Dealers",     label: "Dealer List",        href: "/dashboard/admin/dealer/DealerList",               icon: <Users size={15} />           },
     {                         label: "Dealer Ledger",       href: "/dashboard/admin/ledger",                          icon: <BookOpen size={15} />        },
     {                         label: "Add Dealer",          href: "/dashboard/admin/dealer/AddDealerForm",            icon: <UserRoundPlus size={15} />   },
+    {                         label: "Dealer Requests",     href: "/dashboard/admin/dealer/requests",                 icon: <Receipt size={15} />         },
     { section: "Staff",       label: "Staff List",         href: "/dashboard/admin/staff/stafflist",                 icon: <Users size={15} />           },
     {                         label: "Add Staff",           href: "/dashboard/admin/staff/addstaff",                  icon: <SquareUser size={15} />      },
     { section: "Products",    label: "Products",           href: "/Pages/products",                                  icon: <Package size={15} />         },
@@ -61,6 +62,8 @@ const NAV: Record<Role, NavItem[]> = {
   staff: [
     { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                                icon: <LayoutDashboard size={15} /> },
     {                     label: "Profile",       href: "/dashboard/staff/profile",                        icon: <SquareUser size={15} />      },
+    {                     label: "Add Dealer",    href: "/dashboard/admin/dealer/AddDealerForm",           icon: <UserRoundPlus size={15} />   },
+    {                     label: "Dealer Requests", href: "/dashboard/staff/dealer-requests",              icon: <Receipt size={15} />         },
     {                     label: "Discount Requests", href: "/dashboard/staff/discount-requests",           icon: <Receipt size={15} />         },
     { section: "Orders",   label: "Order List",    href: "/Pages/Ordermanagement",                          icon: <ClipboardList size={15} />   },
     {                      label: "Pending Orders", href: "/Pages/Ordermanagement/outstandingorders",        icon: <ClipboardList size={15} />   },

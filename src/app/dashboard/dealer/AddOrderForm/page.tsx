@@ -4,6 +4,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import axios from "axios";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast, ToastContainer } from "react-toastify";
 import moment from "moment";
@@ -26,6 +27,15 @@ import {
   updateDraft,
   type DraftProductRow,
 } from "@/lib/drafts";
+import {
+  buildDraftApprovalState,
+  buildOrderApprovalSnapshot,
+  findLatestRequestForDraft,
+  normalizeApprovalProductKey,
+  normalizeCustomDiscountRequestRecord,
+  type DraftApprovalState,
+  type NormalizedCustomDiscountRequest,
+} from "@/lib/customDiscountRequests";
 import { useDraft } from "@/lib/useDrafts";
 import { buildPriorityRemarks } from "@/lib/orderPriority";
 import {
@@ -56,14 +66,20 @@ type CustomDiscountScope = "order" | "product";
 type CustomDiscountRequest = {
   id: string;
   dealerId?: string;
+  staffId?: string;
+  assignedStaffId?: string;
   status: "pending" | "approved" | "rejected";
   orderId?: string;
   order_id?: string;
   orderNumber?: string;
   order_number?: string;
+  orderDraftId?: string;
+  order_draft_id?: string;
   discountScope?: CustomDiscountScope;
   requestedDiscountPercent: number;
   currentDiscountPercent: number;
+  requestedOrderDiscountPercent?: number | null;
+  requestedProductDiscounts?: Record<string, number>;
   orderSignature: string;
   allowReorder?: boolean;
   targetProduct?: {
@@ -73,6 +89,8 @@ type CustomDiscountRequest = {
     variantCode?: string;
   };
   products?: any[];
+  orderSnapshot?: Record<string, unknown>;
+  draftProducts?: any[];
   shipto?: string;
   refno?: string;
   orderNote?: string;
@@ -215,20 +233,6 @@ function buildOrderRemarks(
     buildPriorityRemarks(variantCode, isPriority),
     orderNote,
   );
-}
-
-function toDiscountRequestProduct(row: ProductRow) {
-  return {
-    productname: row.productname,
-    displayName: row.displayName,
-    variantCode: row.variantCode,
-    quantity: row.producQuanity,
-    price: row.price,
-    packSize: row.packSize,
-    priority: !!row.isPriority,
-    productNote: row.productNote ?? "",
-    rowSubtotal: payloadAmount(rowSubtotalPaise(row) / 100),
-  };
 }
 
 function extractOrderIdFromResponse(data: any): string {
@@ -402,6 +406,7 @@ function AddOrderPageInner() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [pendingDraftName, setPendingDraftName] = useState("");
   const [draftBanner, setDraftBanner] = useState<string | null>(null);
+  const [draftApprovalState, setDraftApprovalState] = useState<DraftApprovalState | null>(null);
 
   // ── Coupon state ──────────────────────────────────────────────────────────
   const [couponInput, setCouponInput] = useState("");
@@ -417,7 +422,7 @@ function AddOrderPageInner() {
   const [customDiscountProductKey, setCustomDiscountProductKey] = useState("");
   const [customDiscountSubmitting, setCustomDiscountSubmitting] = useState(false);
   const [customDiscountRequests, setCustomDiscountRequests] = useState<CustomDiscountRequest[]>([]);
-  const [reorderRequest, setReorderRequest] = useState<CustomDiscountRequest | null>(null);
+  const [reorderRequest, setReorderRequest] = useState<NormalizedCustomDiscountRequest | null>(null);
   const [perProductDiscountInputs, setPerProductDiscountInputs] = useState<Record<string, number>>({});
   const [editingProductDiscountKey, setEditingProductDiscountKey] = useState<string | null>(null);
   const [perProductSubmitting, setPerProductSubmitting] = useState<string | null>(null);
@@ -433,6 +438,115 @@ function AddOrderPageInner() {
     if (dealerStatus === "inactive") {
       throw new Error("This dealer account is inactive. Please contact the administrator.");
     }
+  };
+
+  const syncDraftUrl = (draftId?: string | null) => {
+    const nextUrl = draftId
+      ? `/dashboard/dealer/AddOrderForm?draft=${encodeURIComponent(draftId)}`
+      : "/dashboard/dealer/AddOrderForm";
+    window.history.replaceState({}, "", nextUrl);
+  };
+
+  const mergeCustomDiscountRequest = (request: CustomDiscountRequest | null | undefined) => {
+    if (!request?.id) return;
+    setCustomDiscountRequests((prev) => [request, ...prev.filter((row) => row.id !== request.id)]);
+  };
+
+  const buildCurrentDraftRows = (): DraftProductRow[] => arr1.map((row) => ({ ...row }));
+
+  const buildRequestedProductDiscountMap = () => {
+    const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.baseDiscountPercent;
+    const requested: Record<string, number> = {};
+
+    productRows.forEach((row) => {
+      const rawKey = getProductKey(row);
+      const normalizedKey = normalizeApprovalProductKey(rawKey);
+      const requestedPercent = Number(perProductDiscountInputs[rawKey] ?? perProductDiscountInputs[normalizedKey] ?? 0);
+      if (requestedPercent > globalPercent) {
+        requested[normalizedKey] = Math.min(100, Math.max(globalPercent, requestedPercent));
+      }
+    });
+
+    if (customDiscountScope === "product" && selectedCustomDiscountProduct && requestedCustomDiscountPercent > globalPercent) {
+      requested[normalizeApprovalProductKey(getProductKey(selectedCustomDiscountProduct))] = requestedCustomDiscountPercent;
+    }
+
+    return requested;
+  };
+
+  const buildCurrentApprovalState = (overrides?: Partial<DraftApprovalState>) => {
+    const requestedProductDiscounts = buildRequestedProductDiscountMap();
+    const requestedOrderDiscountPercent = customDiscountScope === "order" && requestedCustomDiscountPercent > baseDiscountPayload.baseDiscountPercent
+      ? requestedCustomDiscountPercent
+      : null;
+
+    return buildDraftApprovalState({
+      approvalRequestId: draftApprovalState?.approvalRequestId ?? null,
+      status: draftApprovalState?.status ?? null,
+      requestedOrderDiscountPercent,
+      requestedProductDiscounts,
+      updatedAt: new Date().toISOString(),
+      ...overrides,
+    });
+  };
+
+  const buildCurrentOrderSnapshot = (options?: {
+    requestedOrderDiscountPercent?: number | null;
+    requestedProductDiscounts?: Record<string, number>;
+  }) => {
+    const snapshotProducts = productRows.map((row) => {
+      const variantKey = row.variantCode || row.productname;
+      const meta = variantLookup[variantKey] ?? variantLookup[row.productname];
+      return {
+        rowKey: row.key,
+        productKey: getProductKey(row),
+        sku: row.variantCode || row.productname,
+        catalogueNumber: row.variantCode || row.productname,
+        productName: row.displayName || meta?.productName || row.productname,
+        image: meta?.image ?? null,
+        quantity: safePositiveNumber(row.producQuanity) || 1,
+        packSize: safePositiveNumber(row.packSize) || 1,
+        unitPrice: safePositiveNumber(row.price),
+        isPriority: !!row.isPriority,
+        productNote: row.productNote ?? "",
+      };
+    });
+
+    return buildOrderApprovalSnapshot({
+      products: snapshotProducts,
+      orderNote: orderNote.trim(),
+      baseDiscountPercent: baseDiscountPayload.baseDiscountPercent,
+      requestedOrderDiscountPercent: options?.requestedOrderDiscountPercent ?? null,
+      requestedProductDiscounts: options?.requestedProductDiscounts,
+    });
+  };
+
+  const persistCurrentDraft = async (nameToUse: string, approvalState: DraftApprovalState | null) => {
+    const payload = {
+      dealer_id: user.Dealer_Id,
+      name: nameToUse,
+      shipto,
+      refno,
+      order_note: orderNote.trim() || null,
+      coupon_code: appliedCoupon?.code ?? null,
+      coupon_pct: appliedCoupon?.pct ?? null,
+      approval_state: approvalState,
+      rows: buildCurrentDraftRows(),
+    };
+
+    if (activeDraftId) {
+      await updateDraft(activeDraftId, user.Dealer_Id, payload);
+      setDraftName(nameToUse);
+      if (approvalState) setDraftApprovalState(approvalState);
+      return activeDraftId;
+    }
+
+    const created = await saveDraft(payload);
+    setActiveDraftId(created.id);
+    setDraftName(nameToUse);
+    setDraftApprovalState(created.approval_state ?? approvalState);
+    syncDraftUrl(created.id);
+    return created.id;
   };
 
   useEffect(() => {
@@ -488,35 +602,46 @@ function AddOrderPageInner() {
       })
       .then((json) => {
         if (!json.success) throw new Error("API_FAIL");
-        const req = json.data as CustomDiscountRequest;
+        const req = normalizeCustomDiscountRequestRecord(json.data as CustomDiscountRequest);
 
         if (String(req.dealerId) !== String(user.Dealer_Id)) throw new Error("WRONG_DEALER");
         if (!req.allowReorder) throw new Error("REVOKED");
-        if (req.status !== "approved") throw new Error("NOT_APPROVED");
+        if (req.normalizedStatus !== "approved") throw new Error("NOT_APPROVED");
 
-        const rows: ProductRow[] = (req.products || []).map((p: any, i: number) => {
+        const rows: ProductRow[] = (req.orderSnapshot.products || []).map((p, i) => {
           const match = products.find(
-            (prod: any) => String(prod.product_cat).trim() === String(p.productname).trim()
+            (prod: any) => String(prod.product_cat).trim() === String(p.sku || p.catalogueNumber).trim()
           );
           return {
             key: i + 1,
-            productname: p.productname || match?.product_cat || "",
-            displayName: p.displayName || match?.product_name || p.productname || "",
-            variantCode: p.variantCode || p.productname || match?.product_cat || "",
+            productname: p.sku || p.catalogueNumber || match?.product_cat || "",
+            displayName: p.productName || match?.product_name || p.sku || p.catalogueNumber || "",
+            variantCode: p.catalogueNumber || p.sku || match?.product_cat || "",
             producQuanity: safePositiveNumber(p.quantity) || 1,
-            price: safePositiveNumber(p.price) || safePositiveNumber(match?.product_price),
+            price: safePositiveNumber(p.unitPrice) || safePositiveNumber(match?.product_price),
             packSize: safePositiveNumber(p.packSize) || 1,
-            isPriority: !!(p.priority || p.isPriority),
+            isPriority: !!p.isPriority,
             productNote: String(p.productNote ?? ""),
           };
         });
 
         seededRef.current = true;
         setReorderRequest(req);
+        setActiveDraftId(req.orderDraftId || null);
+        setDraftApprovalState(buildDraftApprovalState({
+          approvalRequestId: req.id,
+          status: req.normalizedStatus === "approved" ? "approved" : null,
+          requestedOrderDiscountPercent: req.requestedOrderDiscountPercent,
+          requestedProductDiscounts: req.requestedProductDiscounts,
+          updatedAt: req.reviewedAt || req.createdAt,
+        }));
+        setCustomDiscountScope(req.discountScope);
+        setCustomDiscountInput(String(req.requestedOrderDiscountPercent ?? ""));
+        setPerProductDiscountInputs(req.requestedProductDiscounts);
         setArr(rows.length > 0 ? rows : [emptyRow()]);
         if (req.shipto) setShipto(req.shipto);
         if (req.refno) setRefno(req.refno);
-        if (req.orderNote) setOrderNote(req.orderNote);
+        if (req.orderSnapshot.orderNote) setOrderNote(req.orderSnapshot.orderNote);
         setDraftBanner(null);
       })
       .catch((err) => {
@@ -549,15 +674,73 @@ function AddOrderPageInner() {
 
     setActiveDraftId(cachedDraft.id);
     setDraftName(cachedDraft.name);
+    setDraftApprovalState(cachedDraft.approval_state ?? null);
     if (cachedDraft.shipto) setShipto(cachedDraft.shipto);
     if (cachedDraft.refno) setRefno(cachedDraft.refno);
     if (cachedDraft.order_note) setOrderNote(cachedDraft.order_note);
     if (cachedDraft.coupon_code && cachedDraft.coupon_pct) {
       setAppliedCoupon({ code: cachedDraft.coupon_code, pct: cachedDraft.coupon_pct });
     }
+    setPerProductDiscountInputs(cachedDraft.approval_state?.requestedProductDiscounts ?? {});
+    setCustomDiscountInput(cachedDraft.approval_state?.requestedOrderDiscountPercent ? String(cachedDraft.approval_state.requestedOrderDiscountPercent) : "");
+    setCustomDiscountScope(cachedDraft.approval_state?.requestedOrderDiscountPercent ? "order" : "product");
     setArr(cachedDraft.rows.length > 0 ? cachedDraft.rows : [emptyRow()]);
     setDraftBanner(`Loaded: "${cachedDraft.name}"`);
   }, [draftIdParam, user, products, cachedDraft, draftError]);
+
+  useEffect(() => {
+    if (!user?.Dealer_Id) return;
+    const linkedDraftId = activeDraftId || draftIdParam;
+    const approvalRequestId = draftApprovalState?.approvalRequestId ?? null;
+    if (!linkedDraftId && !approvalRequestId) return;
+
+    let cancelled = false;
+
+    const syncApprovalRequest = async () => {
+      try {
+        let request: CustomDiscountRequest | null = null;
+
+        if (approvalRequestId) {
+          const res = await fetch(`/api/custom-discount-requests/${encodeURIComponent(approvalRequestId)}`);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success) request = json.data as CustomDiscountRequest;
+          }
+        }
+
+        if (!request && linkedDraftId) {
+          const res = await fetch(`/api/custom-discount-requests?dealer_id=${encodeURIComponent(user.Dealer_Id)}&order_draft_id=${encodeURIComponent(linkedDraftId)}&limit=20`);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+              request = json.data[0] as CustomDiscountRequest;
+            }
+          }
+        }
+
+        if (cancelled || !request) return;
+        mergeCustomDiscountRequest(request);
+        const normalized = normalizeCustomDiscountRequestRecord(request);
+        setDraftApprovalState(buildDraftApprovalState({
+          approvalRequestId: normalized.id,
+          status: ["pending", "approved", "rejected"].includes(normalized.normalizedStatus)
+            ? normalized.normalizedStatus as DraftApprovalState["status"]
+            : null,
+          requestedOrderDiscountPercent: normalized.requestedOrderDiscountPercent,
+          requestedProductDiscounts: normalized.requestedProductDiscounts,
+          updatedAt: normalized.reviewedAt || normalized.createdAt,
+        }));
+      } catch (error) {
+        console.error("[custom-discount] sync draft-linked request failed", error);
+      }
+    };
+
+    void syncApprovalRequest();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.Dealer_Id, activeDraftId, draftIdParam, draftApprovalState?.approvalRequestId]);
 
   // ── Seed rows from DraftCart (when navigated from Cart page) ─────────────
   useEffect(() => {
@@ -656,57 +839,102 @@ function AddOrderPageInner() {
   const subtotal = subtotalPaise / 100;
   const dealerDiscount = safePositiveNumber(user?.discount);
   const couponDiscount = appliedCoupon?.pct ?? 0;
+  const normalizedCustomDiscountRequests = useMemo(
+    () => customDiscountRequests.map((request) => normalizeCustomDiscountRequestRecord(request)),
+    [customDiscountRequests],
+  );
 
   // ── Custom / reorder discount resolution ─────────────────────────────
   const currentOrderSignature = buildOrderSignature(arr1, subtotal);
   const productRows = arr1.filter((r) => r.productname);
+  const draftLinkedRequest = activeDraftId
+    ? findLatestRequestForDraft(
+      customDiscountRequests,
+      activeDraftId,
+      draftApprovalState?.approvalRequestId ?? null,
+    )
+    : null;
   const selectedCustomDiscountProduct = productRows.find((r) => getProductKey(r) === customDiscountProductKey) ?? productRows[0] ?? null;
   const selectedCustomDiscountSignature = selectedCustomDiscountProduct ? buildProductSignature(selectedCustomDiscountProduct) : "";
   const customDiscountBaseSubtotal = customDiscountScope === "product" && selectedCustomDiscountProduct
     ? rowSubtotalPaise(selectedCustomDiscountProduct) / 100
     : subtotal;
-  const matchingCustomRequests = customDiscountRequests.filter(
-    (r) => (r.discountScope ?? "order") !== "product" && r.orderSignature === currentOrderSignature
+  const matchingCustomRequests = normalizedCustomDiscountRequests.filter(
+    (r) => r.orderDraftId === "" && r.discountScope !== "product" && String((r.source as CustomDiscountRequest).orderSignature || "") === currentOrderSignature
   );
-  const approvedCustomRequest = matchingCustomRequests.find((r) => r.status === "approved");
-  const pendingCustomRequest = matchingCustomRequests.find((r) => r.status === "pending");
-  const rejectedCustomRequest = matchingCustomRequests.find((r) => r.status === "rejected");
+  const legacyApprovedCustomRequest = matchingCustomRequests.find((r) => r.normalizedStatus === "approved");
+  const legacyPendingCustomRequest = matchingCustomRequests.find((r) => r.normalizedStatus === "pending");
+  const legacyRejectedCustomRequest = matchingCustomRequests.find((r) => r.normalizedStatus === "rejected");
   const matchingProductCustomRequests = selectedCustomDiscountSignature
-    ? customDiscountRequests.filter(
-      (r) => (r.discountScope ?? "order") === "product" && r.orderSignature === selectedCustomDiscountSignature
+    ? normalizedCustomDiscountRequests.filter(
+      (r) => r.orderDraftId === "" && r.discountScope === "product" && String((r.source as CustomDiscountRequest).orderSignature || "") === selectedCustomDiscountSignature
     )
     : [];
-  const approvedProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "approved");
-  const pendingProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "pending");
-  const rejectedProductCustomRequest = matchingProductCustomRequests.find((r) => r.status === "rejected");
-  const visibleCustomRequest = customDiscountScope === "product"
-    ? approvedProductCustomRequest ?? pendingProductCustomRequest ?? rejectedProductCustomRequest ?? null
-    : approvedCustomRequest ?? pendingCustomRequest ?? rejectedCustomRequest ?? null;
-  const reorderDiscountPercent = reorderRequest && (reorderRequest.discountScope ?? "order") !== "product"
-    ? Math.min(100, Math.max(0, Number(reorderRequest.requestedDiscountPercent) || 0))
+  const activeApprovalRequest = reorderRequest ?? draftLinkedRequest ?? null;
+  const activeOrderApprovalRequest = activeApprovalRequest?.discountScope === "order" ? activeApprovalRequest : null;
+  const activeProductApprovalRequest = activeApprovalRequest?.discountScope === "product" ? activeApprovalRequest : null;
+  const approvedCustomRequest = activeOrderApprovalRequest?.normalizedStatus === "approved"
+    ? activeOrderApprovalRequest
+    : legacyApprovedCustomRequest ?? null;
+  const pendingCustomRequest = activeOrderApprovalRequest?.normalizedStatus === "pending"
+    ? activeOrderApprovalRequest
+    : legacyPendingCustomRequest ?? null;
+  const rejectedCustomRequest = activeOrderApprovalRequest?.normalizedStatus === "rejected"
+    ? activeOrderApprovalRequest
+    : legacyRejectedCustomRequest ?? null;
+  const approvedProductCustomRequest = activeProductApprovalRequest?.normalizedStatus === "approved"
+    ? activeProductApprovalRequest
+    : matchingProductCustomRequests.find((r) => r.normalizedStatus === "approved") ?? null;
+  const pendingProductCustomRequest = activeProductApprovalRequest?.normalizedStatus === "pending"
+    ? activeProductApprovalRequest
+    : matchingProductCustomRequests.find((r) => r.normalizedStatus === "pending") ?? null;
+  const rejectedProductCustomRequest = activeProductApprovalRequest?.normalizedStatus === "rejected"
+    ? activeProductApprovalRequest
+    : matchingProductCustomRequests.find((r) => r.normalizedStatus === "rejected") ?? null;
+  const visibleCustomRequest = activeApprovalRequest ?? (
+    customDiscountScope === "product"
+      ? approvedProductCustomRequest ?? pendingProductCustomRequest ?? rejectedProductCustomRequest ?? null
+      : approvedCustomRequest ?? pendingCustomRequest ?? rejectedCustomRequest ?? null
+  );
+  const approvedCustomDiscountPercent = approvedCustomRequest
+    ? Math.min(100, Math.max(0, Number(approvedCustomRequest.requestedOrderDiscountPercent ?? approvedCustomRequest.requestedDiscountPercent) || 0))
     : null;
-  const approvedCustomDiscountPercent = reorderDiscountPercent ?? (approvedCustomRequest
-    ? Math.min(100, Math.max(0, Number(approvedCustomRequest.requestedDiscountPercent) || 0))
-    : null);
   const getApprovedProductCustomRequest = (row: ProductRow) => {
-    const rowSignature = buildProductSignature(row);
-    if (
-      reorderRequest?.status === "approved" &&
-      (reorderRequest.discountScope ?? "order") === "product" &&
-      reorderRequest.orderSignature === rowSignature
-    ) {
-      return reorderRequest;
+    const productKey = normalizeApprovalProductKey(getProductKey(row));
+    if (activeProductApprovalRequest?.normalizedStatus === "approved" && activeProductApprovalRequest.requestedProductDiscounts[productKey]) {
+      return activeProductApprovalRequest;
     }
-    return customDiscountRequests.find(
-      (r) => r.status === "approved" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
+    const rowSignature = buildProductSignature(row);
+    return normalizedCustomDiscountRequests.find(
+      (r) => (
+        r.orderDraftId === "" &&
+        r.normalizedStatus === "approved" &&
+        r.discountScope === "product" &&
+        r.requestedProductDiscounts[productKey] &&
+        String((r.source as CustomDiscountRequest).orderSignature || "") === rowSignature
+      )
     );
   };
   const getProductPendingRequest = (row: ProductRow) => {
+    const productKey = normalizeApprovalProductKey(getProductKey(row));
+    if (activeProductApprovalRequest?.normalizedStatus === "pending" && activeProductApprovalRequest.requestedProductDiscounts[productKey]) {
+      return activeProductApprovalRequest;
+    }
     const rowSignature = buildProductSignature(row);
-    return customDiscountRequests.find(
-      (r) => r.status === "pending" && (r.discountScope ?? "order") === "product" && r.orderSignature === rowSignature
+    return normalizedCustomDiscountRequests.find(
+      (r) => (
+        r.orderDraftId === "" &&
+        r.normalizedStatus === "pending" &&
+        r.discountScope === "product" &&
+        r.requestedProductDiscounts[productKey] &&
+        String((r.source as CustomDiscountRequest).orderSignature || "") === rowSignature
+      )
     );
   };
+  const isWaitingForApproval = !reorderRequest && activeApprovalRequest?.normalizedStatus === "pending";
+  const orderLockedByPendingApproval = isWaitingForApproval;
+  const isApprovedDraftRequest = !reorderRequest && activeApprovalRequest?.normalizedStatus === "approved";
+  const isRejectedDraftRequest = !reorderRequest && activeApprovalRequest?.normalizedStatus === "rejected";
 
   // ── Sequential discount calculation ──────────────────────────────────
   // Base discount payload — uses the new sequential slab logic.
@@ -782,26 +1010,32 @@ function AddOrderPageInner() {
   const hasAnyDiscount = discountPayload.discountPercent > 0;
   const approvedProductCustomRequests = productRows
     .map((row) => getApprovedProductCustomRequest(row))
-    .filter((r): r is CustomDiscountRequest => !!r);
+    .filter((r): r is NormalizedCustomDiscountRequest => !!r);
   const hasApprovedCustomDiscount = hasApprovedCustomCandidate || approvedProductCustomRequests.length > 0;
-  const discountRejectionDraftRequest = activeDraftId
-    ? customDiscountRequests.find((r) => (
-      r.status === "rejected" &&
-      (
-        String(r.rejectionDraftId ?? "") === String(activeDraftId) ||
+  const discountRejectionDraftRequest = isRejectedDraftRequest
+    ? activeApprovalRequest
+    : activeDraftId
+      ? normalizedCustomDiscountRequests.find((r) => (
+        r.normalizedStatus === "rejected" &&
         (
-          cachedDraft?.source === "custom_discount_rejection" &&
-          String(cachedDraft?.source_request_id ?? "") === String(r.id)
+          String(r.rejectionDraftId ?? "") === String(activeDraftId) ||
+          (
+            cachedDraft?.source === "custom_discount_rejection" &&
+            String(cachedDraft?.source_request_id ?? "") === String(r.id)
+          )
         )
-      )
-    ))
-    : null;
+      ))
+      : null;
   const requestedCustomDiscountPercent = Math.min(100, Math.max(0, Number(customDiscountInput) || 0));
   const requestedCustomDiscountAmount = customDiscountBaseSubtotal * (requestedCustomDiscountPercent / 100);
   const requestedCustomFinalPayable = Math.max(0, customDiscountBaseSubtotal - requestedCustomDiscountAmount);
 
   // ── Coupon handlers ───────────────────────────────────────────────────────
   const handleApplyCoupon = () => {
+    if (orderLockedByPendingApproval) {
+      toast("This approval request is pending, so the submitted order is locked.");
+      return;
+    }
     setCouponError(""); setCouponSuccess("");
     const trimmed = couponInput.trim().toUpperCase();
     if (!trimmed) { setCouponError("Please enter a coupon code."); return; }
@@ -813,6 +1047,10 @@ function AddOrderPageInner() {
   };
 
   const handleRemoveCoupon = () => {
+    if (orderLockedByPendingApproval) {
+      toast("This approval request is pending, so the submitted order is locked.");
+      return;
+    }
     setAppliedCoupon(null); setCouponError(""); setCouponSuccess(""); setCouponInput("");
   };
 
@@ -825,7 +1063,10 @@ function AddOrderPageInner() {
     return json.data ?? [];
   };
 
-  const linkCustomDiscountRequestsToOrder = async (requests: CustomDiscountRequest[], orderId: string) => {
+  const linkCustomDiscountRequestsToOrder = async (
+    requests: Array<CustomDiscountRequest | NormalizedCustomDiscountRequest>,
+    orderId: string,
+  ) => {
     const normalizedOrderId = String(orderId || "").trim();
     if (!normalizedOrderId) return;
 
@@ -846,71 +1087,133 @@ function AddOrderPageInner() {
     ));
   };
 
+  const submitCustomDiscountApproval = async (options: {
+    scope: CustomDiscountScope;
+    requestedOrderDiscountPercent?: number | null;
+    requestedProductDiscounts?: Record<string, number>;
+    targetProduct?: ProductRow | null;
+  }) => {
+    if (!user?.Dealer_Id) {
+      throw new Error("Dealer account is missing.");
+    }
+
+    const requestedProductDiscounts = options.requestedProductDiscounts ?? {};
+    const requestedOrderDiscountPercent = options.scope === "order"
+      ? options.requestedOrderDiscountPercent ?? null
+      : null;
+    const nextApprovalState = buildDraftApprovalState({
+      approvalRequestId: draftApprovalState?.approvalRequestId ?? null,
+      status: "pending",
+      requestedOrderDiscountPercent,
+      requestedProductDiscounts,
+      updatedAt: new Date().toISOString(),
+    });
+    const nextDraftName = activeDraftId ? draftName : `Approval Draft ${moment().format("MMM D, h:mm a")}`;
+    const orderDraftId = await persistCurrentDraft(nextDraftName, nextApprovalState);
+    const orderSnapshot = buildCurrentOrderSnapshot({
+      requestedOrderDiscountPercent,
+      requestedProductDiscounts,
+    });
+
+    const response = await fetch("/api/custom-discount-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dealerId: user.Dealer_Id,
+        staffId: String(user.assignedstaff ?? ""),
+        assignedStaffId: String(user.assignedstaff ?? ""),
+        dealerName: user.Dealer_Name,
+        dealerCode: user.Dealer_Dealercode,
+        dealerEmail: user.Dealer_Email,
+        dealerPhone: user.Dealer_Number,
+        orderDraftId,
+        requestedDiscountPercent: requestedOrderDiscountPercent ?? Math.max(
+          baseDiscountPayload.baseDiscountPercent,
+          ...Object.values(requestedProductDiscounts),
+          0,
+        ),
+        currentDiscountPercent: baseDiscountPayload.baseDiscountPercent,
+        requestedOrderDiscountPercent,
+        requestedProductDiscounts,
+        subtotal: orderSnapshot.grossAmount,
+        currentDiscountAmount: orderSnapshot.baseDiscountAmount,
+        requestedDiscountAmount: orderSnapshot.requestedAdditionalDiscountAmount,
+        currentFinalPayable: Math.max(0, orderSnapshot.grossAmount - orderSnapshot.baseDiscountAmount),
+        requestedFinalPayable: orderSnapshot.requestedNetPayableAmount,
+        discountScope: options.scope,
+        targetProduct: options.targetProduct ? {
+          productKey: getProductKey(options.targetProduct),
+          productname: options.targetProduct.productname,
+          displayName: options.targetProduct.displayName,
+          variantCode: options.targetProduct.variantCode,
+        } : null,
+        shipto,
+        refno,
+        orderNote: orderNote.trim(),
+        orderSignature: currentOrderSignature,
+        discountBreakdown: {
+          allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
+          baseDiscountPercent: baseDiscountPayload.baseDiscountPercent,
+          slabDiscountPercent: discountPayload.slabDiscountPercent,
+          couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
+          couponCode: appliedCoupon?.code ?? "",
+        },
+        orderSnapshot,
+        products: orderSnapshot.products,
+        draftProducts: buildCurrentDraftRows(),
+      }),
+    });
+
+    const json = await response.json();
+    if (!json.success) throw new Error(json.message ?? "Request failed");
+
+    mergeCustomDiscountRequest(json.data as CustomDiscountRequest);
+
+    const normalized = normalizeCustomDiscountRequestRecord(json.data as CustomDiscountRequest);
+    const savedApprovalState = buildDraftApprovalState({
+      approvalRequestId: normalized.id,
+      status: "pending",
+      requestedOrderDiscountPercent: normalized.requestedOrderDiscountPercent,
+      requestedProductDiscounts: normalized.requestedProductDiscounts,
+      updatedAt: normalized.createdAt,
+    });
+    setDraftApprovalState(savedApprovalState);
+    if (orderDraftId) {
+      await updateDraft(orderDraftId, user.Dealer_Id, {
+        approval_state: savedApprovalState,
+      }).catch((error) => {
+        console.error("[custom-discount] approval state draft sync failed", error);
+      });
+      syncDraftUrl(orderDraftId);
+    }
+
+    return normalized;
+  };
+
   const handleRequestCustomDiscount = async () => {
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product before requesting approval."); return; }
-    if (customDiscountScope === "product" && !selectedCustomDiscountProduct) {
-      toast("Please select a product for product-level discount approval.");
+    if (isWaitingForApproval) {
+      toast("This order is already waiting for approval.");
       return;
     }
-    if (requestedCustomDiscountPercent <= baseDiscountPayload.baseDiscountPercent) {
+    if (customDiscountScope === "order" && requestedCustomDiscountPercent <= baseDiscountPayload.baseDiscountPercent) {
       toast(`Enter a custom discount above the current ${baseDiscountPayload.baseDiscountPercent}%.`);
+      return;
+    }
+    const requestedProductDiscounts = buildRequestedProductDiscountMap();
+    if (customDiscountScope === "product" && Object.keys(requestedProductDiscounts).length === 0) {
+      toast("Select at least one product discount above the current approved/base discount.");
       return;
     }
 
     setCustomDiscountSubmitting(true);
     try {
-      const scopedRows = customDiscountScope === "product" && selectedCustomDiscountProduct
-        ? [selectedCustomDiscountProduct]
-        : arr1.filter(r => r.productname);
-      const scopedSubtotal = customDiscountScope === "product" ? customDiscountBaseSubtotal : subtotal;
-      const scopedSignature = customDiscountScope === "product" && selectedCustomDiscountProduct
-        ? buildProductSignature(selectedCustomDiscountProduct)
-        : currentOrderSignature;
-      const requestProducts = scopedRows.map(toDiscountRequestProduct);
-      const draftProducts = arr1.filter(r => r.productname).map(toDiscountRequestProduct);
-
-      const res = await fetch("/api/custom-discount-requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dealerId: user.Dealer_Id,
-          staffId: String(user.assignedstaff ?? ""),
-          dealerName: user.Dealer_Name,
-          dealerCode: user.Dealer_Dealercode,
-          dealerEmail: user.Dealer_Email,
-          dealerPhone: user.Dealer_Number,
-          requestedDiscountPercent: requestedCustomDiscountPercent,
-          currentDiscountPercent: baseDiscountPayload.baseDiscountPercent,
-          subtotal: Number(payloadAmount(scopedSubtotal)),
-          currentDiscountAmount: Number(payloadAmount(scopedSubtotal * (baseDiscountPayload.baseDiscountPercent / 100))),
-          requestedDiscountAmount: Number(payloadAmount(requestedCustomDiscountAmount)),
-          currentFinalPayable: Number(payloadAmount(Math.max(0, scopedSubtotal - scopedSubtotal * (baseDiscountPayload.baseDiscountPercent / 100)))),
-          requestedFinalPayable: Number(payloadAmount(requestedCustomFinalPayable)),
-          discountScope: customDiscountScope,
-          targetProduct: selectedCustomDiscountProduct ? {
-            productKey: getProductKey(selectedCustomDiscountProduct),
-            productname: selectedCustomDiscountProduct.productname,
-            displayName: selectedCustomDiscountProduct.displayName,
-            variantCode: selectedCustomDiscountProduct.variantCode,
-          } : null,
-          shipto,
-          refno,
-          orderNote: orderNote.trim(),
-          orderNumber: expectedOrderNumber || "",
-          orderSignature: scopedSignature,
-          discountBreakdown: {
-            allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
-            slabDiscountPercent: discountPayload.slabDiscountPercent,
-            couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
-            couponCode: appliedCoupon?.code ?? "",
-          },
-          products: requestProducts,
-          draftProducts,
-        }),
+      await submitCustomDiscountApproval({
+        scope: customDiscountScope,
+        requestedOrderDiscountPercent: customDiscountScope === "order" ? requestedCustomDiscountPercent : null,
+        requestedProductDiscounts,
+        targetProduct: customDiscountScope === "product" ? selectedCustomDiscountProduct : null,
       });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.message ?? "Request failed");
-      setCustomDiscountRequests((prev) => [json.data, ...prev.filter((r) => r.id !== json.data.id)]);
       toast.success("Custom discount request sent to admin.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not request custom discount.");
@@ -923,59 +1226,25 @@ function AddOrderPageInner() {
     const key = getProductKey(row);
     const globalPercent = approvedCustomDiscountPercent ?? baseDiscountPayload.baseDiscountPercent;
     const productPercent = perProductDiscountInputs[key] ?? globalPercent;
+    if (isWaitingForApproval) {
+      toast("This order is already waiting for approval.");
+      return;
+    }
     if (productPercent <= globalPercent) {
       toast(`Enter a product discount above the current ${globalPercent}%.`);
       return;
     }
     setPerProductSubmitting(key);
     try {
-      const rowSub = rowSubtotalPaise(row) / 100;
-      const requestProduct = toDiscountRequestProduct(row);
-      const draftProducts = arr1.filter(r => r.productname).map(toDiscountRequestProduct);
-      const res = await fetch("/api/custom-discount-requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dealerId: user.Dealer_Id,
-          staffId: String(user.assignedstaff ?? ""),
-          dealerName: user.Dealer_Name,
-          dealerCode: user.Dealer_Dealercode,
-          dealerEmail: user.Dealer_Email,
-          dealerPhone: user.Dealer_Number,
-          requestedDiscountPercent: productPercent,
-          currentDiscountPercent: globalPercent,
-          subtotal: Number(payloadAmount(rowSub)),
-          currentDiscountAmount: Number(payloadAmount(rowSub * (globalPercent / 100))),
-          requestedDiscountAmount: Number(payloadAmount(rowSub * (productPercent / 100))),
-          currentFinalPayable: Number(payloadAmount(Math.max(0, rowSub - rowSub * (globalPercent / 100)))),
-          requestedFinalPayable: Number(payloadAmount(Math.max(0, rowSub - rowSub * (productPercent / 100)))),
-          discountScope: "product",
-          targetProduct: {
-            productKey: key,
-            productname: row.productname,
-            displayName: row.displayName,
-            variantCode: row.variantCode,
-          },
-          shipto,
-          refno,
-          orderNote: orderNote.trim(),
-          orderNumber: expectedOrderNumber || "",
-          orderSignature: buildProductSignature(row),
-          discountBreakdown: {
-            allocatedDiscountPercent: baseDiscountPayload.allocatedDiscountPercent,
-            slabDiscountPercent: discountPayload.slabDiscountPercent,
-            couponDiscountPercent: baseDiscountPayload.couponDiscountPercent,
-            couponCode: appliedCoupon?.code ?? "",
-            globalCustomDiscountPercent: approvedCustomDiscountPercent ?? 0,
-            productAdditionalPercent: productPercent - globalPercent,
-          },
-          products: [requestProduct],
-          draftProducts,
-        }),
+      const requestedProductDiscounts = {
+        ...buildRequestedProductDiscountMap(),
+        [normalizeApprovalProductKey(key)]: productPercent,
+      };
+      await submitCustomDiscountApproval({
+        scope: "product",
+        requestedProductDiscounts,
+        targetProduct: row,
       });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.message ?? "Request failed");
-      setCustomDiscountRequests((prev) => [json.data, ...prev.filter((r) => r.id !== json.data.id)]);
       setEditingProductDiscountKey(null);
       toast.success(`Product discount request sent for ${row.displayName || row.variantCode}.`);
     } catch (e) {
@@ -1103,6 +1372,7 @@ function AddOrderPageInner() {
   };
 
   const handleChangeSelect = (idx: number, variantSku: string) => {
+    if (orderLockedByPendingApproval) return;
     if (!variantSku) {
       resetRowSelection(idx);
       return;
@@ -1132,11 +1402,13 @@ function AddOrderPageInner() {
   };
 
   const updateQuantity = (i: number, val: number) => {
+    if (orderLockedByPendingApproval) return;
     const v = Math.max(1, val || 1);
     setArr((prev) => { const n = [...prev]; n[i] = { ...n[i], producQuanity: v }; return n; });
   };
 
   const updateProductNote = (i: number, note: string) => {
+    if (orderLockedByPendingApproval) return;
     const normalizedNote = note.slice(0, 500);
     setArr((prev) => {
       const n = [...prev];
@@ -1146,6 +1418,7 @@ function AddOrderPageInner() {
   };
 
   const togglePriority = (i: number) => {
+    if (orderLockedByPendingApproval) return;
     setArr((prev) => {
       const n = [...prev];
       n[i] = { ...n[i], isPriority: !n[i].isPriority };
@@ -1153,39 +1426,24 @@ function AddOrderPageInner() {
     });
   };
 
-  const addRow = () => setArr((prev) => [...prev, emptyRow()]);
-  const removeRow = (key: number) => setArr((prev) => prev.filter((r) => r.key !== key));
+  const addRow = () => {
+    if (orderLockedByPendingApproval) return;
+    setArr((prev) => [...prev, emptyRow()]);
+  };
+  const removeRow = (key: number) => {
+    if (orderLockedByPendingApproval) return;
+    setArr((prev) => prev.filter((r) => r.key !== key));
+  };
 
   // ── Save Draft ────────────────────────────────────────────────────────────
   const commitSaveDraft = async (nameToUse: string) => {
     if (!user) return;
     setShowNameModal(false);
     setDraftSaving(true);
-    const draftRows: DraftProductRow[] = arr1.map((r) => ({ ...r }));
     try {
-      if (activeDraftId) {
-        await updateDraft(activeDraftId, user.Dealer_Id, {
-          name: nameToUse, shipto, refno,
-          order_note: orderNote.trim() || null,
-          coupon_code: appliedCoupon?.code ?? null,
-          coupon_pct: appliedCoupon?.pct ?? null,
-          rows: draftRows,
-        });
-        setDraftName(nameToUse);
-        toast.success("Draft updated ✓");
-      } else {
-        const created = await saveDraft({
-          dealer_id: user.Dealer_Id, name: nameToUse, shipto, refno,
-          order_note: orderNote.trim() || null,
-          coupon_code: appliedCoupon?.code ?? null,
-          coupon_pct: appliedCoupon?.pct ?? null,
-          rows: draftRows,
-        });
-        setActiveDraftId(created.id);
-        setDraftName(nameToUse);
-        toast.success("Draft saved ✓");
-        window.history.replaceState({}, "", `/order?draft=${created.id}`);
-      }
+      const previousDraftId = activeDraftId;
+      await persistCurrentDraft(nameToUse, buildCurrentApprovalState());
+      toast.success(previousDraftId ? "Draft updated ✓" : "Draft saved ✓");
     } catch {
       toast.error("Could not save draft.");
     } finally {
@@ -1194,6 +1452,10 @@ function AddOrderPageInner() {
   };
 
   const handleSaveDraft = () => {
+    if (orderLockedByPendingApproval) {
+      toast("This approval request is pending, so the submitted order is locked.");
+      return;
+    }
     if (arr1.every(r => !r.productname)) { toast("Add at least one product before saving a draft."); return; }
     if (activeDraftId) {
       commitSaveDraft(draftName);
@@ -1348,6 +1610,10 @@ function AddOrderPageInner() {
   };
 
   const handleSubmitProductArray = async () => {
+    if (isWaitingForApproval) {
+      toast("This order is waiting for discount approval.");
+      return;
+    }
     if (arr1.every(r => !r.productname)) { toast("Please select at least one product"); return; }
     const payload = arr1.filter(r => r.productname).map(r => {
       const rowDiscountPercent = getRowDiscountPercent(r);
@@ -1404,7 +1670,11 @@ function AddOrderPageInner() {
       fd.append("Dealer_note", orderNote.trim());
     }
     const customDiscountSources = [
-      ...(reorderRequest ? [reorderRequest] : approvedCustomRequest ? [approvedCustomRequest] : []),
+      ...(activeApprovalRequest?.normalizedStatus === "approved"
+        ? [activeApprovalRequest]
+        : approvedCustomRequest
+          ? [approvedCustomRequest]
+          : []),
       ...approvedProductCustomRequests,
     ].filter((request, idx, arr) => arr.findIndex((r) => r.id === request.id) === idx);
     if (customDiscountSources.length > 0) {
@@ -1461,6 +1731,13 @@ function AddOrderPageInner() {
       setActiveDraftId(null);
       setDraftBanner(null);
       setReorderRequest(null);
+      setDraftApprovalState(null);
+      setPerProductDiscountInputs({});
+      setCustomDiscountInput("");
+      setShowCustomDiscountEditor(false);
+      setEditingProductDiscountKey(null);
+      setDraftName("Untitled Draft");
+      syncDraftUrl(null);
       // Clear the DraftCart from MongoDB if this order originated from the cart page
       if (fromCart && user?.Dealer_Id) {
         fetch(`/api/draft-cart?dealer_id=${encodeURIComponent(user.Dealer_Id)}`, { method: "DELETE" }).catch(() => { });
@@ -1487,6 +1764,10 @@ function AddOrderPageInner() {
 
   const handleSubmitFile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (orderLockedByPendingApproval) {
+      toast("This approval request is pending, so the submitted order is locked.");
+      return;
+    }
     if (!file) return;
     const fd = new FormData();
     fd.append("staffid", user.assignedstaff);
@@ -1671,10 +1952,17 @@ function AddOrderPageInner() {
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Place Order</h1>
-              <span className="inline-flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-1.5 font-mono text-[12px] font-bold text-indigo-700">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Order No.</span>
-                {expectedOrderLoading ? "Loading..." : expectedOrderNumber || "OM/..."}
-              </span>
+              {activeApprovalRequest && !reorderRequest ? (
+                <span className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 font-mono text-[12px] font-bold text-amber-700">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-500">Request Ref.</span>
+                  {activeApprovalRequest.requestReference || activeApprovalRequest.id}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-1.5 font-mono text-[12px] font-bold text-indigo-700">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Order No.</span>
+                  {expectedOrderLoading ? "Loading..." : expectedOrderNumber || "OM/..."}
+                </span>
+              )}
             </div>
             <p className="text-sm text-gray-500 mt-1">{docDate} · {user.Dealer_Name}</p>
           </div>
@@ -1706,8 +1994,9 @@ function AddOrderPageInner() {
             <div className="flex flex-col gap-1.5">
               <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Ship To</label>
               <textarea
-                className="text-[13.5px] text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2.5 outline-none resize-none min-h-[72px] focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
+                className="text-[13.5px] text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2.5 outline-none resize-none min-h-[72px] focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all disabled:bg-gray-100 disabled:text-gray-500"
                 value={shipto} onChange={(e) => setShipto(e.target.value)}
+                disabled={orderLockedByPendingApproval}
               />
             </div>
             <div className="flex flex-col gap-1.5">
@@ -1725,7 +2014,8 @@ function AddOrderPageInner() {
             <div className="flex flex-col gap-1.5">
               <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Customer Ref No.</label>
               <input type="text" placeholder="Enter reference number" value={refno} onChange={(e) => setRefno(e.target.value)}
-                className="text-[13.5px] text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-gray-300" />
+                disabled={orderLockedByPendingApproval}
+                className="text-[13.5px] text-gray-800 bg-white border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all placeholder:text-gray-300 disabled:bg-gray-100 disabled:text-gray-500" />
             </div>
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -1736,7 +2026,8 @@ function AddOrderPageInner() {
                     setCustomDiscountInput(String(visibleCustomRequest?.requestedDiscountPercent ?? activeDiscount));
                     setShowCustomDiscountEditor(true);
                   }}
-                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg px-2 py-1 transition-colors"
+                  disabled={orderLockedByPendingApproval}
+                  className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg px-2 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   ✏️ Edit
                 </button>
@@ -1779,7 +2070,8 @@ function AddOrderPageInner() {
                   setCustomDiscountInput(String(visibleCustomRequest?.requestedDiscountPercent ?? activeDiscount));
                   setShowCustomDiscountEditor((v) => !v);
                 }}
-                className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[12px] font-bold text-indigo-700 hover:bg-indigo-50 transition-colors sm:col-span-1"
+                disabled={orderLockedByPendingApproval}
+                className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[12px] font-bold text-indigo-700 hover:bg-indigo-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:col-span-1"
               >
                 <span>✏️</span>
                 Custom Discount
@@ -1818,7 +2110,7 @@ function AddOrderPageInner() {
                 {fmt(toPaise(discountPayload.postBaseAmount))}
               </p>
               <p className="mt-0.5 text-[9px] text-indigo-400">
-                {discountPayload.additionalDiscountType === "custom" ? "Custom discount applies from here" : "slab discount is determined from this"}
+                {discountPayload.additionalDiscountType === "custom" ? "Custom discount applies from here" : "Slab discount is determined from this"}
               </p>
             </div>
 
@@ -1868,19 +2160,38 @@ function AddOrderPageInner() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-[14px] font-bold text-gray-900">Custom Discount Approval</h3>
                   {visibleCustomRequest && (
-                    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${visibleCustomRequest.status === "approved"
+                    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${visibleCustomRequest.normalizedStatus === "approved"
                         ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                        : visibleCustomRequest.status === "rejected"
+                        : visibleCustomRequest.normalizedStatus === "rejected"
                           ? "border-red-200 bg-red-50 text-red-700"
                           : "border-amber-200 bg-amber-50 text-amber-700"
                       }`}>
-                      {visibleCustomRequest.status === "rejected" ? "Disapproved" : visibleCustomRequest.status}
+                      {visibleCustomRequest.normalizedStatus === "rejected"
+                        ? "Disapproved"
+                        : `${String(visibleCustomRequest.normalizedStatus).charAt(0).toUpperCase()}${String(visibleCustomRequest.normalizedStatus).slice(1)}`}
                     </span>
                   )}
                 </div>
                 <p className="text-[12px] text-gray-500 mt-1">
                   Request a one-time discount for this order or one selected product. Approved requests are applied automatically while the matching items stay unchanged.
                 </p>
+                {isWaitingForApproval && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-amber-700">
+                    <span>Your order has been submitted for discount approval. You can place it after the request is approved.</span>
+                    <button
+                      type="button"
+                      onClick={() => router.push("/dashboard/dealer/approved-discounts")}
+                      className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                    >
+                      View Approval Status
+                    </button>
+                  </div>
+                )}
+                {isApprovedDraftRequest && (
+                  <p className="mt-2 text-[12px] font-semibold text-emerald-700">
+                    Discount approved. Review the order and place it.
+                  </p>
+                )}
                 {visibleCustomRequest?.discountScope === "product" && (
                   <p className="mt-2 text-[12px] font-semibold text-indigo-700">
                     Product: {visibleCustomRequest.targetProduct?.displayName || visibleCustomRequest.targetProduct?.variantCode || "Selected product"}
@@ -1901,13 +2212,13 @@ function AddOrderPageInner() {
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
                   <p className="font-bold uppercase tracking-wider text-indigo-500">Requested</p>
                   <p className="mt-1 font-mono text-[13px] font-bold text-indigo-700">
-                    {visibleCustomRequest?.requestedDiscountPercent ?? requestedCustomDiscountPercent}%
+                    {visibleCustomRequest?.requestedOrderDiscountPercent ?? visibleCustomRequest?.requestedDiscountPercent ?? requestedCustomDiscountPercent}%
                   </p>
                 </div>
               </div>
             </div>
 
-            {showCustomDiscountEditor && (
+            {showCustomDiscountEditor && !orderLockedByPendingApproval && (
               <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[220px_260px_1fr_auto] lg:items-end">
                 <div>
                   <label className="text-[10.5px] font-bold text-gray-400 uppercase tracking-wider">Applies To</label>
@@ -2001,10 +2312,11 @@ function AddOrderPageInner() {
               <input type="text" placeholder="Enter discount code" value={couponInput}
                 onChange={e => { setCouponInput(e.target.value.toUpperCase()); setCouponError(""); setCouponSuccess(""); }}
                 onKeyDown={e => { if (e.key === "Enter") handleApplyCoupon(); }}
+                disabled={orderLockedByPendingApproval}
                 className={`flex-1 text-[13px] text-gray-900 border rounded-xl px-4 py-2.5 outline-none transition-all font-mono tracking-wider placeholder:text-gray-300 placeholder:font-normal ${couponError ? "border-red-300 bg-red-50/30 focus:ring-2 focus:ring-red-100" : "border-gray-200 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                  }`}
+                  } disabled:bg-gray-100 disabled:text-gray-500`}
               />
-              <button onClick={handleApplyCoupon} disabled={!couponInput.trim()}
+              <button onClick={handleApplyCoupon} disabled={orderLockedByPendingApproval || !couponInput.trim()}
                 className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold rounded-xl transition-colors">
                 Apply
               </button>
@@ -2020,7 +2332,7 @@ function AddOrderPageInner() {
                   <p className="text-[11px] text-violet-600 mt-0.5">Coupon adds {appliedCoupon.pct}% to the allocated and slab discounts</p>
                 </div>
               </div>
-              <button onClick={handleRemoveCoupon}
+              <button onClick={handleRemoveCoupon} disabled={orderLockedByPendingApproval}
                 className="text-[12px] font-semibold text-violet-600 hover:text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-all border border-violet-200 hover:border-red-200">
                 Remove
               </button>
@@ -2038,9 +2350,9 @@ function AddOrderPageInner() {
         {/* Tabs */}
         <div className="flex gap-2 mb-5">
           {(["manual", "excel"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
+            <button key={t} onClick={() => setTab(t)} disabled={orderLockedByPendingApproval}
               className={`px-5 py-2 rounded-xl text-[13px] font-medium border transition-all duration-150 cursor-pointer ${tab === t ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 border-gray-200 hover:bg-gray-50 hover:text-gray-700"
-                }`}>
+                } disabled:cursor-not-allowed disabled:opacity-40`}>
               {t === "manual" ? "Manual Entry" : "Upload Excel"}
             </button>
           ))}
@@ -2120,8 +2432,14 @@ function AddOrderPageInner() {
                             {(row.displayName || selectedProduct || row.productname) && (
                             <div className="flex items-center gap-2 mb-2">
                               {meta?.image || selectedProduct?.images?.[0] ? (
-                                <img src={meta?.image || selectedProduct?.images?.[0] || ""} alt={row.displayName || selectedProduct?.name || row.productname}
-                                  className="w-8 h-8 object-contain rounded border border-gray-100 bg-gray-50 flex-shrink-0" />
+                                <Image
+                                  src={meta?.image || selectedProduct?.images?.[0] || ""}
+                                  alt={row.displayName || selectedProduct?.name || row.productname}
+                                  width={32}
+                                  height={32}
+                                  unoptimized
+                                  className="w-8 h-8 object-contain rounded border border-gray-100 bg-gray-50 flex-shrink-0"
+                                />
                               ) : (
                                 <div className="w-8 h-8 rounded border border-gray-100 bg-gray-50 flex-shrink-0 flex items-center justify-center">
                                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
@@ -2152,6 +2470,7 @@ function AddOrderPageInner() {
                               options={optionList}
                               value={optionList.find((option) => option.value === rowSelection.variantSku) ?? null}
                               onChange={(option) => handleChangeSelect(idx, option?.value ?? "")}
+                              isDisabled={orderLockedByPendingApproval}
                               filterOption={catalogueFilter}
                               isClearable
                               placeholder="Search Catalogue No."
@@ -2204,11 +2523,12 @@ function AddOrderPageInner() {
                             <button
                               type="button"
                               onClick={() => togglePriority(idx)}
+                              disabled={orderLockedByPendingApproval}
                               title="Mark this product as priority"
                               className={`inline-flex h-[38px] w-fit items-center gap-2 rounded-xl border px-3 text-[11px] font-bold transition-colors ${row.isPriority
                                   ? "bg-red-600 border-red-600 text-white shadow-sm"
                                   : "bg-white border-red-200 text-red-600 hover:bg-red-50"
-                                }`}
+                                } disabled:cursor-not-allowed disabled:opacity-40`}
                             >
                               <span
                                 className={`relative inline-flex h-4 w-7 items-center rounded-full ${row.isPriority ? "bg-white/30" : "bg-red-100"
@@ -2239,9 +2559,10 @@ function AddOrderPageInner() {
                                   id={`product-note-${row.key}`}
                                   value={row.productNote ?? ""}
                                   onChange={(e) => updateProductNote(idx, e.target.value)}
+                                  disabled={orderLockedByPendingApproval}
                                   maxLength={500}
                                   placeholder="Add instructions for this product..."
-                                  className="mt-2 min-h-[68px] w-full resize-y rounded-lg border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-700 outline-none transition-colors placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                                  className="mt-2 min-h-[68px] w-full resize-y rounded-lg border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-700 outline-none transition-colors placeholder:text-gray-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-100 disabled:text-gray-500"
                                 />
                               </div>
                             )}
@@ -2258,11 +2579,11 @@ function AddOrderPageInner() {
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center border border-gray-200 rounded-xl overflow-hidden w-fit">
-                            <button onClick={() => updateQuantity(idx, row.producQuanity - 1)}
+                            <button onClick={() => updateQuantity(idx, row.producQuanity - 1)} disabled={orderLockedByPendingApproval}
                               className="w-8 h-[34px] flex items-center justify-center bg-gray-50 hover:bg-gray-100 text-gray-600 text-base transition-colors border-none cursor-pointer">−</button>
-                            <input type="number" value={row.producQuanity} onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)} min={1}
+                            <input type="number" value={row.producQuanity} onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)} min={1} disabled={orderLockedByPendingApproval}
                               className="w-12 h-[34px] text-center text-[13px] font-semibold text-gray-900 font-mono border-x border-gray-200 outline-none bg-white" />
-                            <button onClick={() => updateQuantity(idx, row.producQuanity + 1)}
+                            <button onClick={() => updateQuantity(idx, row.producQuanity + 1)} disabled={orderLockedByPendingApproval}
                               className="w-8 h-[34px] flex items-center justify-center bg-gray-50 hover:bg-gray-100 text-gray-600 text-base transition-colors border-none cursor-pointer">+</button>
                           </div>
                           <p className="text-[10px] text-gray-400 mt-1 font-mono">{row.producQuanity} pack{row.producQuanity !== 1 ? "s" : ""}</p>
@@ -2315,6 +2636,7 @@ function AddOrderPageInner() {
                                       }));
                                     }
                                   }}
+                                  disabled={orderLockedByPendingApproval}
                                   className={`w-[18px] h-[18px] flex items-center justify-center rounded transition-colors ${isEditingThisRow ? "bg-indigo-100 text-indigo-700" : "text-indigo-400 hover:bg-indigo-50 hover:text-indigo-600"}`}
                                   title="Edit product discount"
                                 >
@@ -2342,7 +2664,7 @@ function AddOrderPageInner() {
                                     onClick={() => setPerProductDiscountInputs((prev) => ({
                                       ...prev,
                                       [productKey]: Math.max(globalPercent, (prev[productKey] ?? globalPercent) - 0.5),
-                                    }))}
+                                    }))} disabled={orderLockedByPendingApproval}
                                     className="w-7 h-[26px] flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold transition-colors border-none cursor-pointer"
                                   >−</button>
                                   <span className="w-10 h-[26px] flex items-center justify-center text-[11px] font-mono font-bold text-indigo-700 border-x border-indigo-200 bg-white">
@@ -2353,14 +2675,14 @@ function AddOrderPageInner() {
                                     onClick={() => setPerProductDiscountInputs((prev) => ({
                                       ...prev,
                                       [productKey]: Math.min(100, (prev[productKey] ?? globalPercent) + 0.5),
-                                    }))}
+                                    }))} disabled={orderLockedByPendingApproval}
                                     className="w-7 h-[26px] flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold transition-colors border-none cursor-pointer"
                                   >+</button>
                                 </div>
                                 <button
                                   type="button"
                                   onClick={() => handleRequestProductDiscount(row)}
-                                  disabled={currentProductInput <= globalPercent || perProductSubmitting === productKey}
+                                  disabled={orderLockedByPendingApproval || currentProductInput <= globalPercent || perProductSubmitting === productKey}
                                   className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors border-none cursor-pointer"
                                 >
                                   {perProductSubmitting === productKey ? "Sending…" : "Request ▸"}
@@ -2384,7 +2706,7 @@ function AddOrderPageInner() {
                           </span>
                         </td>
                         <td className="pl-3 pr-6 py-3">
-                          <button onClick={() => removeRow(row.key)} title="Remove row"
+                          <button onClick={() => removeRow(row.key)} title="Remove row" disabled={orderLockedByPendingApproval}
                             className="w-[30px] h-[30px] flex items-center justify-center rounded-lg border border-red-100 text-red-400 hover:bg-red-50 hover:border-red-200 transition-colors cursor-pointer bg-transparent">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                               <polyline points="3 6 5 6 21 6" />
@@ -2397,7 +2719,7 @@ function AddOrderPageInner() {
                   })}
                   <tr className="border-t border-dashed border-gray-100">
                     <td colSpan={10} className="px-6 py-3">
-                      <button onClick={addRow}
+                      <button onClick={addRow} disabled={orderLockedByPendingApproval}
                         className="inline-flex items-center gap-2 text-[12px] text-gray-400 hover:text-indigo-600 transition-colors cursor-pointer">
                         <span className="w-5 h-5 rounded-md border border-gray-200 flex items-center justify-center text-sm hover:border-indigo-300 hover:bg-indigo-50 transition-colors">+</span>
                         Add another product
@@ -2419,8 +2741,9 @@ function AddOrderPageInner() {
                   value={orderNote}
                   maxLength={1200}
                   onChange={(e) => setOrderNote(e.target.value)}
+                  disabled={orderLockedByPendingApproval}
                   placeholder="Add packing, dispatch, or billing instructions for this order..."
-                  className="min-h-[82px] w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[13px] text-gray-900 outline-none transition-all placeholder:text-gray-400 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                  className="min-h-[82px] w-full resize-none rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[13px] text-gray-900 outline-none transition-all placeholder:text-gray-400 focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-100 disabled:text-gray-500"
                 />
               </div>
             </div>
@@ -2441,7 +2764,7 @@ function AddOrderPageInner() {
                     {discountPayload.additionalDiscountType === "custom"
                       ? " · Approved custom selected"
                       : hasSlabDiscount ? ` → slab: ${discountPayload.slabDiscountPercent}%` : ""}
-                    {" · "}{discountPayload.additionalDiscountType === "custom" ? "slab discount disabled" : discountStatusMessage}
+                    {" · "}{discountPayload.additionalDiscountType === "custom" ? "Slab discount disabled" : discountStatusMessage}
                   </p>
                 </div>
 
@@ -2489,18 +2812,44 @@ function AddOrderPageInner() {
 
             {/* Action bar */}
             <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 flex-wrap">
-              <button onClick={handleSubmitProductArray}
-                className={`inline-flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-[13.5px] font-semibold transition-all shadow-sm hover:shadow-md hover:-translate-y-px cursor-pointer border-none ${hasAnyDiscount
-                    ? "bg-gradient-to-r from-emerald-700 to-emerald-500 hover:from-emerald-800 hover:to-emerald-600"
-                    : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600"
-                  }`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-                Place Order
-              </button>
+              {isWaitingForApproval ? (
+                <>
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-500 px-5 py-2.5 text-[13.5px] font-semibold text-white cursor-not-allowed shadow-sm"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 7v5l3 2" />
+                    </svg>
+                    Wait for Approval
+                  </button>
+                  <p className="text-[12.5px] text-amber-700">
+                    Your order has been submitted for discount approval. You can place it after the request is approved.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => router.push("/dashboard/dealer/approved-discounts")}
+                    className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-4 py-2.5 text-[13px] font-semibold text-amber-700 hover:bg-amber-50"
+                  >
+                    View Approval Status
+                  </button>
+                </>
+              ) : (
+                <button onClick={handleSubmitProductArray}
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-[13.5px] font-semibold transition-all shadow-sm hover:shadow-md hover:-translate-y-px cursor-pointer border-none ${hasAnyDiscount
+                      ? "bg-gradient-to-r from-emerald-700 to-emerald-500 hover:from-emerald-800 hover:to-emerald-600"
+                      : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600"
+                    }`}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Place Order
+                </button>
+              )}
 
-              <button onClick={handleSaveDraft} disabled={draftSaving}
+              <button onClick={handleSaveDraft} disabled={draftSaving || orderLockedByPendingApproval}
                 className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 text-gray-600 rounded-xl text-[13.5px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                   <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
@@ -2510,8 +2859,8 @@ function AddOrderPageInner() {
                 {activeDraftId ? "Update Draft" : "Save as Draft"}
               </button>
 
-              <button onClick={addRow}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-600 rounded-xl text-[13.5px] font-medium transition-all cursor-pointer">
+              <button onClick={addRow} disabled={orderLockedByPendingApproval}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 hover:bg-gray-50 hover:border-gray-300 text-gray-600 rounded-xl text-[13.5px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                   <path d="M12 5v14M5 12h14" />
                 </svg>
@@ -2529,7 +2878,7 @@ function AddOrderPageInner() {
             <form onSubmit={handleSubmitFile}>
               <label className={`block border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-200 ${file ? "border-emerald-300 bg-emerald-50" : "border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30"
                 }`}>
-                <input required type="file" accept=".xlsx,.xls,.csv" className="hidden"
+                <input required type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={orderLockedByPendingApproval}
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
                 {file ? (
                   <><div className="text-4xl mb-3">📄</div>
@@ -2542,7 +2891,7 @@ function AddOrderPageInner() {
                 )}
               </label>
               <div className="mt-5">
-                <button type="submit" disabled={!file}
+                <button type="submit" disabled={orderLockedByPendingApproval || !file}
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-gray-900 hover:bg-gray-800 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer border-none">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />

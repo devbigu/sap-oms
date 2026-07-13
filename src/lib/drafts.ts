@@ -8,6 +8,8 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import type { DraftApprovalState } from "@/lib/customDiscountRequests";
+
 const BASE = "/api/drafts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -33,6 +35,7 @@ export type OrderDraft = {
   order_note: string | null;
   coupon_code: string | null;
   coupon_pct: number | null;
+  approval_state?: DraftApprovalState | null;
   source?: string;
   source_request_id?: string;
   rows: DraftProductRow[];
@@ -48,6 +51,7 @@ export type DraftPayload = {
   order_note?: string | null;
   coupon_code?: string | null;
   coupon_pct?: number | null;
+  approval_state?: DraftApprovalState | null;
   rows: DraftProductRow[];
 };
 

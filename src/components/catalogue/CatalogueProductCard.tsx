@@ -167,7 +167,7 @@ export default function CatalogueProductCard({
           )}
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10.5, color: "#94a3b8" }}>SKU: {skuLabel || product.sku}</span>
+            <i><span className="text-sm font-medium text-gray-900 underline">SKU: {skuLabel || product.sku}</span></i>
             {multiVariant && <span style={{ fontSize: 10.5, color: "#64748b" }}>{variantCount} variants</span>}
           </div>
 
@@ -181,6 +181,7 @@ export default function CatalogueProductCard({
                       {formatPrice(regular)}
                     </span>
                   )}
+                  
                   {multiVariant && <span style={{ fontSize: 10, color: "#64748b" }}>onwards</span>}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>

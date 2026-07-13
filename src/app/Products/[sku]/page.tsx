@@ -42,6 +42,8 @@ type Product = {
   variants?: Variant[];
 };
 
+type QuantityValue = number | "";
+
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -65,6 +67,15 @@ function fmt(paise: number | null): string {
 }
 
 // Unique spec keys across all variants — drives the table columns.
+function quantityAsNumber(value: QuantityValue): number {
+  return value === "" ? 0 : Math.max(0, value);
+}
+
+function parseQuantityInput(rawValue: string): QuantityValue {
+  if (rawValue === "") return "";
+  return Math.max(0, Number.parseInt(rawValue, 10) || 0);
+}
+
 function getSpecKeys(variants: Variant[]): string[] {
   const seen = new Set<string>();
   variants.forEach(v => Object.keys(v.specs ?? {}).forEach(k => seen.add(k)));
@@ -180,7 +191,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   const [notFound,            setNotFound]            = useState(false);
   const [selectedVariantSKU,  setSelectedVariantSKU]  = useState<string | null>(null);
   const [selectedImageIdx,    setSelectedImageIdx]    = useState(0);
-  const [rowPacks,            setRowPacks]            = useState<Record<string, number>>({});
+  const [rowPacks,            setRowPacks]            = useState<Record<string, QuantityValue>>({});
   const [toast,               setToast]               = useState<{ name: string; sku: string; bulk?: boolean } | null>(null);
 
   const addToCart = useCartStore(s => s.addToCart);
@@ -214,7 +225,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
           setProduct(found);
           if (!selectedVariantSKU && found.variants?.length)
             setSelectedVariantSKU(found.variants[0].sku);
-          const init: Record<string, number> = {};
+          const init: Record<string, QuantityValue> = {};
           found.variants?.forEach(v => { init[v.sku] = cart.find(c => c.id === v.sku)?.quantity ?? 0; });
           setRowPacks(init);
         } else {
@@ -227,9 +238,10 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
   // ── Derived ───────────────────────────────────────────────
   const selectedVariant   = product?.variants?.find(v => v.sku === selectedVariantSKU) ?? null;
-  const selectedQuantity  = selectedVariantSKU
-    ? Math.max(0, rowPacks[selectedVariantSKU] ?? 0)
-    : 0;
+  const selectedQuantityValue = selectedVariantSKU
+    ? rowPacks[selectedVariantSKU] ?? ""
+    : "";
+  const selectedQuantity  = quantityAsNumber(selectedQuantityValue);
   const displayPricePaise = variantPricePaise(selectedVariant);   // per unit (paise)
   const selectedPackSize  = selectedVariant?.pack ?? 1;
   const packPricePaise    = displayPricePaise !== null ? displayPricePaise * selectedPackSize : null;
@@ -242,13 +254,14 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
   // Per-row calculation for the variants table
   const rowCalc = (variantSku: string) => {
-    const numPacks  = rowPacks[variantSku] ?? 0;
+    const quantityValue = rowPacks[variantSku] ?? "";
+    const numPacks  = quantityAsNumber(quantityValue);
     const vm        = product?.variants?.find(v => v.sku === variantSku);
     const packSize  = vm?.pack ?? 1;
     const unitPaise = vm ? vm.price * 100 : 0;          // per unit
     const packPaise = unitPaise * packSize;              // per pack
     return {
-      numPacks, packSize, unitPaise, packPaise,
+      quantityValue, numPacks, packSize, unitPaise, packPaise,
       totalPaise: unitPaise * numPacks * packSize,       // price × total units
       perUnit: unitPaise || null,
     };
@@ -266,6 +279,13 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     selectedQuantity > 0 &&
     selectedVariant.inStock
   );
+  const canAddSelected = Boolean(
+    selectedVariantSKU &&
+    selectedVariant &&
+    displayPricePaise !== null &&
+    selectedQuantity > 0 &&
+    selectedVariant.inStock
+  );
 
   const updateSelectedQuantity = (
     nextValue: number | ((current: number) => number)
@@ -273,10 +293,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     if (!selectedVariantSKU) return;
 
     setRowPacks((previous) => {
-      const current = Math.max(
-        0,
-        previous[selectedVariantSKU] ?? 0
-      );
+      const current = quantityAsNumber(previous[selectedVariantSKU] ?? "");
 
       const next =
         typeof nextValue === "function"
@@ -285,10 +302,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
       return {
         ...previous,
-        [selectedVariantSKU]: Math.max(
-          0,
-          Number.isFinite(next) ? Math.floor(next) : 0
-        ),
+        [selectedVariantSKU]: Math.max(0, Number.isFinite(next) ? Math.floor(next) : 0),
       };
     });
   };
@@ -309,10 +323,10 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
   };
 
   const handleAddSelected = () => {
-    if (!selectedVariantSKU || !product || displayPricePaise === null) return;
+    if (!selectedVariantSKU || !product || !selectedVariant || displayPricePaise === null || selectedQuantity <= 0 || !selectedVariant.inStock) return;
     addVariant(
       selectedVariantSKU,
-      selectedVariant?.name ?? product.name,
+      selectedVariant.name ?? product.name,
       displayPricePaise,
       selectedQuantity,
       selectedPackSize,
@@ -324,6 +338,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     if (!product) return;
     const vm = product.variants?.find(v => v.sku === variantSku);
     const { numPacks, packSize, unitPaise } = rowCalc(variantSku);
+    if (!vm || numPacks <= 0 || !vm.inStock) return;
     addVariant(variantSku, vm?.name ?? product.name, unitPaise, numPacks, packSize, getVariantImage(product, vm));
     setSelectedVariantSKU(variantSku);
   };
@@ -613,21 +628,29 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                   <button onClick={() => updateSelectedQuantity(current => Math.max(0, current - 1))} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>−</button>
                    <input 
                     type="number" 
-                    value={selectedQuantity} 
-                    onChange={(e) => updateSelectedQuantity(parseInt(e.target.value) || 0)} 
+                    value={selectedQuantityValue} 
+                    onChange={(e) => {
+                      const rawValue = e.target.value;
+                      if (!selectedVariantSKU) return;
+                      setRowPacks((previous) => ({
+                        ...previous,
+                        [selectedVariantSKU]: parseQuantityInput(rawValue),
+                      }));
+                    }} 
                     style={{ padding: "1px 1px", fontSize: 15, fontWeight: 700, borderLeft: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0", width:60, textAlign: "center" }} 
+                    min={0}
                   />
                   <button onClick={() => updateSelectedQuantity(current => current + 1)} style={{ padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontSize: 18, color: "#374151" }}>+</button>
                 </div>
               </div>
 
-              <button onClick={handleAddSelected} disabled={!selectedVariantSKU || !inStock}
+              <button onClick={handleAddSelected} disabled={!canAddSelected}
                 style={{ width: "100%", padding: "13px 0", fontSize: 14, fontWeight: 700, borderRadius: 10, border: "2px solid",
-                  cursor: (!selectedVariantSKU || !inStock) ? "not-allowed" : "pointer", transition: "all .15s",
+                  cursor: !canAddSelected ? "not-allowed" : "pointer", transition: "all .15s",
                   background: stickyInCart ? "#f0fdf4" : "#6A5ACD",
                   borderColor: stickyInCart ? "#22c55e" : "#6A5ACD",
                   color: stickyInCart ? "#15803d" : "#fff",
-                  opacity: (!selectedVariantSKU || !inStock) ? 0.5 : 1 }}>
+                  opacity: !canAddSelected ? 0.5 : 1 }}>
                 {stickyInCart ? "✓ Added — Add More" : "Add to Cart"}
               </button>
 
@@ -671,8 +694,9 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                   <tbody>
                     {product.variants.map((v, idx) => {
                       const isSel    = v.sku === selectedVariantSKU;
-                      const { numPacks, packSize, unitPaise, packPaise, totalPaise } = rowCalc(v.sku);
+                      const { quantityValue, numPacks, packSize, unitPaise, packPaise, totalPaise } = rowCalc(v.sku);
                       const cartItem = cart.find(c => c.id === v.sku);
+                      const canAddRow = numPacks > 0 && v.inStock;
 
                       return (
                         <tr key={`${v.sku}-${idx}`}
@@ -697,19 +721,19 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <div style={{ display: "flex", alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 6, overflow: "hidden" }}>
-                                <button onClick={() => setRowPacks(p => ({ ...p, [v.sku]: Math.max(0, (p[v.sku] ?? 0) - 1) }))}
+                                <button onClick={() => setRowPacks((previous) => ({ ...previous, [v.sku]: Math.max(0, quantityAsNumber(previous[v.sku] ?? "") - 1) }))}
                                   style={{ padding: "4px 8px", border: "none", background: "#f8fafc", cursor: "pointer", fontSize: 14, color: "#374151" }}>−</button>
                                 <input
                                   type="number"
-                                  value={numPacks}
+                                  value={quantityValue}
                                   onChange={(e) => {
-                                    const val = parseInt(e.target.value) || 0;
-                                    setRowPacks(p => ({ ...p, [v.sku]: Math.max(0, val) }));
+                                    const rawValue = e.target.value;
+                                    setRowPacks((previous) => ({ ...previous, [v.sku]: parseQuantityInput(rawValue) }));
                                   }}
                                   style={{ width: 48, padding: "4px 4px", fontSize: 12, fontWeight: 700, borderLeft: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0", border: "none", borderLeftStyle: "solid", borderLeftWidth: 1, borderLeftColor: "#e2e8f0", borderRightStyle: "solid", borderRightWidth: 1, borderRightColor: "#e2e8f0", textAlign: "center", outline: "none", MozAppearance: "textfield", background: "transparent" }}
                                   min={0}
                                 />
-                                <button onClick={() => setRowPacks(p => ({ ...p, [v.sku]: (p[v.sku] ?? 0) + 1 }))}
+                                <button onClick={() => setRowPacks((previous) => ({ ...previous, [v.sku]: quantityAsNumber(previous[v.sku] ?? "") + 1 }))}
                                   style={{ padding: "4px 8px", border: "none", background: "#f8fafc", cursor: "pointer", fontSize: 14, color: "#374151" }}>+</button>
                               </div>
                               {(cartItem?.quantity ?? 0) > 0 && (
@@ -737,8 +761,9 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>
                             <button onClick={() => handleAddRow(v.sku)}
-                              style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, background: "#6A5ACD", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", transition: "background .15s" }}
-                              onMouseEnter={e => (e.currentTarget.style.background = "#0f2a4a")}
+                              disabled={!canAddRow}
+                              style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, background: "#6A5ACD", color: "#fff", border: "none", borderRadius: 6, cursor: canAddRow ? "pointer" : "not-allowed", whiteSpace: "nowrap", transition: "background .15s", opacity: canAddRow ? 1 : 0.5 }}
+                              onMouseEnter={e => { if (canAddRow) e.currentTarget.style.background = "#0f2a4a"; }}
                               onMouseLeave={e => (e.currentTarget.style.background = "#6A5ACD")}>
                               Add to Cart
                             </button>

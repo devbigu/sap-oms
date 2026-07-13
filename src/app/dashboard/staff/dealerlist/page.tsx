@@ -455,15 +455,32 @@ export default function StaffDealerListPage() {
   return (
     <main className="min-h-screen bg-gray-100 p-6">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold text-gray-900">
-            Dealer List
-          </h1>
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">
+              Dealer List
+            </h1>
 
-          <p className="mt-1 text-sm text-gray-500">
-            Dealers assigned to{" "}
-            {staffSession?.name || "your account"}
-          </p>
+            <p className="mt-1 text-sm text-gray-500">
+              Dealers assigned to{" "}
+              {staffSession?.name || "your account"}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/dashboard/staff/dealer-requests"
+              className="rounded-md border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              Dealer Requests
+            </Link>
+            <Link
+              href="/dashboard/admin/dealer/AddDealerForm"
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700"
+            >
+              Add Dealer
+            </Link>
+          </div>
         </div>
 
         <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

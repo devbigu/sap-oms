@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 
 interface ProductSearchProps {
-  onSelect?: (product: any) => void
+  onSelect?: (product: unknown) => void
   maxResults?: number
   showVariants?: boolean
   category?: string
@@ -15,7 +15,7 @@ interface ProductSearchProps {
 export default function ProductSearch({
   onSelect,
   maxResults = 10,
-  showVariants = true,
+  showVariants: _showVariants = true,
   category,
 }: ProductSearchProps) {
   const { results, isLoading, isError, query, debouncedSearch, clear } =
@@ -95,7 +95,7 @@ export default function ProductSearch({
           {/* No results */}
           {!isLoading && !isError && displayResults.length === 0 && query && (
             <div className="px-4 py-6 text-center text-gray-500 text-sm">
-              No products found for "{query}"
+              No products found for &ldquo;{query}&rdquo;
             </div>
           )}
 
