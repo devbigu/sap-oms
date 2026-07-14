@@ -3,6 +3,10 @@
 import { useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 
+import { broadcastAuthChange, clearStoredAuthData } from "@/lib/auth/client"
+import { getDefaultRouteForRole } from "@/lib/auth/client"
+import { isRoleAllowed } from "@/lib/auth/routePolicy"
+
 export default function AccountantLogin() {
   const router = useRouter()
 
@@ -32,10 +36,28 @@ export default function AccountantLogin() {
       const data = await res.json()
 
       if (data?.success) {
-        localStorage.setItem("accountant_token", data.token)
-        localStorage.setItem("AccountantData",   JSON.stringify(data.data))
-        localStorage.setItem("roletype",         "accountant")
-        router.push("/dashboard/accountant")
+        clearStoredAuthData(window.localStorage)
+        if (data.token) {
+          localStorage.setItem("accountant_token", data.token)
+        }
+        localStorage.setItem("AccountantData", JSON.stringify(data.data))
+        localStorage.setItem("roletype", "accountant")
+        broadcastAuthChange()
+        const nextPath =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("next")
+            : null
+        const fallbackRoute =
+          typeof data?.redirectTo === "string" && data.redirectTo.startsWith("/")
+            ? data.redirectTo
+            : getDefaultRouteForRole("accountant")
+        const safeNextPath =
+          typeof nextPath === "string" &&
+          nextPath.startsWith("/") &&
+          isRoleAllowed(nextPath, "accountant")
+            ? nextPath
+            : null
+        router.push(safeNextPath || fallbackRoute)
       } else {
         setError(data?.message || "Login failed")
       }

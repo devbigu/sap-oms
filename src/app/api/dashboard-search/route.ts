@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import catalogueProducts from "../../../../public/data/nested_omsons_products.json";
 import dashboardSearch from "@/lib/dashboardSearch.js";
+import { requireApiSession } from "@/lib/auth/server";
 
 export const runtime = "nodejs";
 
@@ -62,21 +63,6 @@ const orderItemSummaryCache = new Map<string, {
 
 function safeText(value: unknown, max = 200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function parseActor(req: NextRequest): DashboardActor | null {
-  const role = safeText(req.headers.get("x-omsons-actor-role"), 20).toLowerCase();
-  const actorId = safeText(req.headers.get("x-omsons-actor-id"), 120);
-  const roletype = safeText(req.headers.get("x-omsons-actor-roletype"), 20);
-
-  if (role !== "admin" && role !== "staff" && role !== "dealer") return null;
-  if (role !== "admin" && !actorId) return null;
-
-  return {
-    role,
-    actorId,
-    roletype,
-  };
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -295,14 +281,18 @@ function emptyResponse(query: string, limitation?: string): SearchResponse {
 
 export async function GET(req: NextRequest) {
   const query = safeText(req.nextUrl.searchParams.get("q"), 240);
-  const actor = parseActor(req);
+  const session = requireApiSession(req, {
+    roles: ["admin", "staff", "dealer"],
+    unauthenticatedMessage: "Authentication required for dashboard search",
+    unauthorizedMessage: "Your signed-in role cannot use dashboard search",
+  });
+  if (session instanceof NextResponse) return session;
 
-  if (!actor) {
-    return NextResponse.json(
-      { success: false, message: "Missing dashboard search identity" },
-      { status: 401 }
-    );
-  }
+  const actor: DashboardActor = {
+    role: session.role as DashboardRole,
+    actorId: session.dealerId ?? session.staffId ?? session.adminId ?? session.userId,
+    roletype: session.roletype,
+  };
 
   const queryInfo = dashboardSearch.getDashboardQueryInfo(query);
   if (!queryInfo.canSearch) {
@@ -335,8 +325,6 @@ export async function GET(req: NextRequest) {
       query,
       results: response.results,
       groups: response.groups,
-      limitation:
-        "Results are filtered in this Next.js API, but the current app does not expose a server-verifiable login session for stronger authorization.",
     } satisfies SearchResponse);
   } catch (error) {
     console.error("[GET /api/dashboard-search]", error);

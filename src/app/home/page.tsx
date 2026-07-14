@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import moment from "moment";
 import { ImageSlider } from "@/components/ImageSlider";
 import { bottleProducts, CATEGORY_CARDS } from "@/Assets/dataset";
-import { SIDEBAR_CATEGORIES } from "@/lib/categories";
+import { CATEGORY_LABELS, FEATURED_NAV_CATEGORIES, getCategoryFilterHref } from "@/lib/categories";
 import Footer from "@/components/Footer";
 import Link from "next/link";
 import axios from "axios";
@@ -422,28 +422,46 @@ export default function Page() {
     <div className="w-full min-h-screen bg-gray-50 text-black">
 
       {/* ── Categories Nav ── */}
-      <nav className="bg-[#032e66] relative h-10 flex items-center text-white text-sm w-full px-4">
-        <button
-          onClick={() => setNavOpen(!navOpen)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-[#054080] transition-colors font-medium"
-        >
-          <GiHamburgerMenu className="h-4 w-4" />
-          All Categories
-          <svg
-            className="h-3 w-3 transition-transform duration-200"
-            style={{ transform: navOpen ? "rotate(180deg)" : "rotate(0deg)" }}
-            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+      <nav className="bg-[#032e66] relative flex min-h-10 items-center text-white text-sm w-full px-4">
+        <div className="flex w-full items-center gap-2">
+          <button
+            onClick={() => setNavOpen(!navOpen)}
+            className="flex shrink-0 items-center gap-2 px-3 py-1.5 rounded hover:bg-[#054080] transition-colors font-medium"
           >
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
+            <GiHamburgerMenu className="h-4 w-4" />
+            All Categories
+            <svg
+              className="h-3 w-3 transition-transform duration-200"
+              style={{ transform: navOpen ? "rotate(180deg)" : "rotate(0deg)" }}
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
 
-        {/* Backdrop */}
+          <div className="flex flex-1 flex-wrap items-center gap-1">
+            <Link
+              href="/home"
+              className="px-3 py-1.5 rounded hover:bg-[#054080] transition-colors font-medium whitespace-nowrap"
+            >
+              Home
+            </Link>
+            {FEATURED_NAV_CATEGORIES.map((label) => (
+              <Link
+                key={label}
+                href={getCategoryFilterHref(label)}
+                className="px-3 py-1.5 rounded hover:bg-[#054080] transition-colors font-medium whitespace-nowrap"
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
+        </div>
+
         {navOpen && (
           <div className="fixed inset-0 z-40" onClick={() => setNavOpen(false)} />
         )}
 
-        {/* Dropdown panel */}
         <div
           className="absolute top-10 left-0 z-50 bg-white text-gray-800 shadow-2xl rounded-b-xl overflow-hidden"
           style={{
@@ -457,10 +475,10 @@ export default function Page() {
           <div className="p-4 overflow-y-auto" style={{ maxHeight: 480 }}>
             <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 px-1">Browse by Category</p>
             <div className="grid grid-cols-3 gap-1">
-              {Object.keys(SIDEBAR_CATEGORIES).map(label => (
+              {CATEGORY_LABELS.map((label) => (
                 <Link
                   key={label}
-                  href={`/Products?cat=${encodeURIComponent(label)}`}
+                  href={getCategoryFilterHref(label)}
                   onClick={() => setNavOpen(false)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
                 >

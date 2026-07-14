@@ -25,6 +25,8 @@ const roleRouteMap = {
     dashboard: "/dashboard/dealer",
   },
   staff: {
+    dealer: "/dashboard/staff/dealerlist",
+    dealers: "/dashboard/staff/dealerlist",
     orders: "/dashboard/staff",
     "order status": "/dashboard/staff/orderstatus",
     "pdf post": "/dashboard/staff/staffpdfpost",

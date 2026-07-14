@@ -26,7 +26,7 @@ const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const year = new Date().getFullYear()
 
 const NAV_ITEMS = [
-  { label: "Dealer List",     href: "/dashboard/admin/dealer/DealerList",        icon: <LayoutDashboard size={15} /> },
+  { label: "Dealer List",     href: "/dashboard/staff/dealerlist",                icon: <LayoutDashboard size={15} /> },
   { label: "Dealer Ledger",   href: "/dashboard/admin/ledger",                   icon: <BookOpen size={15} /> },
   { label: "Add Dealer",      href: "/dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} /> },
   { label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <ClipboardList size={15} /> },
@@ -909,7 +909,7 @@ function ExecutiveDashboard() {
                               </span>
                             </td>
                             <td>
-                              <Link href={`/dashboard/admin/dealer/${d.Dealer_Id}`} className="view-btn">
+                              <Link href={`/dashboard/staff/dealer/${d.Dealer_Id}`} className="view-btn">
                                 <Eye size={11} /> View
                               </Link>
                             </td>

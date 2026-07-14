@@ -71,6 +71,8 @@ const roleRouteMap: Record<Role, Record<string, string>> = {
     dashboard: "/dashboard/dealer",
   },
   staff: {
+    dealer: "/dashboard/staff/dealerlist",
+    dealers: "/dashboard/staff/dealerlist",
     orders: "/dashboard/staff",
     "order status": "/dashboard/staff/orderstatus",
     "pdf post": "/dashboard/staff/staffpdfpost",
@@ -128,7 +130,12 @@ function mapResultsToSearchItems(
     if (category === "dealers") {
       label = item.Dealer_Name || item.name || "Dealer";
       sublabel = item.Dealer_City || item.email || "";
-      route = role === "admin" ? `/dashboard/admin/dealer/${id}` : "/dashboard/dealer";
+      route =
+        role === "admin"
+          ? `/dashboard/admin/dealer/${id}`
+          : role === "staff"
+            ? `/dashboard/staff/dealer/${id}`
+            : "/dashboard/dealer";
     } else if (category === "staff") {
       label = item.staff_name || item.name || "Staff";
       sublabel = item.staff_designation || item.staff_location || "";
