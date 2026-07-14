@@ -10,7 +10,6 @@ import {
 } from "@tanstack/react-query";
 import { CiSearch } from "react-icons/ci";
 import { useCartStore } from "@/Store/store";
-import { fetchDealerStatus } from "@/lib/dealerStatus";
 import PendingOrdersPreview, { type PendingPreviewItem } from "@/components/dashboard/PendingOrdersPreview";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -151,46 +150,19 @@ function DealerDashboardInner() {
   const [monthlyOrders, setMonthlyOrders] = useState<MonthlyData[]>([]);
   const [monthlyValues, setMonthlyValues] = useState<MonthlyData[]>([]);
   const [funnel,        setFunnel]        = useState<FunnelStage[]>([]);
-  const [accessBlocked, setAccessBlocked] = useState<string | null>(null);
 
   // ── Data fetch ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    let cancelled = false;
-
     (async () => {
       try {
         const raw    = localStorage.getItem("UserData") || localStorage.getItem("user") || "{}";
         const parsed: DealerData = JSON.parse(raw);
-        const dealerId = parsed.Dealer_Id;
-        if (!dealerId) {
-          if (!cancelled) setLoading(false);
-          return;
-        }
-
-        try {
-          const dealerStatus = await fetchDealerStatus(dealerId);
-          if (dealerStatus === "inactive") {
-            localStorage.clear();
-            if (!cancelled) {
-              setAccessBlocked("This dealer account is inactive. Please contact the administrator.");
-              setLoading(false);
-            }
-            return;
-          }
-        } catch (statusError) {
-          console.error("[DealerDashboard] status check failed:", statusError);
-          localStorage.clear();
-          if (!cancelled) {
-            setAccessBlocked("Could not verify dealer status. Please contact the administrator.");
-            setLoading(false);
-          }
-          return;
-        }
-
-        if (cancelled) return;
         setDealer({ ...EMPTY_DEALER, ...parsed });
+
+        const dealerId = parsed.Dealer_Id;
+        if (!dealerId) { setLoading(false); return; }
 
         const fd = new FormData();
         fd.append("id", dealerId);  // ← was "dealer_id", endpoints expect "id"
@@ -227,10 +199,9 @@ function DealerDashboardInner() {
       } catch (err) {
         console.error("[DealerDashboard] top-level error:", err);
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -417,31 +388,6 @@ function DealerDashboardInner() {
   const processingOrders = Math.max(0, orderRows.length - pendingOrders - shippedOrders);
   const creditDaysRemaining = Math.max(0, creditDays);
   const paymentAlert = currentLimit > 0 || creditDaysRemaining <= 7;
-
-  if (accessBlocked) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
-        <div className="max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-50 text-amber-600">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <path d="M12 9v4" />
-              <path d="M12 17h.01" />
-              <circle cx="12" cy="12" r="10" />
-            </svg>
-          </div>
-          <h2 className="text-lg font-semibold text-slate-900">Account blocked</h2>
-          <p className="mt-2 text-sm text-slate-600">{accessBlocked}</p>
-          <button
-            type="button"
-            onClick={() => router.push("/auth/login")}
-            className="mt-5 inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
-          >
-            Back to login
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>

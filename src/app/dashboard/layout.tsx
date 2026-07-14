@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import DashboardSmartSearch from "@/components/dashboard/DashboardSmartSearch";
 import SmartSearchBar from "@/components/SartSearchBar";
@@ -108,6 +110,7 @@ let ledgerWarmupStarted = false;
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [user, setUser] = useState<DashboardUser | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -202,6 +205,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       ? String(user?.staff_roletype ?? "0")
       : String(user?.staff_roletype ?? "");
 
+  const handleLogout = () => {
+    if (role === "accountant") {
+      localStorage.removeItem("accountant_token");
+      localStorage.removeItem("AccountantData");
+      localStorage.removeItem("roletype");
+      router.push("/auth/accountant-login");
+      return;
+    }
+
+    localStorage.clear();
+    router.push("/auth/login");
+  };
+
   return (
     <>
       <style>{`
@@ -247,6 +263,49 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           color: rgba(255,255,255,0.5);
           margin-top: 1px;
         }
+        .dl-top-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-left: auto;
+          min-width: 0;
+          flex: 1;
+        }
+        .dl-top-actions > :first-child {
+          min-width: 0;
+        }
+        .sb-logout {
+          width: 30px;
+          height: 30px;
+          flex-shrink: 0;
+          padding: 0;
+          border-radius: 9px;
+          background: transparent;
+          border: 1px solid rgba(255,255,255,0.09);
+          font-size: 13px;
+          font-weight: 500;
+          color: #475569;
+          cursor: pointer;
+          font-family: inherit;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all .16s;
+        }
+        .sb-logout:hover {
+          background: rgba(239,68,68,0.1);
+          border-color: rgba(239,68,68,0.28);
+          color: #f87171;
+        }
+        @media (max-width: 900px) {
+          .dl-topbar {
+            padding: 0 14px;
+            gap: 10px;
+          }
+          .dl-top-actions {
+            gap: 10px;
+          }
+        }
       `}</style>
 
       <div style={{ minHeight: "100vh", background: "#f0f2f5", fontFamily: "Arial, Helvetica, sans-serif" }}>
@@ -281,20 +340,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {displaySub && <div className="dl-sub">{displaySub}</div>}
             </div>
 
-            {role === "accountant" ? (
-              <SmartSearchBar
-                role={role}
-                userId={userId}
-                placeholder={searchPlaceholder}
-              />
-            ) : (
-              <DashboardSmartSearch
-                role={role}
-                actorId={dashboardActorId}
-                roletype={dashboardRoleType}
-                placeholder={searchPlaceholder}
-              />
-            )}
+            <div className="dl-top-actions">
+              {role === "accountant" ? (
+                <SmartSearchBar
+                  role={role}
+                  userId={userId}
+                  placeholder={searchPlaceholder}
+                />
+              ) : (
+                <DashboardSmartSearch
+                  role={role}
+                  actorId={dashboardActorId}
+                  roletype={dashboardRoleType}
+                  placeholder={searchPlaceholder}
+                />
+              )}
+
+              <button className="w-30 h-40 flex items-center justify-center hover:text-red-500" onClick={handleLogout}>
+                <LogOut size={24} />
+              </button>
+            </div>
           </header>
 
           <main style={{ flex: 1 }}>{children}</main>
