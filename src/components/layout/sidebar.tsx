@@ -59,7 +59,6 @@ const NAV: Record<Role, NavItem[]> = {
     {                      label: "Saved Drafts",      href: "/drafts",                        icon: <FileText size={15} />      },
     {                      label: "Approved Discounts", href: "/dashboard/dealer/approved-discounts", icon: <Receipt size={15} /> },
     { section: "Finance",  label: "My Ledger",         href: "/Pages/ledger",                  icon: <Wallet size={15} />        },
-    { section: "Products", label: "Products",         href: "/Pages/products",                icon: <Package size={15} />       },
   ],
   staff: [
     { section: "Overview", label: "Dashboard",     href: "/dashboard/staff",                                icon: <LayoutDashboard size={15} /> },
