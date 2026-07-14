@@ -13,6 +13,8 @@ import {
   ShieldAlert,
   Store,
 } from 'lucide-react'
+import { useAuthSession } from '@/hooks/useAuthSession'
+import type { ClientAuthSession } from '@/lib/auth/client'
 
 type AllowedRole = 'admin' | 'staff'
 
@@ -123,69 +125,16 @@ function useHasHydrated() {
   return useSyncExternalStore(subscribeToHydration, getClientSnapshot, getServerSnapshot)
 }
 
-function firstNonEmpty(...values: unknown[]) {
-  for (const value of values) {
-    const text = String(value ?? '').trim()
-    if (text) return text
+function buildDashboardSession(session: ClientAuthSession | null): DashboardSession | null {
+  if (!session) return null
+  if (session.role === 'accountant') return null
+
+  return {
+    role: session.role,
+    id: session.dealerId ?? session.staffId ?? session.adminId ?? session.userId,
+    roletype: session.roletype,
+    name: session.dealerName ?? session.staffName ?? session.name,
   }
-  return ''
-}
-
-function resolveDashboardSession(): DashboardSession | null {
-  if (typeof window === 'undefined') return null
-
-  try {
-    const staffRaw = localStorage.getItem('staffData')
-    if (staffRaw) {
-      const parsed = JSON.parse(staffRaw)
-      if (parsed?.staff_id) {
-        return {
-          role: parsed.staff_roletype === '0' ? 'admin' : 'staff',
-          id: String(parsed.staff_id),
-          roletype: String(parsed.staff_roletype ?? ''),
-          name: parsed.staff_name || '',
-        }
-      }
-    }
-
-    const userRaw = localStorage.getItem('UserData')
-    if (userRaw) {
-      const parsed = JSON.parse(userRaw)
-      if (parsed?.Dealer_Id) {
-        return {
-          role: 'dealer',
-          id: String(parsed.Dealer_Id),
-          name: parsed.Dealer_Name || '',
-        }
-      }
-
-      if (parsed?.staff_id) {
-        return {
-          role: parsed.staff_roletype === '0' ? 'admin' : 'staff',
-          id: String(parsed.staff_id),
-          roletype: String(parsed.staff_roletype ?? ''),
-          name: parsed.staff_name || '',
-        }
-      }
-    }
-
-    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
-    if (adminRaw) {
-      const parsed = JSON.parse(adminRaw)
-      if (parsed && Object.keys(parsed).length > 0) {
-        return {
-          role: 'admin',
-          id: firstNonEmpty(parsed.id, parsed.admin_id, parsed.Admin_Id, 'admin'),
-          roletype: '0',
-          name: parsed.name || parsed.email || 'Admin',
-        }
-      }
-    }
-  } catch {
-    return null
-  }
-
-  return null
 }
 
 function buildActorHeaders(session: DashboardSession | null): HeadersInit {
@@ -363,7 +312,8 @@ function downloadReportCsv(report: ReportResponse) {
 export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff'] }: DealerCategoryReportProps) {
   const router = useRouter()
   const hasHydrated = useHasHydrated()
-  const session = hasHydrated ? resolveDashboardSession() : null
+  const { session: authSession } = useAuthSession()
+  const session = hasHydrated ? buildDashboardSession(authSession) : null
 
   const [selectorOpen, setSelectorOpen] = useState(false)
   const [dealerSearch, setDealerSearch] = useState('')

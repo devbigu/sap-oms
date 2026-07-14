@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/server";
 import { getDb, getMongoClient } from "@/lib/mongodb";
 import { fetchExternalDealer, getLedgerSnapshot } from "@/lib/ledgerSystem";
 import walletUtils from "@/lib/wallet";
@@ -14,6 +15,13 @@ export async function POST(
   { params }: { params: Promise<{ dealerId: string }> }
 ) {
   try {
+    const session = requireApiSession(req, {
+      roles: ["admin", "staff", "accountant"],
+      unauthenticatedMessage: "Authentication required for ledger payments",
+      unauthorizedMessage: "Only admin, staff, and accountant users can record payments",
+    });
+    if (session instanceof NextResponse) return session;
+
     const { dealerId } = await params;
     const body = await req.json();
     const { amount, paymentMode, narration, referenceId, paymentDate } = body;

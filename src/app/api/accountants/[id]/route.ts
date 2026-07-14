@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/auth/server";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { scryptSync, randomBytes } from "crypto";
@@ -14,11 +15,21 @@ function toObjectId(id: string) {
 }
 
 export async function GET(
-  _: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const session = requireApiSession(req, {
+      roles: ["admin", "accountant"],
+      unauthenticatedMessage: "Authentication required to view accountant details",
+      unauthorizedMessage: "You are not allowed to view this accountant record",
+    });
+    if (session instanceof NextResponse) return session;
+    if (session.role === "accountant" && session.accountantId !== id) {
+      return NextResponse.json({ success: false, message: "You are not allowed to view this accountant record" }, { status: 403 });
+    }
+
     const oid    = toObjectId(id);
     if (!oid) return NextResponse.json({ success: false, message: "Invalid id" }, { status: 400 });
 
@@ -41,6 +52,13 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = requireApiSession(req, {
+      roles: ["admin"],
+      unauthenticatedMessage: "Authentication required to update accountants",
+      unauthorizedMessage: "Only admin users can update accountants",
+    });
+    if (session instanceof NextResponse) return session;
+
     const { id } = await params;
     const oid    = toObjectId(id);
     if (!oid) return NextResponse.json({ success: false, message: "Invalid id" }, { status: 400 });
@@ -73,10 +91,17 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = requireApiSession(req, {
+      roles: ["admin"],
+      unauthenticatedMessage: "Authentication required to delete accountants",
+      unauthorizedMessage: "Only admin users can delete accountants",
+    });
+    if (session instanceof NextResponse) return session;
+
     const { id } = await params;
     const oid    = toObjectId(id);
     if (!oid) return NextResponse.json({ success: false, message: "Invalid id" }, { status: 400 });

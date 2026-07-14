@@ -1,15 +1,18 @@
-"use client"
+"use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { GoLocation } from "react-icons/go";
 import { IoCartOutline } from "react-icons/io5";
+
+import { useCartStore } from "@/Store/store";
 import AccountList from "@/components/AccountList";
 import Cart from "@/components/Cart";
 import HeaderSearchControl from "@/components/search/HeaderSearchControl";
-import Link from "next/link";
-import { useCartStore } from "@/Store/store";
-import { usePathname, useRouter } from "next/navigation";
+import { useAuthSession } from "@/hooks/useAuthSession";
 import { SIDEBAR_CATEGORIES } from "@/lib/categories";
+import { getLogoRouteForRole, getOrdersRouteForRole } from "@/lib/auth/navigation";
 import productSearch from "@/lib/productSearch.js";
 
 const { buildSearchUrl } = productSearch;
@@ -57,59 +60,12 @@ export function storeCategoryFilter(value: string) {
   }
 }
 
-export function UserName() {
-  const [value, setValue] = useState<string | null>(null);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      try {
-        const raw = localStorage.getItem("UserData");
-        if (!raw) return;
-
-        const data = JSON.parse(raw);
-        setValue(data?.Dealer_Name ?? data?.city ?? data?.District ?? data?.district ?? null);
-      } catch {
-        // Ignore invalid storage data.
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, []);
-
-  return <span className="font-bold uppercase">{value}</span>;
-}
-
-function useLocationFromStorage() {
-  const [city, setCity] = useState<string | null>(null);
-  const [pincode, setPincode] = useState<string | null>(null);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      try {
-        const raw = localStorage.getItem("UserData");
-        if (!raw) return;
-
-        const data = JSON.parse(raw);
-        setCity(data?.Dealer_Address ?? data?.city ?? data?.District ?? data?.district ?? null);
-        setPincode(data?.Pincode ?? data?.pincode ?? data?.Pin ?? data?.pin ?? null);
-      } catch {
-        // Ignore invalid storage data.
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
-  }, []);
-
-  return { city, pincode };
-}
-
 export default function Header() {
   const router = useRouter();
   const pathname = usePathname();
+  const { session } = useAuthSession();
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.reduce((total, item) => total + item.quantity, 0);
-  const { city, pincode } = useLocationFromStorage();
-
   const [selectedCategory, setSelectedCategory] = useState("all");
 
   useEffect(() => {
@@ -127,30 +83,52 @@ export default function Header() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
+  const role = session?.role ?? null;
+  const logoHref = getLogoRouteForRole(role);
+  const ordersHref = getOrdersRouteForRole(role);
+  const isDealer = role === "dealer";
+  const userName =
+    session?.dealerName ??
+    session?.staffName ??
+    session?.name ??
+    (role === "accountant" ? "Accountant" : "User");
+
+  const locationTop = isDealer ? "Delivering to" : "Signed in as";
+  const locationBottom = isDealer
+    ? session?.dealerAddress || session?.dealerCity || session?.dealerPincode || "Update location"
+    : role === "admin"
+      ? "Administrator"
+      : role === "staff"
+        ? session?.staffDesignation || "Staff"
+        : role === "accountant"
+          ? "Finance portal"
+          : "Workspace";
+
+  const locationMeta = isDealer
+    ? [session?.dealerCity, session?.dealerPincode].filter(Boolean).join(", ")
+    : session?.email ?? "";
+
   const logoImage =
     "https://omsonslabs.com/wp-content/uploads/elementor/thumbs/Logo-White-rjr8rdx3pqxz9p6ypfegb07hgtpvj3g22mnujlpa0w.png";
 
-  const locationTop = city || pincode ? "Delivering to" : "Delivering to you";
-  const locationBottom = city ? city : pincode ? pincode : "Update location";
-
   return (
     <div>
-      <div className="w-full h-16 bg-linear-to-r from-[#1F4B8D] to-slate-950 text-white flex items-center px-2 py-2 gap-2">
-        <div className="flex items-center border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer">
-          <Link href="/home">
+      <div className="flex h-16 w-full items-center gap-2 bg-linear-to-r from-[#1F4B8D] to-slate-950 px-2 py-2 text-white">
+        <div className="flex cursor-pointer items-center rounded border border-transparent px-2 py-1 hover:border-white">
+          <Link href={logoHref}>
             <img src={logoImage} alt="Omsons Logo" className="h-12" />
           </Link>
         </div>
 
-        <div className="flex items-start gap-1 border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer min-w-[120px]">
-          <GoLocation className="text-xl mt-3 text-white" />
+        <div className="flex min-w-[120px] items-start gap-1 rounded border border-transparent px-2 py-1 hover:border-white">
+          <GoLocation className="mt-3 text-xl text-white" />
           <div className="flex flex-col">
             <span className="text-xs text-gray-300">{locationTop}</span>
-            <span className="text-sm font-bold truncate max-w-[110px]" title={[city, pincode].filter(Boolean).join(", ")}>
+            <span className="max-w-[140px] truncate text-sm font-bold" title={locationMeta || locationBottom}>
               {locationBottom}
             </span>
-            {city && pincode && (
-              <span className="text-[10px] text-gray-400 font-normal leading-tight">{pincode}</span>
+            {locationMeta && (
+              <span className="text-[10px] leading-tight text-gray-400">{locationMeta}</span>
             )}
           </div>
         </div>
@@ -176,42 +154,44 @@ export default function Header() {
           }}
         />
 
-        <div className="flex items-center gap-1 border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer">
+        <div className="flex cursor-pointer items-center gap-1 rounded border border-transparent px-2 py-1 hover:border-white">
           <span className="text-sm font-bold">EN</span>
         </div>
 
-        <div className="flex flex-col border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer relative group">
+        <div className="group relative flex cursor-pointer flex-col rounded border border-transparent px-2 py-1 hover:border-white">
           <div className="flex flex-col">
-            <span className="text-xs text-gray-300 flex">
-              Hello, <UserName />
+            <span className="flex text-xs text-gray-300">
+              Hello, <span className="font-bold uppercase">{userName}</span>
             </span>
             <span className="text-sm font-bold">Account &amp; Lists</span>
           </div>
-          <div className="absolute right-0 top-full mt-1 w-106 hidden group-hover:block z-60 bg-white shadow-lg border border-gray-200 rounded p-3 transition-all">
+          <div className="absolute right-0 top-full z-60 mt-1 hidden w-106 rounded border border-gray-200 bg-white p-3 shadow-lg transition-all group-hover:block">
             <AccountList />
           </div>
         </div>
 
-        <div className="flex flex-col border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer">
+        <div className="flex cursor-pointer flex-col rounded border border-transparent px-2 py-1 hover:border-white">
           <span className="text-xs text-gray-300">Returns</span>
-          <Link href="/orders" className="text-sm font-bold">
+          <Link href={ordersHref} className="text-sm font-bold">
             &amp; Orders
           </Link>
         </div>
 
-        <div className="flex items-center gap-1 border border-transparent hover:border-white rounded px-2 py-1 cursor-pointer relative group">
-          <Link href="/Pages/Cart" className="relative" suppressHydrationWarning>
-            <IoCartOutline className="text-3xl text-white" />
-            {itemCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-[#54499d] text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                {itemCount}
-              </span>
-            )}
-          </Link>
-          <div className="absolute right-0 top-full mt-1 w-[440px] hidden group-hover:block z-[60] bg-white shadow-2xl border border-gray-200 rounded-xl text-black overflow-hidden">
-            <Cart />
+        {isDealer && (
+          <div className="group relative flex cursor-pointer items-center gap-1 rounded border border-transparent px-2 py-1 hover:border-white">
+            <Link href="/Pages/Cart" className="relative" suppressHydrationWarning>
+              <IoCartOutline className="text-3xl text-white" />
+              {itemCount > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#54499d] text-xs font-bold text-white">
+                  {itemCount}
+                </span>
+              )}
+            </Link>
+            <div className="absolute right-0 top-full z-[60] mt-1 hidden w-[440px] overflow-hidden rounded-xl border border-gray-200 bg-white text-black shadow-2xl group-hover:block">
+              <Cart />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

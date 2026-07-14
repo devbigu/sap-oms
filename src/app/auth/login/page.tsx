@@ -2,9 +2,12 @@
 
 import { useEffect, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
-import axios from "axios"
-import { AlertTriangle, Eye, EyeOff } from "lucide-react"
-import { fetchDealerStatus } from "@/lib/dealerStatus"
+import { Eye, EyeOff } from "lucide-react"
+
+import { broadcastAuthChange, clearStoredAuthData } from "@/lib/auth/client"
+import { getDefaultRouteForRole, type ClientAuthRole } from "@/lib/auth/client"
+import { isRoleAllowed } from "@/lib/auth/routePolicy"
+import type { PublicAppSession } from "@/lib/auth/session"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -12,8 +15,69 @@ const ROLE_OPTIONS = [
   { label: "Admin", value: "3" },
 ]
 
-const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/login/login_verify"
 const LOGO_SRC = "/omsons_logo.jpeg"
+
+function getRoleFromLoginResponse(data: { session?: { role?: unknown } | null } | null, roletype: string): ClientAuthRole {
+  const responseRole = data?.session?.role
+  if (responseRole === "admin" || responseRole === "staff" || responseRole === "dealer" || responseRole === "accountant") {
+    return responseRole
+  }
+  if (roletype === "3") return "admin"
+  if (roletype === "2") return "dealer"
+  return "staff"
+}
+
+function mergeSessionIntoStoredUserData(
+  userData: Record<string, unknown>,
+  session: PublicAppSession | null | undefined,
+  resolvedRole: ClientAuthRole,
+) {
+  if (!session) return userData
+
+  if (resolvedRole === "admin") {
+    return {
+      ...userData,
+      id: session.adminId ?? session.userId ?? userData.id ?? userData.admin_id ?? userData.Admin_Id,
+      admin_id: session.adminId ?? session.userId ?? userData.admin_id ?? userData.id,
+      email: session.email ?? userData.email,
+      name: session.name ?? userData.name ?? userData.username,
+      username: userData.username ?? session.name ?? session.email,
+      staff_id: session.staffId ?? userData.staff_id,
+      staff_name: session.staffName ?? userData.staff_name,
+      staff_roletype: session.staffRoleType ?? userData.staff_roletype ?? "0",
+      staff_location: session.staffLocation ?? userData.staff_location,
+      staff_designation: session.staffDesignation ?? userData.staff_designation,
+    }
+  }
+
+  if (resolvedRole === "staff") {
+    return {
+      ...userData,
+      staff_id: session.staffId ?? session.userId ?? userData.staff_id,
+      staff_name: session.staffName ?? session.name ?? userData.staff_name,
+      staff_roletype: session.staffRoleType ?? userData.staff_roletype ?? "1",
+      staff_location: session.staffLocation ?? userData.staff_location,
+      staff_designation: session.staffDesignation ?? userData.staff_designation,
+      staff_email: session.email ?? userData.staff_email ?? userData.email,
+      email: session.email ?? userData.email,
+      name: session.name ?? userData.name,
+    }
+  }
+
+  if (resolvedRole === "dealer") {
+    return {
+      ...userData,
+      Dealer_Id: session.dealerId ?? session.userId ?? userData.Dealer_Id,
+      Dealer_Name: session.dealerName ?? session.name ?? userData.Dealer_Name,
+      Dealer_City: session.dealerCity ?? userData.Dealer_City,
+      Dealer_Dealercode: session.dealerCode ?? userData.Dealer_Dealercode,
+      Dealer_Email: session.email ?? userData.Dealer_Email ?? userData.email,
+      Dealer_Number: session.phone ?? userData.Dealer_Number,
+    }
+  }
+
+  return userData
+}
 
 export default function Login() {
   const router = useRouter()
@@ -53,79 +117,61 @@ export default function Login() {
       return
     }
 
-    if (!BACKEND_URL) {
-      setError("Backend URL is not configured")
-      return
-    }
-
     try {
       setLoading(true)
 
-      const formData = new FormData()
-      formData.append("email", email)
-      formData.append("password", password)
-      formData.append("roletype", roletype)
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, roletype }),
+      })
+      const data = await res.json().catch(() => null)
 
-      const res = await axios.post(`${BACKEND_URL}`, formData)
-      const data = res.data
-
-      if (data?.status) {
-        const userData = data.data || { email, role: roletype }
-        const dealerId = String(userData?.Dealer_Id ?? "").trim()
-
-        if (roletype === "2") {
-          if (!dealerId) {
-            setError("Dealer account is missing an id.")
-            return
-          }
-          try {
-            const dealerStatus = await fetchDealerStatus(dealerId)
-            if (dealerStatus === "inactive") {
-              setError("This dealer account is inactive. Please contact the administrator.")
-              return
-            }
-          } catch (statusError) {
-            console.error("Dealer status verification failed:", statusError)
-            setError("Could not verify dealer status. Please try again.")
-            return
-          }
-        }
-
-        localStorage.setItem("status", "true")
-        localStorage.setItem("UserData", JSON.stringify(userData))
-        localStorage.setItem("roletype", roletype)
-        if (roletype === "3") {
-          localStorage.setItem("AdminData", JSON.stringify(userData))
-        }
-
-        setEmail("")
-        setPassword("")
-        setRoletype("")
-
-        if (roletype === "1") router.push("/dashboard/staff")
-        else if (roletype === "2") router.push("/home")
-        else if (roletype === "3") router.push("/dashboard/admin")
-      } else {
-        setError(data?.msg || "Login failed")
+      if (!res.ok || !data?.success) {
+        setError(data?.message || "Login failed")
+        return
       }
+
+      const userData = (data.data && typeof data.data === "object" ? data.data : { email, role: roletype }) as Record<string, unknown>
+      const resolvedRole = getRoleFromLoginResponse(data, roletype)
+      const storedUserData = mergeSessionIntoStoredUserData(userData, data.session, resolvedRole)
+      clearStoredAuthData(window.localStorage)
+      localStorage.setItem("status", "true")
+      localStorage.setItem("roletype", roletype)
+      if (roletype === "1") {
+        localStorage.setItem("staffData", JSON.stringify(storedUserData))
+      }
+      if (roletype === "2") {
+        localStorage.setItem("UserData", JSON.stringify(storedUserData))
+      }
+      if (roletype === "3") {
+        localStorage.setItem("AdminData", JSON.stringify(storedUserData))
+        localStorage.setItem("admin", JSON.stringify(storedUserData))
+      }
+      broadcastAuthChange()
+
+      setEmail("")
+      setPassword("")
+      setRoletype("")
+
+      const nextPath =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("next")
+          : null
+      const fallbackRoute =
+        typeof data?.redirectTo === "string" && data.redirectTo.startsWith("/")
+          ? data.redirectTo
+          : getDefaultRouteForRole(resolvedRole)
+      const safeNextPath =
+        typeof nextPath === "string" &&
+        nextPath.startsWith("/") &&
+        isRoleAllowed(nextPath, resolvedRole)
+          ? nextPath
+          : null
+      router.push(safeNextPath || fallbackRoute)
     } catch (err: unknown) {
       console.error("Login error:", err)
-
-      let backendMsg: unknown = "Server error"
-
-      if (axios.isAxiosError(err)) {
-        const responseData = err.response?.data
-        backendMsg =
-          responseData &&
-          typeof responseData === "object" &&
-          "msg" in responseData
-            ? responseData.msg
-            : responseData || err.message
-      } else if (err instanceof Error) {
-        backendMsg = err.message
-      }
-
-      setError(typeof backendMsg === "string" ? backendMsg : "Server error")
+      setError(err instanceof Error ? err.message : "Server error")
     } finally {
       setLoading(false)
     }

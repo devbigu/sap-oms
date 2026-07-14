@@ -11,8 +11,9 @@ import {
   getCustomDiscountProgressKeyForOrder,
   type CustomDiscountProgress,
 } from '@/lib/customDiscountProgress'
+import { getLocalAuthSession } from '@/lib/auth/client'
 
-type Role = 'admin' | 'dealer' | 'staff'
+type Role = 'admin' | 'dealer' | 'staff' | 'accountant'
 type UserSession = { role: Role; id: string; name: string; roletype?: string; viewRoute: string }
 type OrderData = {
   order_id: string; order_date: string; orderDate: string; order_dealer: string
@@ -102,38 +103,28 @@ const ROLE_CONFIG: Record<Role, {
     canAccept: (s, row) => s.roletype !== '2' && row.del_status === '0',
     requireReason: false,
   },
+  accountant: {
+    label: 'Accountant', pillCls: 'role-admin', caption: 'All dealer orders across the system',
+    endpoint: (_id, page, search) =>
+      `${BACKEND_URL}/orderpegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}`,
+    showDealerCol: true, showActions: false,
+    canDelete: () => false,
+    canAccept: () => false,
+    requireReason: false,
+  },
 }
 
 function resolveSession(): UserSession | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const staffRaw = localStorage.getItem('staffData')
-    if (staffRaw) {
-      const p = JSON.parse(staffRaw)
-      if (p?.staff_id) {
-        return {
-          role: p.staff_roletype === '0' ? 'admin' : 'staff',
-          id: p.staff_id, name: p.staff_name || '',
-          roletype: p.staff_roletype, viewRoute: '/orders',
-        }
-      }
-    }
-    const userRaw = localStorage.getItem('UserData')
-    if (userRaw) {
-      const p = JSON.parse(userRaw)
-      if (p?.Dealer_Id) return { role: 'dealer', id: p.Dealer_Id, name: p.Dealer_Name || '', viewRoute: '/orders' }
-      if (p?.staff_id)  return { role: p.staff_roletype === '0' ? 'admin' : 'staff', id: p.staff_id, name: p.staff_name || '', roletype: p.staff_roletype, viewRoute: '/orders' }
-      if (localStorage.getItem('roletype') === '3' && p && Object.keys(p).length > 0)
-        return { role: 'admin', id: p.id || p.admin_id || p.Admin_Id || '', name: p.name || p.email || 'Admin', roletype: '0', viewRoute: '/orders' }
-    }
-    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
-    if (adminRaw) {
-      const p = JSON.parse(adminRaw)
-      if (p && Object.keys(p).length > 0)
-        return { role: 'admin', id: p.id || p.admin_id || p.Admin_Id || '', name: p.name || 'Admin', roletype: '0', viewRoute: '/orders' }
-    }
-  } catch {}
-  return null
+  const session = getLocalAuthSession()
+  if (!session) return null
+
+  return {
+    role: session.role,
+    id: session.dealerId ?? session.staffId ?? session.adminId ?? session.accountantId ?? session.userId,
+    name: session.dealerName ?? session.staffName ?? session.name ?? 'Authenticated user',
+    roletype: session.roletype,
+    viewRoute: session.role === 'dealer' ? '/orders' : '/Pages/Ordermanagement',
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

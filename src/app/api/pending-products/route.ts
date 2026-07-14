@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import catalogueProducts from "../../../../public/data/nested_omsons_products.json";
+import { requireApiSession } from "@/lib/auth/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import type { OrderDispatchRecord } from "@/lib/orderDispatch";
 import {
@@ -81,18 +82,18 @@ function scalarStringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
-function parseActor(req: NextRequest): PendingProductsActor | null {
-  const role = safeText(req.headers.get("x-omsons-actor-role"), 20).toLowerCase();
-  const actorId = safeText(req.headers.get("x-omsons-actor-id"), 120);
-  const roletype = safeText(req.headers.get("x-omsons-actor-roletype"), 20);
-
-  if (role !== "admin" && role !== "staff" && role !== "dealer") return null;
-  if (role !== "admin" && !actorId) return null;
+function buildActorFromSession(req: NextRequest): PendingProductsActor | NextResponse {
+  const session = requireApiSession(req, {
+    roles: ["admin", "staff", "dealer"],
+    unauthenticatedMessage: "Authentication required for pending products",
+    unauthorizedMessage: "Your signed-in role cannot view pending products",
+  });
+  if (session instanceof NextResponse) return session;
 
   return {
-    role,
-    actorId,
-    roletype,
+    role: session.role as PendingProductsRole,
+    actorId: session.dealerId ?? session.staffId ?? session.adminId ?? session.userId,
+    roletype: session.roletype,
   };
 }
 
@@ -388,13 +389,8 @@ function parseSort(value: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const actor = parseActor(req);
-  if (!actor) {
-    return NextResponse.json(
-      { success: false, message: "Missing pending-products identity" },
-      { status: 401 }
-    );
-  }
+  const actor = buildActorFromSession(req);
+  if (actor instanceof NextResponse) return actor;
 
   const search = safeText(req.nextUrl.searchParams.get("search"), 240);
   const category = safeText(req.nextUrl.searchParams.get("category"), 120);
@@ -411,9 +407,6 @@ export async function GET(req: NextRequest) {
     const scopedLines = filterPendingProductLines(baseScope.lines, { dealerId, assignedStaffId });
     const scopeSummary = buildPendingProductsSummaryFromLines(scopedLines);
     const filterOptions = buildPendingProductFilterOptions(scopedLines);
-    const limitation =
-      "Results are constrained inside this Next.js API, but the current application still relies on client-provided actor headers rather than a server-verifiable session.";
-
     if (productKey) {
       const detail = buildPendingProductDrilldown(scopedLines, productKey);
       if (!detail.aggregate) {
@@ -436,7 +429,6 @@ export async function GET(req: NextRequest) {
           total: paginatedOrders.total,
           totalPages: paginatedOrders.totalPages,
           warnings: baseScope.warnings,
-          limitation,
         },
       });
     }
@@ -457,7 +449,6 @@ export async function GET(req: NextRequest) {
         total: paginatedProducts.total,
         totalPages: paginatedProducts.totalPages,
         warnings: baseScope.warnings,
-        limitation,
       },
     });
   } catch (error) {

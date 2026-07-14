@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import Header from "../../components/Header";
+
+import ProtectedStorefrontLayout from "@/components/layout/ProtectedStorefrontLayout";
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -12,11 +13,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-
-    <div
-      className="antialiased">
-      <Header />
-      {children}
+    <div className="antialiased">
+      <ProtectedStorefrontLayout includeFooter={false}>{children}</ProtectedStorefrontLayout>
     </div>
   );
 }
