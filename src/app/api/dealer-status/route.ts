@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { normalizeDealerStatus, type DealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
 
@@ -37,15 +36,6 @@ function safeErrorResponse(message: string, status = 500) {
 export async function GET(request: NextRequest) {
   try {
     const dealerId = request.nextUrl.searchParams.get("dealer_id")?.trim() ?? "";
-    if (!dealerId) {
-      const session = requireApiSession(request, {
-        roles: ["admin"],
-        unauthenticatedMessage: "Authentication required to list dealer statuses",
-        unauthorizedMessage: "Only admin users can list dealer statuses",
-      });
-      if (session instanceof NextResponse) return session;
-    }
-
     const db = await getDb();
     const collection = db.collection<DealerStatusDbDocument>(COLLECTION);
 
@@ -83,13 +73,6 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const session = requireApiSession(request, {
-      roles: ["admin"],
-      unauthenticatedMessage: "Authentication required to update dealer status",
-      unauthorizedMessage: "Only admin users can update dealer status",
-    });
-    if (session instanceof NextResponse) return session;
-
     const body = (await request.json().catch(() => null)) as Partial<DealerStatusDocument & { updatedBy?: string }> | null;
     const dealerId = String(body?.dealerId ?? "").trim();
     const rawStatus = String(body?.status ?? "").trim().toLowerCase();

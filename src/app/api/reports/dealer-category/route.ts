@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import catalogueProducts from "../../../../../public/data/nested_omsons_products.json";
-import { requireApiSession } from "@/lib/auth/server";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
 import { getPhpApiBaseUrl } from "@/lib/phpBackend";
@@ -97,18 +96,17 @@ function safeText(value: unknown, max = 240) {
     : String(value ?? "").trim().slice(0, max);
 }
 
-function buildActorFromSession(req: NextRequest): ReportActor | NextResponse {
-  const session = requireApiSession(req, {
-    roles: ["admin", "staff"],
-    unauthenticatedMessage: "Authentication required for dealer reports",
-    unauthorizedMessage: "Only admin and staff users can view dealer reports",
-  });
-  if (session instanceof NextResponse) return session;
+function parseActor(req: NextRequest): ReportActor | null {
+  const role = safeText(req.headers.get("x-omsons-actor-role"), 20).toLowerCase();
+  const actorId = safeText(req.headers.get("x-omsons-actor-id"), 120);
+
+  if (role !== "admin" && role !== "staff") return null;
+  if (role === "staff" && !actorId) return null;
 
   return {
-    role: session.role as ReportActor["role"],
-    actorId: session.staffId ?? session.adminId ?? session.userId,
-  };
+    role,
+    actorId,
+  } as ReportActor;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -241,8 +239,13 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function GET(req: NextRequest) {
-  const actor = buildActorFromSession(req);
-  if (actor instanceof NextResponse) return actor;
+  const actor = parseActor(req);
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, message: "Missing report identity" },
+      { status: 401 }
+    );
+  }
 
   const dealerId = safeText(req.nextUrl.searchParams.get("dealerId"), 120);
   const fromDate = safeText(req.nextUrl.searchParams.get("from"), 20);

@@ -21,7 +21,6 @@ import {
   type OrderDispatchRecord,
   type DispatchStatus,
 } from "@/lib/orderDispatch";
-import { getLocalAuthSession } from "@/lib/auth/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -280,15 +279,65 @@ async function fetchOrderDispatchAccessMeta(orderId: string, dealerId: string): 
 }
 
 function resolveCurrentUser(): DispatchUserSession | null {
-  const session = getLocalAuthSession();
-  if (!session) return null;
+  if (typeof window === "undefined") return null;
 
-  return {
-    role: session.role,
-    id: String(session.dealerId ?? session.staffId ?? session.adminId ?? session.accountantId ?? session.userId),
-    name: session.dealerName ?? session.staffName ?? session.name ?? "Authenticated user",
-    roletype: session.roletype,
-  };
+  try {
+    const staffRaw = localStorage.getItem("staffData");
+    if (staffRaw) {
+      const parsed = JSON.parse(staffRaw);
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+    }
+
+    const userRaw = localStorage.getItem("UserData");
+    if (userRaw) {
+      const parsed = JSON.parse(userRaw);
+      if (parsed?.Dealer_Id) {
+        return {
+          role: "dealer",
+          id: String(parsed.Dealer_Id),
+          name: parsed.Dealer_Name || "",
+        };
+      }
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+      if (localStorage.getItem("roletype") === "3" && parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || ""),
+          name: parsed.name || parsed.email || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+
+    const adminRaw = localStorage.getItem("AdminData") || localStorage.getItem("admin");
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw);
+      if (parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || ""),
+          name: parsed.name || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 function buildDispatchHeaders(user: DispatchUserSession | null): HeadersInit {

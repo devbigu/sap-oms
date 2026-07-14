@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth/server";
 import { getDb } from "@/lib/mongodb";
 import {
   getLedgerSnapshot,
@@ -17,13 +16,6 @@ import {
  */
 export async function GET(_req: NextRequest) {
   try {
-    const session = requireApiSession(_req, {
-      roles: ["admin", "staff", "accountant"],
-      unauthenticatedMessage: "Authentication required for dealer ledger access",
-      unauthorizedMessage: "Only admin, staff, and accountant users can view the dealer ledger",
-    });
-    if (session instanceof NextResponse) return session;
-
     const snapshot = await getLedgerSnapshot();
     let payments: any[] = [];
     let paymentsLive = true;

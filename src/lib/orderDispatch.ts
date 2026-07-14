@@ -2,7 +2,7 @@ import { normalizeSku } from "@/lib/orderProductNotes.mjs";
 
 export type DispatchStatus = "pending" | "packing" | "dispatched" | "not_in_stock" | "successful";
 export type DispatchActorRole = "staff" | "admin";
-export type DispatchViewerRole = "admin" | "staff" | "dealer" | "accountant" | "unknown";
+export type DispatchViewerRole = "admin" | "staff" | "dealer" | "unknown";
 
 export type DispatchUserSession = {
   role: DispatchViewerRole;
@@ -143,7 +143,6 @@ export function canUserViewDispatch(user: DispatchUserSession | null, context: {
 }): boolean {
   if (!user?.id) return false;
   if (user.role === "admin") return true;
-  if (user.role === "accountant") return true;
   if (user.role === "staff") return String(context.assignedStaffId ?? "").trim() === user.id;
   if (user.role === "dealer") return String(context.dealerId ?? "").trim() === user.id;
   return false;

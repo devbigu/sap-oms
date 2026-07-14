@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { Search, BookOpen, ChevronRight, ShieldAlert } from 'lucide-react'
-import { getLocalAuthSession } from '@/lib/auth/client'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Dealer = {
@@ -35,15 +34,32 @@ const BACKEND_URL = 'https://mirisoft.co.in/sas/dealerapi/api'
 const ITEMS_PER_PAGE = 10
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function resolveRole(): { role: AppRole; dealerId?: string; staffId?: string } | null {
-  const session = getLocalAuthSession()
-  if (!session) return null
-
-  return {
-    role: session.role,
-    ...(session.dealerId ? { dealerId: session.dealerId } : {}),
-    ...(session.staffId ? { staffId: session.staffId } : {}),
-  }
+function resolveRole(): { role: AppRole; dealerId?: string; staffId?: string } {
+  if (typeof window === 'undefined') return { role: 'admin' }
+  try {
+    if (localStorage.getItem('accountant_token')) return { role: 'accountant' }
+    const userData = localStorage.getItem('UserData')
+    if (userData) {
+      const p = JSON.parse(userData)
+      if (p?.Dealer_Id) return { role: 'dealer', dealerId: p.Dealer_Id }
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+      if (localStorage.getItem('roletype') === '3') return { role: 'admin' }
+    }
+    const staffRaw = localStorage.getItem('staffData')
+    if (staffRaw) {
+      const p = JSON.parse(staffRaw)
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+    }
+    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
+    if (adminRaw) return { role: 'admin' }
+  } catch (_) {}
+  return { role: 'admin' }
 }
 
 function initials(name: string) {
@@ -61,7 +77,7 @@ export default function LedgerDealerListPage() {
   const router = useRouter()
   const queryClient = useQueryClient()
 
-  const [role,        setRole]        = useState<AppRole | null>(null)
+  const [role,        setRole]        = useState<AppRole>('admin')
   const [staffId,     setStaffId]     = useState<string | undefined>()
   const [redirecting, setRedirecting] = useState(true)
   const [page,        setPage]        = useState(1)
@@ -70,14 +86,7 @@ export default function LedgerDealerListPage() {
 
   // ── Resolve role & redirect dealers ──
   useEffect(() => {
-    const resolved = resolveRole()
-    if (!resolved) {
-      setRole(null)
-      setStaffId(undefined)
-      setRedirecting(false)
-      return
-    }
-    const { role: r, dealerId, staffId: sid } = resolved
+    const { role: r, dealerId, staffId: sid } = resolveRole()
     setRole(r)
     setStaffId(sid)
     if (r === 'dealer' && dealerId) {
@@ -102,7 +111,7 @@ export default function LedgerDealerListPage() {
     },
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
-    enabled: !redirecting && !!role && role !== 'staff',
+    enabled: !redirecting && role !== 'staff',
   })
 
   // ── Fetch staff-assigned dealers (staff only) ──
@@ -118,7 +127,7 @@ export default function LedgerDealerListPage() {
 
   // ── Prefetch next page (admin/accountant only) ──
   useEffect(() => {
-    if (redirecting || !role || role === 'staff') return
+    if (redirecting || role === 'staff') return
     queryClient.prefetchQuery({
       queryKey: ['ledger-dealers', page + 1, search],
       queryFn: async () => {
@@ -210,8 +219,6 @@ export default function LedgerDealerListPage() {
       </div>
     )
   }
-
-  if (!role) return null
 
   // ── Admin / Accountant / Staff list view ──
   return (

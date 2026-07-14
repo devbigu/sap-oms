@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth/server";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
 import { getPhpApiBaseUrl } from "@/lib/phpBackend";
 
@@ -35,18 +34,17 @@ function safeText(value: unknown, max = 240) {
     : String(value ?? "").trim().slice(0, max);
 }
 
-function buildActorFromSession(req: NextRequest): ReportActor | NextResponse {
-  const session = requireApiSession(req, {
-    roles: ["admin", "staff"],
-    unauthenticatedMessage: "Authentication required for dealer search",
-    unauthorizedMessage: "Only admin and staff users can search report dealers",
-  });
-  if (session instanceof NextResponse) return session;
+function parseActor(req: NextRequest): ReportActor | null {
+  const role = safeText(req.headers.get("x-omsons-actor-role"), 20).toLowerCase();
+  const actorId = safeText(req.headers.get("x-omsons-actor-id"), 120);
+
+  if (role !== "admin" && role !== "staff") return null;
+  if (role === "staff" && !actorId) return null;
 
   return {
-    role: session.role as ReportActor["role"],
-    actorId: session.staffId ?? session.adminId ?? session.userId,
-  };
+    role,
+    actorId,
+  } as ReportActor;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -73,8 +71,13 @@ async function fetchStaffDealers(staffId: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const actor = buildActorFromSession(req);
-  if (actor instanceof NextResponse) return actor;
+  const actor = parseActor(req);
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, message: "Missing report identity" },
+      { status: 401 }
+    );
+  }
 
   const page = Math.max(1, Number(req.nextUrl.searchParams.get("page") || "1") || 1);
   const search = safeText(req.nextUrl.searchParams.get("search"), 240);

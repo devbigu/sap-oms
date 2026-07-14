@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessDealerScopedResource, requireApiSession } from "@/lib/auth/server";
 import { getDb } from "@/lib/mongodb";
 import {
   fetchExternalDealer,
@@ -16,21 +15,11 @@ import {
  * Dealer info, live external order debit summary, and local payment credits.
  */
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
 ) {
   try {
     const { dealerId } = await params;
-    const session = requireApiSession(req, {
-      roles: ["admin", "staff", "dealer", "accountant"],
-      unauthenticatedMessage: "Authentication required for dealer ledger access",
-      unauthorizedMessage: "Your signed-in role cannot view dealer ledger details",
-    });
-    if (session instanceof NextResponse) return session;
-    if (!canAccessDealerScopedResource(session, dealerId)) {
-      return NextResponse.json({ success: false, message: "You are not allowed to view this dealer ledger" }, { status: 403 });
-    }
-
     const snapshot = await getLedgerSnapshot();
     let dealerLive = true;
     let dealer = await fetchExternalDealer(dealerId).catch((error) => {
