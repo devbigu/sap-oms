@@ -21,6 +21,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { fetchDealerStatusOverrides, normalizeDealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
+import PendingOrdersPreview, { type PendingPreviewItem } from "@/components/dashboard/PendingOrdersPreview";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const year = new Date().getFullYear();
@@ -80,6 +81,18 @@ type LedgerSummary = {
 
 type DiscountApproval = {
   status: string;
+};
+
+type PendingOrderRecord = {
+  order_id: string;
+  Dealer_Name?: string;
+  order_date?: string;
+  orderDate?: string;
+  order_amount?: string | number;
+  total?: string | number;
+  outstandingDate?: string;
+  order_status?: string;
+  accept_order?: string;
 };
 
 const logoImage = "https://omsonsapp.vercel.app/headicon.png";
@@ -248,7 +261,7 @@ function AdminDashboardInner() {
     queries: [
       {
         queryKey: ["adminSidebarSummary", "outstandingOrders"],
-        queryFn: () => fetchJson<{ data: any[] }>(`${BACKEND_URL}/orderpeginationnew?page=1&search=`),
+        queryFn: () => fetchJson<{ data: PendingOrderRecord[] }>(`${BACKEND_URL}/orderpeginationnew?page=1&search=`),
       },
       {
         queryKey: ["adminSidebarSummary", "discountApprovals"],
@@ -309,7 +322,28 @@ function AdminDashboardInner() {
     return () => clearTimeout(timer);
   }, [distributorSearchInput]);
 
-  const outstandingOrders = (outstandingOrdersQ.data?.data ?? []).filter((o: any) => o.order_status === "0" || o.accept_order === "0");
+  const outstandingOrders = (outstandingOrdersQ.data?.data ?? []).filter((o) => o.order_status === "0" || o.accept_order === "0");
+  const pendingOrderPreview = useMemo<PendingPreviewItem[]>(() => (
+    [...outstandingOrders]
+      .sort((a, b) => {
+        const dateA = Date.parse(a.orderDate || a.order_date || "");
+        const dateB = Date.parse(b.orderDate || b.order_date || "");
+        if (!Number.isNaN(dateA) || !Number.isNaN(dateB)) {
+          return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA);
+        }
+        return (Number(b.order_id) || 0) - (Number(a.order_id) || 0);
+      })
+      .slice(0, 10)
+      .map((order) => ({
+        id: String(order.order_id),
+        title: order.Dealer_Name || "Dealer order",
+        subtitle: order.orderDate || order.order_date ? `Date: ${String(order.orderDate || order.order_date).slice(0, 10)}` : undefined,
+        dueText: order.outstandingDate ? `Due: ${order.outstandingDate}` : undefined,
+        amount: Number(order.order_amount ?? order.total ?? 0),
+        statusText: order.accept_order === "0" ? "Not accepted" : "Pending",
+        statusTone: order.accept_order === "0" ? "red" : "amber",
+      }))
+  ), [outstandingOrders]);
   const pendingApprovals = (discountApprovalsQ.data?.data ?? []).filter(r => r.status === "pending").length;
   const statusMap = useMemo(() => new Map(
     (statusOverrides ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
@@ -683,6 +717,14 @@ function AdminDashboardInner() {
             </div>
 
             {/* ── Charts ── */}
+            <PendingOrdersPreview
+              items={pendingOrderPreview}
+              loading={outstandingOrdersQ.isLoading}
+              moreHref="/Pages/Ordermanagement/outstandingorders"
+              subtitle="Top 10 pending orders pulled from Mirisoft orderpeginationnew"
+              emptyText="No pending orders in the current Mirisoft feed."
+            />
+
             <div className="table-card">
               <div className="table-toolbar">
                 <div>
