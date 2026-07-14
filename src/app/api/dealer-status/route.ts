@@ -83,25 +83,60 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const body = (await request.json().catch(() => null)) as Partial<DealerStatusDocument & { updatedBy?: string }> | null;
+    const body = (await request.json().catch(() => null)) as
+      | Partial<DealerStatusDocument & { dealerIds?: unknown[]; updatedBy?: string }>
+      | null;
     const dealerId = String(body?.dealerId ?? "").trim();
+    const dealerIds = Array.isArray(body?.dealerIds)
+      ? [...new Set(body.dealerIds.map((id) => String(id ?? "").trim()).filter(Boolean))]
+      : [];
     const rawStatus = String(body?.status ?? "").trim().toLowerCase();
     const updatedBy = String(body?.updatedBy ?? "").trim();
 
-    if (!dealerId || (rawStatus !== "active" && rawStatus !== "inactive")) {
-      return safeErrorResponse("dealerId and a valid status are required", 400);
+    if ((!dealerId && dealerIds.length === 0) || (rawStatus !== "active" && rawStatus !== "inactive")) {
+      return safeErrorResponse("dealerId or dealerIds and a valid status are required", 400);
     }
 
     const db = await getDb();
     const collection = db.collection<DealerStatusDbDocument>(COLLECTION);
     const now = new Date();
+    const status = rawStatus as DealerStatus;
+
+    if (dealerIds.length > 0) {
+      await collection.bulkWrite(
+        dealerIds.map((id) => ({
+          updateOne: {
+            filter: { dealerId: id },
+            update: {
+              $set: {
+                dealerId: id,
+                status,
+                updatedAt: now,
+                ...(updatedBy ? { updatedBy } : {}),
+              },
+            },
+            upsert: true,
+          },
+        }))
+      );
+
+      return NextResponse.json({
+        success: true,
+        data: dealerIds.map((id) => ({
+          dealerId: id,
+          status,
+          updatedAt: now.toISOString(),
+          ...(updatedBy ? { updatedBy } : {}),
+        })) as DealerStatusResponseDocument[],
+      });
+    }
 
     await collection.updateOne(
       { dealerId },
       {
         $set: {
           dealerId,
-          status: rawStatus as DealerStatus,
+          status,
           updatedAt: now,
           ...(updatedBy ? { updatedBy } : {}),
         },
@@ -113,7 +148,7 @@ export async function PATCH(request: NextRequest) {
       success: true,
       data: {
         dealerId,
-        status: rawStatus,
+        status,
         updatedAt: now.toISOString(),
         ...(updatedBy ? { updatedBy } : {}),
       } as DealerStatusResponseDocument,

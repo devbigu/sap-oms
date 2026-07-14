@@ -4,13 +4,14 @@ import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
-import { Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
+import { CheckCircle2, Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
 import { confirmAlert } from 'react-confirm-alert'
 import {
   dealerStatusBadge,
   fetchDealerStatusOverrides,
   normalizeDealerStatus,
   saveDealerStatus,
+  saveDealerStatuses,
   type DealerStatus,
   type DealerStatusDocument,
 } from "@/lib/dealerStatus"
@@ -49,6 +50,7 @@ type AppRole = "admin" | "staff" | "accountant"
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
+const BULK_DEALER_FETCH_LIMIT = 1000
 const getDealerEditRoute = (dealerId: string) => `/dashboard/admin/dealer/${encodeURIComponent(dealerId)}`
 const getDealerViewRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/view`
 const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
@@ -88,6 +90,7 @@ export default function DealerListPage() {
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(() => new Set())
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null)
+  const [bulkActivating, setBulkActivating] = useState(false)
   const [statusOverrides, setStatusOverrides] = useState<Record<string, DealerStatus>>({})
 
   const queryClient = useQueryClient()
@@ -191,6 +194,127 @@ export default function DealerListPage() {
     } finally {
       setDeleteConfirm(null)
     }
+  }
+
+  const fetchAllDealerIds = async () => {
+    const dealerUrl = (pageNumber: number) =>
+      `${BACKEND_URL}/dealerpegination?page=${pageNumber}&limit=${BULK_DEALER_FETCH_LIMIT}&search=`
+
+    const firstPage = await fetchJson<DealerResponse>(dealerUrl(1))
+    const dealerIds = new Set(
+      (firstPage.data ?? []).map((dealer) => String(dealer.Dealer_Id ?? "").trim()).filter(Boolean)
+    )
+    const lastPage = Math.max(1, Number(firstPage.last_page) || 1)
+
+    if (lastPage > 1) {
+      const remainingPages = await Promise.all(
+        Array.from({ length: lastPage - 1 }, (_, index) => fetchJson<DealerResponse>(dealerUrl(index + 2)))
+      )
+
+      remainingPages.forEach((pageResponse) => {
+        const pageDealers = pageResponse.data ?? []
+        pageDealers.forEach((dealer) => {
+          const dealerId = String(dealer.Dealer_Id ?? "").trim()
+          if (dealerId) dealerIds.add(dealerId)
+        })
+      })
+    }
+
+    return Array.from(dealerIds)
+  }
+
+  const activateAllDealers = async () => {
+    setBulkActivating(true)
+    try {
+      const dealerIds = await fetchAllDealerIds()
+
+      if (dealerIds.length === 0) {
+        setToastMsg({ text: "No dealers found to activate.", type: "error" })
+        return
+      }
+
+      const updatedStatuses = await saveDealerStatuses({
+        dealerIds,
+        status: "active",
+        updatedBy: role,
+      })
+
+      setStatusOverrides((prev) => {
+        const next = { ...prev }
+        dealerIds.forEach((dealerId) => {
+          next[dealerId] = "active"
+        })
+        return next
+      })
+
+      queryClient.setQueryData<DealerStatusDocument[]>(["dealer-statuses"], (previous = []) => {
+        const nextByDealerId = new Map(previous.map((row) => [String(row.dealerId), row]))
+
+        updatedStatuses.forEach((row) => {
+          nextByDealerId.set(String(row.dealerId), {
+            ...row,
+            status: normalizeDealerStatus(row.status),
+          })
+        })
+
+        return Array.from(nextByDealerId.values())
+      })
+
+      setToastMsg({ text: `Activated ${dealerIds.length} dealers successfully.`, type: "success" })
+      void refetch()
+    } catch (error) {
+      console.error("Failed to activate all dealers", error)
+      setToastMsg({
+        text: error instanceof Error ? error.message : "Failed to activate all dealers",
+        type: "error",
+      })
+    } finally {
+      setBulkActivating(false)
+    }
+  }
+
+  const confirmActivateAllDealers = () => {
+    confirmAlert({
+      customUI: ({ onClose }) => (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Activate All Dealers</h3>
+                <p className="text-sm text-gray-500">This will update every dealer account.</p>
+              </div>
+            </div>
+
+            <p className="text-sm leading-6 text-gray-600">
+              All dealers will be marked active and able to pass the dealer status check.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  void activateAllDealers()
+                }}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+              >
+                Activate all
+              </button>
+            </div>
+          </div>
+        </div>
+      ),
+    })
   }
 
   const updateDealerStatus = async (dealerId: string, nextStatus: DealerStatus) => {
@@ -420,6 +544,17 @@ export default function DealerListPage() {
         )}
       
         <div className="mb-4 flex justify-end gap-2">
+          {canManageDealers && (
+            <button
+              type="button"
+              onClick={confirmActivateAllDealers}
+              disabled={bulkActivating}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {bulkActivating ? "Activating..." : "Activate all dealers"}
+            </button>
+          )}
           <Link
             href={role === "staff" ? "/dashboard/staff/dealer-requests" : "/dashboard/admin/dealer/requests"}
             className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
