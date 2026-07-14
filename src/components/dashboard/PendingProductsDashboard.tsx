@@ -10,8 +10,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useAuthSession } from "@/hooks/useAuthSession";
-import type { ClientAuthSession } from "@/lib/auth/client";
 
 type Role = "admin" | "staff" | "dealer";
 
@@ -119,16 +117,68 @@ const pendingProductsQueryClient = new QueryClient({
   },
 });
 
-function buildDashboardActor(session: ClientAuthSession | null): DashboardActor | null {
-  if (!session) return null;
-  if (session.role === "accountant") return null;
+function resolveDashboardActor(): DashboardActor | null {
+  if (typeof window === "undefined") return null;
 
-  return {
-    role: session.role,
-    id: session.dealerId ?? session.staffId ?? session.adminId ?? session.userId,
-    name: session.dealerName ?? session.staffName ?? session.name,
-    roletype: session.roletype,
-  };
+  try {
+    const staffRaw = localStorage.getItem("staffData");
+    if (staffRaw) {
+      const parsed = JSON.parse(staffRaw);
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "Staff",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+    }
+
+    const userRaw = localStorage.getItem("UserData");
+    if (userRaw) {
+      const parsed = JSON.parse(userRaw);
+      if (parsed?.Dealer_Id) {
+        return {
+          role: "dealer",
+          id: String(parsed.Dealer_Id),
+          name: parsed.Dealer_Name || "Dealer",
+        };
+      }
+
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === "0" ? "admin" : "staff",
+          id: String(parsed.staff_id),
+          name: parsed.staff_name || "Staff",
+          roletype: String(parsed.staff_roletype ?? ""),
+        };
+      }
+
+      if (localStorage.getItem("roletype") === "3" && parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || "admin"),
+          name: parsed.name || parsed.email || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+
+    const adminRaw = localStorage.getItem("AdminData") || localStorage.getItem("admin");
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw);
+      if (parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: "admin",
+          id: String(parsed.id || parsed.admin_id || parsed.Admin_Id || "admin"),
+          name: parsed.name || "Admin",
+          roletype: "0",
+        };
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 function buildActorHeaders(actor: DashboardActor | null): HeadersInit {
@@ -192,8 +242,7 @@ function ProductMetric({
 }
 
 function PendingProductsDashboardInner({ role }: { role: Role }) {
-  const { session, loading: sessionLoading } = useAuthSession();
-  const actor = useMemo(() => buildDashboardActor(session), [session]);
+  const [actor] = useState<DashboardActor | null>(() => resolveDashboardActor());
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -319,21 +368,11 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
     return cards;
   }, [role, summary]);
 
-  if (sessionLoading) {
+  if (!actor) {
     return (
       <div className="px-6 py-10">
         <div className="rounded-2xl border border-slate-200 bg-white px-6 py-10 text-sm text-slate-500 shadow-sm">
           Loading pending products...
-        </div>
-      </div>
-    );
-  }
-
-  if (!actor) {
-    return (
-      <div className="px-6 py-10">
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-6 py-10 text-sm text-amber-800 shadow-sm">
-          This pending-products view is not available for your current signed-in role.
         </div>
       </div>
     );

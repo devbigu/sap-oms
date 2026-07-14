@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
@@ -15,7 +14,6 @@ import {
   type DealerStatus,
   type DealerStatusDocument,
 } from "@/lib/dealerStatus"
-import { getLocalAuthSession } from "@/lib/auth/client"
 
 type Dealer = {
   Dealer_Id: string
@@ -72,15 +70,16 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 }
 
-function getRole(): AppRole | null {
-  const session = getLocalAuthSession()
-  if (!session || session.role === "dealer") return null
-  return session.role
+function getRole(): AppRole {
+  if (typeof window === "undefined") return "admin"
+  if (localStorage.getItem("accountant_token")) return "accountant"
+  const rt = localStorage.getItem("roletype")
+  if (rt === "1") return "staff"
+  return "admin"
 }
 
 export default function DealerListPage() {
-  const router = useRouter()
-  const [role, setRole] = useState<AppRole | null>(null)
+  const [role]          = useState<AppRole>(() => getRole())
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
@@ -92,16 +91,6 @@ export default function DealerListPage() {
   const [statusOverrides, setStatusOverrides] = useState<Record<string, DealerStatus>>({})
 
   const queryClient = useQueryClient()
-
-  useEffect(() => {
-    setRole(getRole())
-  }, [])
-
-  useEffect(() => {
-    if (role === "staff") {
-      router.replace("/dashboard/staff/dealerlist")
-    }
-  }, [role, router])
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -130,7 +119,6 @@ export default function DealerListPage() {
     queryFn: async () => {
       return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`)
     },
-    enabled: !!role,
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
@@ -141,7 +129,6 @@ export default function DealerListPage() {
   } = useQuery<DealerStatusDocument[]>({
     queryKey: ["dealer-statuses"],
     queryFn: fetchDealerStatusOverrides,
-    enabled: !!role,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -176,14 +163,13 @@ export default function DealerListPage() {
 
   // Prefetch next page
   useEffect(() => {
-    if (!role) return
     queryClient.prefetchQuery({
       queryKey: ['dealers', page + 1, search],
       queryFn: async () => {
         return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`)
       },
     })
-  }, [page, search, queryClient, role])
+  }, [page, search, queryClient])
 
   // Debounced search
   useEffect(() => {
@@ -208,7 +194,6 @@ export default function DealerListPage() {
   }
 
   const updateDealerStatus = async (dealerId: string, nextStatus: DealerStatus) => {
-    if (!role) return
     const normalizedDealerId = String(dealerId)
     setStatusUpdatingId(normalizedDealerId)
     try {
@@ -349,12 +334,8 @@ export default function DealerListPage() {
   }
 
   const canManageDealers = role === "admin" || role === "staff"
-  const isStaffRole = role === "staff"
-  const dealerRequestsHref = isStaffRole ? "/dashboard/staff/dealer-requests" : "/dashboard/admin/dealer/requests"
   const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
   const endIndex   = Math.min(page * ITEMS_PER_PAGE, total)
-
-  if (!role) return null
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -440,7 +421,7 @@ export default function DealerListPage() {
       
         <div className="mb-4 flex justify-end gap-2">
           <Link
-            href={dealerRequestsHref}
+            href={role === "staff" ? "/dashboard/staff/dealer-requests" : "/dashboard/admin/dealer/requests"}
             className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
           >
             Dealer Requests
@@ -564,7 +545,7 @@ export default function DealerListPage() {
                             {openMenu === dealer.Dealer_Id && (
                               <div onClick={(e) => e.stopPropagation()} data-menu-id={dealer.Dealer_Id} className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded-md shadow-lg z-10 py-1">
                                 <Link href={getDealerViewRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">View</Link>
-                                {isStaffRole && <Link href={getStaffDealerRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">View (staff)</Link>}
+                                {role === 'staff' && <Link href={getStaffDealerRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">View (staff)</Link>}
                                 {canManageDealers && (
                                   <>
                                     <Link href={getDealerEditRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>

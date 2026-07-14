@@ -9,7 +9,6 @@ import {
   ChevronLeft, ChevronDown, ChevronRight,
   AlertCircle, ShieldAlert, Receipt,
 } from 'lucide-react'
-import { getLocalAuthSession } from '@/lib/auth/client'
 import DealerInfoCard from '@/components/ledger/DealerInfoCard'
 import LedgerSummary from '@/components/ledger/LedgerSummary'
 import AccountBookSummary, { AccountBookStats } from '@/components/ledger/AccountBookSummary'
@@ -133,15 +132,32 @@ function mtStatusValue(s: any) {
   return 'NoActionTaken'
 }
 
-function resolveRole(): { role: Role; dealerId?: string; staffId?: string } | null {
-  const session = getLocalAuthSession()
-  if (!session) return null
-
-  return {
-    role: session.role,
-    ...(session.dealerId ? { dealerId: session.dealerId } : {}),
-    ...(session.staffId ? { staffId: session.staffId } : {}),
-  }
+function resolveRole(): { role: Role; dealerId?: string; staffId?: string } {
+  if (typeof window === 'undefined') return { role: 'admin' }
+  try {
+    if (localStorage.getItem('accountant_token')) return { role: 'accountant' }
+    const userData = localStorage.getItem('UserData')
+    if (userData) {
+      const p = JSON.parse(userData)
+      if (p?.Dealer_Id) return { role: 'dealer', dealerId: p.Dealer_Id }
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+      if (localStorage.getItem('roletype') === '3') return { role: 'admin' }
+    }
+    const staffRaw = localStorage.getItem('staffData')
+    if (staffRaw) {
+      const p = JSON.parse(staffRaw)
+      if (p?.staff_id) return {
+        role: p.staff_roletype === '0' ? 'admin' : 'staff',
+        staffId: p.staff_id,
+      }
+    }
+    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
+    if (adminRaw) return { role: 'admin' }
+  } catch (_) {}
+  return { role: 'admin' }
 }
 
 function getPayStatus(o: RawOrder): PayStatus {
@@ -302,20 +318,14 @@ export default function DealerLedgerPage() {
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false)
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [accessDenied, setAccessDenied] = useState(false)
-  const [userRole, setUserRole] = useState<Role | null>(null)
+  const [userRole, setUserRole] = useState<Role>('admin')
   const [staffId, setStaffId] = useState<string | undefined>()
   const [ordersPage, setOrdersPage] = useState(1)
   const [transactionsPage, setTransactionsPage] = useState(1)
 
   // ── Access control: dealers can only see their own ledger ──
   useEffect(() => {
-    const resolved = resolveRole()
-    if (!resolved) {
-      setUserRole(null)
-      setStaffId(undefined)
-      return
-    }
-    const { role, dealerId: ownDealerId, staffId: sid } = resolved
+    const { role, dealerId: ownDealerId, staffId: sid } = resolveRole()
     setUserRole(role)
     setStaffId(sid)
     if (role === 'dealer' && ownDealerId && ownDealerId !== dealerId) {
@@ -353,7 +363,7 @@ export default function DealerLedgerPage() {
       const res = await axios.get(`/api/ledger/${dealerId}`)
       return res.data
     },
-    enabled: !!dealerId && !!userRole && !accessDenied,
+    enabled: !!dealerId && !accessDenied,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -370,7 +380,7 @@ export default function DealerLedgerPage() {
       })
       return res.data
     },
-    enabled: !!dealerId && !!userRole && !accessDenied,
+    enabled: !!dealerId && !accessDenied,
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
@@ -385,7 +395,7 @@ export default function DealerLedgerPage() {
       const res = await axios.get(`/api/wallet/${dealerId}`)
       return res.data
     },
-    enabled: !!dealerId && !!userRole,
+    enabled: !!dealerId,
     staleTime: 60 * 1000,
   })
 
@@ -394,7 +404,7 @@ export default function DealerLedgerPage() {
   }, [dealerId])
 
   useEffect(() => {
-    if (!dealerId || !userRole || accessDenied || !transactionsData?.hasNextPage) return
+    if (!dealerId || accessDenied || !transactionsData?.hasNextPage) return
 
     queryClient.prefetchQuery({
       queryKey: ['dealer-transactions', dealerId, transactionsPage + 1],
@@ -494,8 +504,6 @@ export default function DealerLedgerPage() {
     )
   }
 
-  if (!userRole) return null
-
   const dealer = ledgerData?.dealer
   const summary = ledgerData?.summary || { totalDebit: 0, totalCredit: 0, netBalance: 0 }
   const summaryStats = ledgerData?.summaryStats
@@ -505,6 +513,9 @@ export default function DealerLedgerPage() {
   const transactionPage = transactionsData?.page || transactionsPage
   const transactionPageSize = transactionsData?.pageSize || TRANSACTIONS_PAGE_SIZE
   const transactionTotalPages = transactionsData?.totalPages || 1
+
+  // Hide pay button for dealers
+  const showPayButton = userRole !== 'dealer'
 
   return (
     <div className="min-h-screen bg-gray-100">

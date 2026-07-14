@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import Link from 'next/link'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
@@ -10,7 +9,6 @@ import moment from 'moment'
 import { hasPriorityTag } from '@/lib/orderPriority'
 import { OrderAmountSource, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { mergeFallbackProductNotes } from '@/lib/orderProductNotes.mjs'
-import { useAuthSession } from '@/hooks/useAuthSession'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const YEAR        = new Date().getFullYear()
@@ -33,10 +31,6 @@ type DealerInfo = {
   annualtarget: string
   discount: string
   status: string
-}
-
-type StaffScopedDealerRow = Partial<DealerInfo> & {
-  Dealer_Id?: string | number
 }
 
 type RawOrder = {
@@ -158,39 +152,18 @@ function pageRange(current: number, total: number): (number | "…")[] {
   return pages
 }
 
-function normalizeDealerInfo(row: StaffScopedDealerRow | null | undefined): DealerInfo {
-  return {
-    Dealer_Id: String(row?.Dealer_Id ?? '').trim(),
-    Dealer_Name: String(row?.Dealer_Name ?? '').trim(),
-    Dealer_City: String(row?.Dealer_City ?? '').trim(),
-    Dealer_Email: String(row?.Dealer_Email ?? '').trim(),
-    Dealer_Number: String(row?.Dealer_Number ?? '').trim(),
-    Dealer_Dealercode: String(row?.Dealer_Dealercode ?? '').trim(),
-    gst: String(row?.gst ?? '').trim(),
-    creditdays: String(row?.creditdays ?? '').trim(),
-    currentlimit: String(row?.currentlimit ?? '').trim(),
-    annualtarget: String(row?.annualtarget ?? '').trim(),
-    discount: String(row?.discount ?? '').trim(),
-    status: String(row?.status ?? '').trim(),
-  }
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function StaffDealerViewPage() {
   const router   = useRouter()
   const params   = useParams()
   const dealerId = params.id as string
-  const { session, loading: authLoading } = useAuthSession()
-  const staffId = session?.staffId ?? session?.userId ?? ''
 
   const [tab,           setTab]          = useState<"orders" | "items">("orders")
   const [dealer,        setDealer]       = useState<DealerInfo | null>(null)
   const [allOrders,     setAllOrders]    = useState<RawOrder[]>([])
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({})
   const [loadingOrders, setLoadingOrders] = useState(true)
-  const [accessChecked, setAccessChecked] = useState(false)
-  const [accessDenied,  setAccessDenied]  = useState(false)
   const [orderPage,     setOrderPage]    = useState(1)
   const [itemPage,      setItemPage]     = useState(1)
   const [search,        setSearch]       = useState("")
@@ -199,115 +172,34 @@ export default function StaffDealerViewPage() {
 
   const queryClient = useQueryClient()
 
+  // Fetch dealer info
   useEffect(() => {
-    if (authLoading) return
-    if (!session) {
-      router.replace('/auth/login')
-      return
-    }
-    if (session.role !== 'staff') {
-      router.replace('/dashboard')
-    }
-  }, [authLoading, router, session])
-
-  useEffect(() => {
-    if (authLoading || !dealerId) return
-    if (!session || session.role !== 'staff') return
-
-    if (!staffId) {
-      setDealer(null)
-      setAccessChecked(true)
-      setAccessDenied(true)
-      setLoadingOrders(false)
-      return
-    }
-
-    let active = true
-    setAccessChecked(false)
-    setAccessDenied(false)
-
-    fetch(`${BACKEND_URL}/staffDealers?id=${encodeURIComponent(staffId)}`, { cache: 'no-store' })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(json => {
-        if (!active) return
-
-        const rows: StaffScopedDealerRow[] = Array.isArray(json.data) ? json.data : []
-        const matched = rows.find((row) => String(row.Dealer_Id ?? '').trim() === dealerId)
-
-        if (!matched) {
-          setDealer(null)
-          setAccessDenied(true)
-          setLoadingOrders(false)
-          setAccessChecked(true)
-          return
-        }
-
-        setDealer(normalizeDealerInfo(matched))
-        setAccessDenied(false)
-        setAccessChecked(true)
-      })
-      .catch(() => {
-        if (!active) return
-        setDealer(null)
-        setAccessDenied(true)
-        setLoadingOrders(false)
-        setAccessChecked(true)
-      })
-
-    return () => { active = false }
-  }, [authLoading, dealerId, session, staffId])
-
-  useEffect(() => {
-    if (!dealerId || !accessChecked || accessDenied) return
+    if (!dealerId) return
     fetch(`${BACKEND_URL}/getdealer?id=${dealerId}`, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ type: "type" }),
     })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(json => {
-        const detail = normalizeDealerInfo(json.data)
-        if (detail.Dealer_Id) {
-          setDealer(previous => ({ ...(previous ?? normalizeDealerInfo(null)), ...detail }))
-        }
-      })
+      .then(r => r.json())
+      .then(json => { if (json.status) setDealer(json.data) })
       .catch(() => {})
-  }, [accessChecked, accessDenied, dealerId])
+  }, [dealerId])
 
-  useEffect(() => {
-    if (authLoading || !session || session.role !== 'staff' || !staffId || !dealerId || !accessChecked || accessDenied) {
-      setAllOrders([])
-      setLoadingOrders(false)
-      return
-    }
-
-    let active = true
-    const dealerName = dealer?.Dealer_Name?.trim().toLowerCase() ?? ''
-
+  // Fetch all orders (filter by dealer name client-side)
+  const loadOrders = useCallback(async () => {
     setLoadingOrders(true)
-    fetch(`${BACKEND_URL}/getStaffOrders?staff_id=${encodeURIComponent(staffId)}`, { cache: 'no-store' })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(json => {
-        if (!active) return
-        const rows = Array.isArray(json.data) ? json.data : []
-        setAllOrders(
-          rows.filter((order: RawOrder) => {
-            const orderDealerId = String(order.order_dealer ?? '').trim()
-            const orderDealerName = String(order.Dealer_Name ?? '').trim().toLowerCase()
-            if (orderDealerId && orderDealerId === dealerId) return true
-            return Boolean(dealerName) && orderDealerName === dealerName
-          })
-        )
-      })
-      .catch(() => {
-        if (active) setAllOrders([])
-      })
-      .finally(() => {
-        if (active) setLoadingOrders(false)
-      })
+    try {
+      const res  = await fetch(`${BACKEND_URL}/orderpegination?page=1&limit=1000&search=`)
+      const json = await res.json()
+      setAllOrders(Array.isArray(json.data) ? json.data : [])
+    } catch {
+      setAllOrders([])
+    } finally {
+      setLoadingOrders(false)
+    }
+  }, [])
 
-    return () => { active = false }
-  }, [accessChecked, accessDenied, authLoading, dealer, dealerId, session, staffId])
+  useEffect(() => { loadOrders() }, [loadOrders])
 
   useEffect(() => {
     const orderIds = Array.from(new Set(allOrders.map(o => String(o.order_id || "").trim()).filter(Boolean)))
@@ -350,14 +242,14 @@ export default function StaffDealerViewPage() {
       )
       return res.data
     },
-    enabled: !!dealerId && !!staffId && accessChecked && !accessDenied && tab === "items",
+    enabled: !!dealerId && tab === "items",
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
   // Prefetch next items page
   useEffect(() => {
-    if (!dealerId || !staffId || !accessChecked || accessDenied || tab !== "items") return
+    if (!dealerId || tab !== "items") return
     queryClient.prefetchQuery({
       queryKey: ['staff-dealer-items', dealerId, itemPage + 1, search],
       queryFn: async () => {
@@ -367,7 +259,7 @@ export default function StaffDealerViewPage() {
         return res.data
       },
     })
-  }, [accessChecked, accessDenied, dealerId, itemPage, queryClient, search, staffId, tab])
+  }, [dealerId, itemPage, search, tab])
 
   const pricedAllOrders = useMemo(() => {
     return allOrders.map(order => withDisplayOrderAmounts(order, summaryOverrides[order.order_id]))
@@ -399,7 +291,7 @@ export default function StaffDealerViewPage() {
   const orderSlice      = dealerOrders.slice((orderPage - 1) * ORDER_PAGE_SIZE, orderPage * ORDER_PAGE_SIZE)
 
   // Items pagination
-  const items = useMemo(() => itemsResp?.data ?? [], [itemsResp?.data])
+  const items          = itemsResp?.data ?? []
   const displayItems = useMemo(
     () => mergeFallbackProductNotes(items, fallbackProductNotes) as unknown as OrderItem[],
     [items, fallbackProductNotes]
@@ -452,40 +344,6 @@ export default function StaffDealerViewPage() {
   }
 
   const loading = loadingOrders && !dealer
-
-  if (authLoading || (!accessChecked && session?.role === 'staff' && !dealer)) {
-    return (
-      <div className="min-h-screen bg-gray-100">
-        <div className="max-w-7xl mx-auto p-6">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <div className={`${SHIMMER} h-6 w-48 mb-3`} />
-            <div className={`${SHIMMER} h-4 w-64`} />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!authLoading && accessChecked && accessDenied) {
-    return (
-      <div className="min-h-screen bg-gray-100">
-        <div className="max-w-3xl mx-auto p-6">
-          <div className="bg-white rounded-xl border border-red-200 shadow-sm p-6">
-            <h1 className="text-xl font-semibold text-gray-900 mb-2">Dealer access restricted</h1>
-            <p className="text-sm text-gray-600 mb-5">
-              Staff can only open dealers assigned to their account.
-            </p>
-            <Link
-              href="/dashboard/staff/dealerlist"
-              className="inline-flex rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-            >
-              Back to assigned dealers
-            </Link>
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-gray-100">

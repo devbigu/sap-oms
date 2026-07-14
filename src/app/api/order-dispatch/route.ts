@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { MongoServerError } from "mongodb";
-import { requireApiSession } from "@/lib/auth/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import {
   buildDispatchIdentity,
@@ -75,19 +74,18 @@ function pickFirstText(max: number, ...values: unknown[]): string {
   return "";
 }
 
-function buildActorFromSession(req: NextRequest): DispatchUserSession | NextResponse {
-  const session = requireApiSession(req, {
-    roles: ["admin", "staff", "dealer"],
-    unauthenticatedMessage: "Authentication required for dispatch access",
-    unauthorizedMessage: "Your signed-in role cannot access dispatch details",
-  });
-  if (session instanceof NextResponse) return session;
+function parseActor(req: NextRequest): DispatchUserSession | null {
+  const actorId = safeText(req.headers.get("x-omsons-actor-id"), 80);
+  const actorRole = safeText(req.headers.get("x-omsons-actor-role"), 40).toLowerCase();
+  const roletype = safeText(req.headers.get("x-omsons-actor-roletype"), 40);
+
+  if (!actorId) return null;
+  if (actorRole !== "admin" && actorRole !== "staff" && actorRole !== "dealer") return null;
 
   return {
-    id: session.dealerId ?? session.staffId ?? session.adminId ?? session.userId,
-    role: session.role as DispatchUserSession["role"],
-    roletype: session.roletype,
-    name: session.name,
+    id: actorId,
+    role: actorRole,
+    roletype,
   };
 }
 
@@ -393,8 +391,10 @@ function authorizeEdit(actor: DispatchUserSession | null, context: {
 
 export async function GET(req: NextRequest) {
   try {
-    const actor = buildActorFromSession(req);
-    if (actor instanceof NextResponse) return actor;
+    const actor = parseActor(req);
+    if (!actor) {
+      return NextResponse.json({ success: false, message: "Unauthenticated dispatch access" }, { status: 401 });
+    }
 
     const orderId = safeText(req.nextUrl.searchParams.get("orderId") || req.nextUrl.searchParams.get("order_id"), 80);
     const orderItemId = safeText(req.nextUrl.searchParams.get("orderItemId") || req.nextUrl.searchParams.get("order_item_id"), 80);
@@ -450,8 +450,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const actor = buildActorFromSession(req);
-    if (actor instanceof NextResponse) return actor;
+    const actor = parseActor(req);
+    if (!actor) {
+      return NextResponse.json({ success: false, message: "Unauthenticated dispatch access" }, { status: 401 });
+    }
 
     if (actor.role === "dealer" || actor.role === "unknown") {
       return NextResponse.json({ success: false, message: "Dealers cannot update dispatch details" }, { status: 403 });

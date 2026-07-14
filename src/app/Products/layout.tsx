@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
+// import Footer from "../../components/Footer";
+import Footer from "@/components/Footer";
+import Header from "@/components/Header";
 
-import ProtectedStorefrontLayout from "@/components/layout/ProtectedStorefrontLayout";
+// import Footer from "@/components/footer";
+// import Header from "@/components/Header";
+// import Header from "@/components/header";
 import Providers from "../providers";
 
 export const metadata: Metadata = {
@@ -14,9 +19,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <div className="antialiased">
+
+    <div
+      className="antialiased">
       <Providers>
-        <ProtectedStorefrontLayout>{children}</ProtectedStorefrontLayout>
+        <div className="sticky top-0 z-50">
+          <Header />
+        </div>
+        {children}
+        <Footer />
       </Providers>
     </div>
   );

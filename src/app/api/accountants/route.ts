@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireApiSession } from "@/lib/auth/server";
 import { getDb } from "@/lib/mongodb";
 import { scryptSync, randomBytes } from "crypto";
 
@@ -9,15 +8,8 @@ function hashPassword(password: string) {
   return `${salt}:${hash}`;
 }
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
-    const session = requireApiSession(req, {
-      roles: ["admin"],
-      unauthenticatedMessage: "Authentication required to list accountants",
-      unauthorizedMessage: "Only admin users can list accountants",
-    });
-    if (session instanceof NextResponse) return session;
-
     const db   = await getDb();
     const docs  = await db
       .collection("accountants")
@@ -34,13 +26,6 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = requireApiSession(req, {
-      roles: ["admin"],
-      unauthenticatedMessage: "Authentication required to create accountants",
-      unauthorizedMessage: "Only admin users can create accountants",
-    });
-    if (session instanceof NextResponse) return session;
-
     const { name, email, password, phone } = await req.json();
 
     if (!name?.trim() || !email?.trim() || !password || !phone?.trim()) {

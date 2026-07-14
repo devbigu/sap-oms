@@ -31,27 +31,12 @@ export const SIDEBAR_CATEGORIES: Record<string, string[]> = {
   "Liquid Handling":    ["Liquid Handling"],
 };
 
-export const CATEGORY_LABELS = Object.keys(SIDEBAR_CATEGORIES);
-
-export const FEATURED_NAV_CATEGORIES = [
-  "Filters",
-  "Hydrometers",
-  "Thermometers",
-  "Plasticware",
-  "Lab Instruments",
-  "Flasks",
-] as const;
-
-export function getCategoryFilterHref(label: string): string {
-  return `/Products?cat=${encodeURIComponent(label)}`;
-}
-
 export function slugify(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 export function labelFromSlug(slug: string): string | null {
-  return CATEGORY_LABELS.find((l) => slugify(l) === slug) ?? null;
+  return Object.keys(SIDEBAR_CATEGORIES).find(l => slugify(l) === slug) ?? null;
 }
 
 export function matchesCategory(productCategories: string[], label: string): boolean {

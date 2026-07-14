@@ -1,68 +1,84 @@
-"use client";
+"use client"
 
-import type { CSSProperties } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import Link from "next/link"
+import { useEffect, useState } from "react"
 import {
-  HiOutlineArrowRightOnRectangle,
   HiOutlineBeaker,
-  HiOutlineChartBarSquare,
-  HiOutlineClipboardDocumentList,
-  HiOutlineClock,
-  HiOutlineCube,
-  HiOutlineFire,
-  HiOutlineShoppingCart,
   HiOutlineSquares2X2,
+  HiOutlineShoppingCart,
+  HiOutlineClipboardDocumentList,
+  HiOutlineChartBarSquare,
+  HiOutlineCube,
   HiOutlineUserGroup,
-} from "react-icons/hi2";
+  HiOutlineFire,
+  HiOutlineArrowRightOnRectangle,
+} from "react-icons/hi2"
 
-import { broadcastAuthChange, clearStoredAuthData } from "@/lib/auth/client";
-import { getDashboardRouteForRole, getLoginRouteForRole, getOrdersRouteForRole } from "@/lib/auth/navigation";
-import { useAuthSession } from "@/hooks/useAuthSession";
+type UserData = {
+  Dealer_Name?: string
+  Dealer_Email?: string
+  username?: string
+  email?: string
+  name?: string
+  image?: string
+  Dealer_Image?: string
+  ADMIN_IMAGE?: string
+  imageUrl?: string
+}
 
 function AccountList() {
-  const router = useRouter();
-  const { session, loading } = useAuthSession();
-  const authSession = session;
-  const role = authSession?.role ?? null;
+  const [user, setUser]       = useState<UserData>({})
+  const [role, setRole]       = useState<string | null>(null)
+  const [mounted, setMounted] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string>("https://i.sstatic.net/l60Hf.png")
 
-  if (loading || !authSession || !role) return null;
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const roleType = localStorage.getItem("roletype")
+      const userData = JSON.parse(localStorage.getItem("UserData") || "{}")
+      setRole(roleType)
+      setUser(userData)
+      // derive image src from stored user data, add timestamp to bust cache after updates
+      const candidate = userData?.image || userData?.Dealer_Image || userData?.ADMIN_IMAGE || userData?.imageUrl || null
+      if (candidate) setImageSrc(`${candidate}?t=${Date.now()}`)
+    } catch { /* ignore */ }
+    setMounted(true)
+  }, [])
+
+  if (!mounted) return null
+
+  
 
   const userName =
-    authSession.dealerName ??
-    authSession.staffName ??
-    authSession.name ??
-    (role === "accountant" ? "Accountant" : role === "admin" ? "Administrator" : "Staff");
+    role === "3" ? user.name || user.username || "Administrator"
+    : role === "2" ? user.Dealer_Name || user.name || "Dealer"
+    : user.name || user.username || "Staff"
 
   const userEmail =
-    authSession.email ??
-    (role === "dealer"
-      ? "dealer@omsons.com"
-      : role === "accountant"
-        ? "accountant@omsons.com"
-        : role === "admin"
-          ? "admin@omsons.com"
-          : "staff@omsons.com");
+    role === "3" ? user.email || "admin@omsons.com"
+    : role === "2" ? user.Dealer_Email || user.email || "dealer@omsons.com"
+    : user.email || "staff@omsons.com"
 
-  const dashboardLink = getDashboardRouteForRole(role);
-  const ordersLink = getOrdersRouteForRole(role);
+  const dashboardLink =
+    role === "3" ? "/dashboard/admin"
+    : role === "2" ? "/dashboard/dealer"
+    : "/dashboard/staff"
+
   const roleLabel =
-    role === "admin"
-      ? "Admin"
-      : role === "dealer"
-        ? "Dealer"
-        : role === "accountant"
-          ? "Accountant"
-          : "Staff";
+    role === "3" ? "Admin" : role === "2" ? "Dealer" : "Staff"
+
+  const ordersLink =
+    role === "3" ? "/orders"
+    : role === "2" ? "/Pages/Ordermanagement"
+    : "/dashboard/staff/orderstatus"
 
   const handleLogout = () => {
-    clearStoredAuthData();
-    broadcastAuthChange();
-    router.push(getLoginRouteForRole(role));
-    router.refresh();
-  };
+    localStorage.clear()
+    window.location.href = "/auth/login"
+  }
 
-  const linkStyle: CSSProperties = {
+  const linkStyle: React.CSSProperties = {
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -71,102 +87,93 @@ function AccountList() {
     textDecoration: "none",
     padding: "4px 0",
     transition: "color .15s",
-  };
+  }
 
   return (
-    <div className="overflow-hidden rounded-lg bg-white text-black shadow-sm">
-      <div className="w-full border-b border-indigo-100 bg-gradient-to-r from-indigo-50 to-purple-50 p-3">
+    <div className="bg-white rounded-lg shadow-sm overflow-hidden text-black">
+      {/* ── Profile header ── */}
+      <div className="w-full bg-gradient-to-r from-indigo-50 to-purple-50 p-3 border-b border-indigo-100">
         <div className="flex items-center justify-between gap-4">
-          <div className="flex flex-1 items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-indigo-200 bg-indigo-100 text-sm font-semibold text-indigo-700">
-              {userName.slice(0, 2).toUpperCase()}
-            </div>
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-semibold text-gray-900">{userName}</span>
-              <span className="truncate text-xs text-gray-500">{userEmail}</span>
+          <div className="flex items-center gap-3 flex-1">
+            <img src={imageSrc} alt="profile" className="w-10 h-10 rounded-full object-cover border-2 border-indigo-200" />
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-semibold text-gray-900 truncate">{userName}</span>
+              <span className="text-xs text-gray-500 truncate">{userEmail}</span>
               <span className="text-xs font-medium text-indigo-600">{roleLabel}</span>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 rounded-lg border border-red-100 px-3 py-1.5 text-xs font-semibold text-red-500 transition-colors hover:bg-red-50 hover:text-red-600"
-          >
-            <HiOutlineArrowRightOnRectangle className="h-3.5 w-3.5" />
+          <button onClick={handleLogout} className="flex items-center gap-1.5 text-xs font-semibold text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg px-3 py-1.5 transition-colors border border-red-100">
+            <HiOutlineArrowRightOnRectangle className="w-3.5 h-3.5" />
             Sign out
           </button>
         </div>
       </div>
 
+      {/* ── Body ── */}
       <div className="grid grid-cols-2 divide-x divide-gray-100">
+
+        {/* LEFT — Quick Links */}
         <div className="px-5 py-4">
-          <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Quick Links</h3>
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Quick Links</h3>
           <ul className="space-y-1">
             <li>
               <Link href="/Products" style={linkStyle} className="hover:text-indigo-600">
-                <HiOutlineBeaker className="h-4 w-4 shrink-0" /> All Products
+                <HiOutlineBeaker className="w-4 h-4 shrink-0" /> All Products
               </Link>
             </li>
             <li>
               <Link href="/categories" style={linkStyle} className="hover:text-indigo-600">
-                <HiOutlineSquares2X2 className="h-4 w-4 shrink-0" /> Categories
+                <HiOutlineSquares2X2 className="w-4 h-4 shrink-0" /> Categories
               </Link>
             </li>
-            {role === "dealer" && (
-              <li>
-                <Link href="/Pages/Cart" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineShoppingCart className="h-4 w-4 shrink-0" /> My Cart
-                </Link>
-              </li>
-            )}
-            {role === "dealer" && (
+            <li>
+              <Link href="/Pages/Cart" style={linkStyle} className="hover:text-indigo-600">
+                <HiOutlineShoppingCart className="w-4 h-4 shrink-0" /> My Cart
+              </Link>
+            </li>
+            {role === "2" && (
               <li>
                 <Link href="/dashboard/dealer/AddOrderForm" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineClipboardDocumentList className="h-4 w-4 shrink-0" /> New Order
+                  <HiOutlineClipboardDocumentList className="w-4 h-4 shrink-0" /> New Order
                 </Link>
               </li>
             )}
           </ul>
         </div>
 
+        {/* RIGHT — Account */}
         <div className="px-5 py-4">
-          <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-400">Your Account</h3>
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Your Account</h3>
           <ul className="space-y-1">
             <li>
               <Link href={dashboardLink} style={linkStyle} className="hover:text-indigo-600">
-                <HiOutlineChartBarSquare className="h-4 w-4 shrink-0" />
-                {role === "admin" ? "Admin Panel" : "Dashboard"}
+                <HiOutlineChartBarSquare className="w-4 h-4 shrink-0" />
+                {role === "3" ? "Admin Panel" : "Dashboard"}
               </Link>
             </li>
             <li>
               <Link href={ordersLink} style={linkStyle} className="hover:text-indigo-600">
-                <HiOutlineCube className="h-4 w-4 shrink-0" /> Orders
+                <HiOutlineCube className="w-4 h-4 shrink-0" /> Orders
               </Link>
             </li>
-            {role !== "dealer" && (
-              <li>
-                <Link href="/Pages/Ordermanagement/outstandingorders" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineClock className="h-4 w-4 shrink-0" /> Outstanding
-                </Link>
-              </li>
+            {role === "3" && (
+              <>
+                <li>
+                  <Link href="/dashboard/admin/dealer/DealerList" style={linkStyle} className="hover:text-indigo-600">
+                    <HiOutlineUserGroup className="w-4 h-4 shrink-0" /> Dealers
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/dashboard/admin/hot-items" style={linkStyle} className="hover:text-indigo-600">
+                    <HiOutlineFire className="w-4 h-4 shrink-0" /> Hot Items
+                  </Link>
+                </li>
+              </>
             )}
-            {role === "admin" && (
-              <li>
-                <Link href="/dashboard/admin/dealer/DealerList" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineUserGroup className="h-4 w-4 shrink-0" /> Dealers
-                </Link>
-              </li>
-            )}
-            {role === "admin" && (
-              <li>
-                <Link href="/dashboard/admin/hot-items" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineFire className="h-4 w-4 shrink-0" /> Hot Items
-                </Link>
-              </li>
-            )}
-            {role === "staff" && (
+            {role !== "3" && role !== "2" && (
               <li>
                 <Link href="/dashboard/staff/orderstatus" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineClipboardDocumentList className="h-4 w-4 shrink-0" /> Order Status
+                  <HiOutlineClipboardDocumentList className="w-4 h-4 shrink-0" /> Order Status
                 </Link>
               </li>
             )}
@@ -174,7 +181,7 @@ function AccountList() {
         </div>
       </div>
     </div>
-  );
+  )
 }
 
-export default AccountList;
+export default AccountList
