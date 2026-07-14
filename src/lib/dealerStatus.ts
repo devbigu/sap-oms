@@ -13,6 +13,12 @@ export type DealerStatusPayload = {
   updatedBy?: string;
 };
 
+export type DealerStatusBulkPayload = {
+  dealerIds: string[];
+  status: DealerStatus;
+  updatedBy?: string;
+};
+
 type DealerStatusApiResponse = {
   success: boolean;
   data?: DealerStatusDocument | DealerStatusDocument[];
@@ -97,4 +103,22 @@ export async function saveDealerStatus(payload: DealerStatusPayload): Promise<De
     ...json.data,
     status: normalizeDealerStatus(json.data.status),
   };
+}
+
+export async function saveDealerStatuses(payload: DealerStatusBulkPayload): Promise<DealerStatusDocument[]> {
+  const res = await fetch(DEALER_STATUS_ENDPOINT, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const json = (await res.json()) as DealerStatusApiResponse;
+  if (!res.ok || !json.success || !Array.isArray(json.data)) {
+    throw new Error(extractMessage(json));
+  }
+
+  return json.data.map((item) => ({
+    ...item,
+    status: normalizeDealerStatus(item.status),
+  }));
 }
