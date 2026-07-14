@@ -1,77 +1,18 @@
 'use client'
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { Fragment, useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import moment from 'moment'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, ChevronDown, Search, ShieldAlert, Store } from 'lucide-react'
-import dealerCategoryReport from '@/lib/dealerCategoryReport'
-
-const BACKEND_URL = 'https://mirisoft.co.in/sas/dealerapi/api'
-
-type Dealer = {
-  Dealer_Id: string
-  Dealer_Name: string
-  Dealer_City?: string
-  Dealer_Number?: string
-  Dealer_Dealercode?: string
-  status?: string
-}
-
-type DealerResponse = {
-  data: Dealer[]
-  total?: number
-  last_page?: number
-  count?: number
-}
-
-type OrderHeader = Record<string, unknown> & {
-  order_id: string
-  order_date?: string
-  orderDate?: string
-  order_dealer?: string
-  Dealer_Name?: string
-  accept_order?: string
-  del_status?: string
-  order_status?: string
-  mtstatus?: string
-  reason?: string
-}
-
-type OrderItem = Record<string, unknown> & {
-  orderdata_id: string
-  orderdata_orderid: string
-  orderdata_cat_no: string
-  orderdata_item_quantity: string
-  orderdata_price: string
-  orderdata_discount: string
-  orderdata_afterDisPrice: string
-  orderdata_totalprice: string
-  orderdata_datetime?: string
-  product_name?: string
-  product_discription?: string
-  packSize?: number
-  totalPieces?: number
-}
-
-type CatalogueProduct = Record<string, unknown> & {
-  sku?: string
-  id?: string
-  category?: string
-  categories?: string[]
-  variants?: CatalogueVariant[]
-}
-
-type CatalogueVariant = Record<string, unknown> & {
-  sku?: string
-  id?: string
-  pack?: number
-}
-
-type DealerReportSnapshot = {
-  dealer: Dealer | null
-  orders: OrderHeader[]
-  items: OrderItem[]
-}
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Search,
+  ShieldAlert,
+  Store,
+} from 'lucide-react'
 
 type AllowedRole = 'admin' | 'staff'
 
@@ -79,206 +20,167 @@ type DealerCategoryReportProps = {
   allowedRoles?: AllowedRole[]
 }
 
-type OrderItemsResponse = {
-  data?: unknown
+type DashboardSession = {
+  role: AllowedRole | 'dealer'
+  id: string
+  roletype?: string
+  name?: string
 }
 
-const DEFAULT_FROM = moment().startOf('month').format('YYYY-MM-DD')
-const DEFAULT_TO = moment().endOf('month').format('YYYY-MM-DD')
-const IS_DEV = process.env.NODE_ENV !== 'production'
-
-function formatRupee(value: number) {
-  return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+type Dealer = {
+  Dealer_Id: string
+  Dealer_Name: string
+  Dealer_City?: string
+  Dealer_Number?: string
+  Dealer_Dealercode?: string
+  assignedstaff?: string
+  staffname?: string
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+type DealerListResponse = {
+  success: boolean
+  data: Dealer[]
+  total: number
+  last_page: number
+  page: number
+  pageSize: number
 }
 
-function hasStoredRole(raw: string | null, field: string, value?: string) {
-  if (!raw) return false
-  if (value === undefined) {
-    return raw.includes(`"${field}"`)
+type OrderContribution = {
+  orderId: string
+  orderDate: string
+  dealerId: string
+  dealerName: string
+  purchasedQuantity: number
+  totalValue: number
+  statusLabel: string
+}
+
+type ProductRow = {
+  productKey: string
+  productName: string
+  catalogueNumber: string
+  specification: string
+  purchasedQuantity: number
+  orderCount: number
+  totalValue: number
+  latestPurchaseDate: string
+  orders: OrderContribution[]
+}
+
+type CategoryRow = {
+  category: string
+  purchasedQuantity: number
+  orderCount: number
+  variantCount: number
+  shareOfPurchases: number
+  latestPurchaseDate: string
+  totalValue: number
+  products: ProductRow[]
+}
+
+type ReportWarning = {
+  code: string
+  message: string
+  orderIds?: string[]
+}
+
+type ReportResponse = {
+  success: boolean
+  dealer: Dealer | null
+  summary: {
+    totalOrders: number
+    totalPurchasedQuantity: number
+    totalCategories: number
+    totalVariants: number
+    totalSalesValue: number
+    latestPurchaseDate: string
+    dateRange: { from: string; to: string }
+    statusFilter: 'all' | 'accepted' | 'completed'
   }
-
-  return new RegExp(`"${field}"\\s*:\\s*"${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(raw)
+  categories: CategoryRow[]
+  warnings: ReportWarning[]
+  meta: {
+    lineCount: number
+    failedOrderCount: number
+    failedOrderIds: string[]
+    dealerId: string
+    role: AllowedRole
+    orderRouteBase: string
+    statusFilter: 'all' | 'accepted' | 'completed'
+  }
 }
+
+type SortKey = 'quantity_desc' | 'alphabetical' | 'latest_purchase'
+type RangePreset = 'all_time' | 'current_fy' | 'this_year' | 'last_12_months' | 'custom'
+type StatusFilter = 'all' | 'accepted' | 'completed'
 
 const subscribeToHydration = () => () => {}
 const getClientSnapshot = () => true
 const getServerSnapshot = () => false
 
-function useHasHydrated(): boolean {
-  return useSyncExternalStore(
-    subscribeToHydration,
-    getClientSnapshot,
-    getServerSnapshot,
-  )
+function useHasHydrated() {
+  return useSyncExternalStore(subscribeToHydration, getClientSnapshot, getServerSnapshot)
 }
 
-function dateOnly(value: unknown): string {
-  if (!value) return ''
-  const parsed = moment(String(value))
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD') : ''
-}
-
-function isCancelledOrRejected(order: OrderHeader) {
-  if (String(order.del_status ?? '').trim() === '1') return true
-
-  const haystack = [order.order_status, order.reason, order.mtstatus]
-    .map(value => String(value ?? '').toLowerCase())
-    .join(' ')
-
-  return /(cancel|cancelled|canceled|reject|rejected|declin)/i.test(haystack)
-}
-
-function withinRange(value: unknown, from: string, to: string) {
-  const date = moment(dateOnly(value))
-  if (!date.isValid()) return false
-  if (from && date.isBefore(moment(from).startOf('day'))) return false
-  if (to && date.isAfter(moment(to).endOf('day'))) return false
-  return true
-}
-
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { cache: 'no-store', signal })
-  const responseText = await response.text()
-
-  if (!response.ok) {
-    const preview = responseText.replace(/\s+/g, ' ').slice(0, 250)
-    throw new Error(
-      `Request failed with HTTP ${response.status}${IS_DEV && preview ? `: ${preview}` : ''}`
-    )
+function firstNonEmpty(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? '').trim()
+    if (text) return text
   }
-
-  try {
-    if (/^\s*</.test(responseText)) {
-      throw new Error(
-        `Expected JSON but received an HTML response${IS_DEV && responseText ? `: ${responseText.replace(/\s+/g, ' ').slice(0, 250)}` : ''}`
-      )
-    }
-
-    return JSON.parse(responseText) as T
-  } catch {
-    const preview = responseText.replace(/\s+/g, ' ').slice(0, 250)
-    throw new Error(
-      `Expected JSON but received an invalid response${IS_DEV && preview ? `: ${preview}` : ''}`
-    )
-  }
+  return ''
 }
 
-async function fetchDealers(search: string, signal?: AbortSignal): Promise<Dealer[]> {
-  const params = new URLSearchParams({ page: '1', search })
-  try {
-    const json = await fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?${params.toString()}`, signal)
-    return Array.isArray(json.data) ? json.data : []
-  } catch (error) {
-    throw new Error(`Dealer search failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-  }
-}
-
-async function fetchDealerOrders(dealerId: string, signal?: AbortSignal): Promise<OrderHeader[]> {
-  const params = new URLSearchParams({ page: '1', limit: '1000', search: '', id: dealerId })
-  const json = await fetchJson<{ data?: OrderHeader[]; last_page?: number; count?: number }>(
-    `${BACKEND_URL}/orderhispegination?${params.toString()}`,
-    signal,
-  )
-
-  const rows = Array.isArray(json.data) ? json.data : []
-  const total = Number(json.count ?? rows.length)
-  const lastPage = Number(json.last_page ?? (total > rows.length ? Math.ceil(total / Math.max(rows.length, 1)) : 1))
-
-  if (lastPage <= 1 || rows.length === 0) return rows
-
-  const rest = await Promise.all(
-    Array.from({ length: lastPage - 1 }, async (_unused, idx) => {
-      const page = idx + 2
-      const pageParams = new URLSearchParams({ page: String(page), limit: '1000', search: '', id: dealerId })
-      const pageJson = await fetchJson<{ data?: OrderHeader[] }>(`${BACKEND_URL}/orderhispegination?${pageParams.toString()}`, signal)
-      return Array.isArray(pageJson.data) ? pageJson.data : []
-    })
-  )
-
-  return [...rows, ...rest.flat()]
-}
-
-async function fetchOrderItems(orderId: string, signal?: AbortSignal): Promise<OrderItem[]> {
-  try {
-    const json = await fetchJson<OrderItemsResponse>(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`, signal)
-    const raw = json.data
-
-    let items: unknown[] = []
-    if (Array.isArray(raw)) {
-      const first = raw[0]
-      if (raw.length > 0 && isRecord(first) && (first.productId || first.productName || first.quantityPacks !== undefined)) {
-        items = raw
-      } else if (raw.length > 0 && isRecord(first) && Array.isArray(first.items)) {
-        items = first.items
-      } else {
-        items = raw
-      }
-    } else if (isRecord(raw) && Array.isArray(raw.items)) {
-      items = raw.items
-    }
-
-    return items
-      .filter(isRecord)
-      .map((it, idx) => {
-      const packSizeValue = Number(it.packSize ?? it.pack_size)
-      const totalPiecesValue = Number(it.totalPieces ?? it.total_pieces)
-      const normalized: OrderItem = {
-        orderdata_id: String(it.orderdata_id ?? it.id ?? it.productId ?? `item-${orderId}-${idx}`),
-        orderdata_orderid: String(it.orderdata_orderid ?? it.orderId ?? orderId),
-        orderdata_cat_no: String(it.orderdata_cat_no ?? it.catNo ?? it.productId ?? it.product_cat ?? ''),
-        orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
-        orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
-        orderdata_discount: String(it.discountAmount ?? it.discount_amount ?? it.orderdata_discount ?? 0),
-        orderdata_afterDisPrice: String(it.finalPrice ?? it.final_price ?? it.orderdata_afterDisPrice ?? 0),
-        orderdata_totalprice: String(it.listPriceTotal ?? it.list_price_total ?? it.orderdata_totalprice ?? 0),
-        orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? ''),
-        product_name: String(it.productName ?? it.product_name ?? ''),
-        product_discription: String(it.productDescription ?? it.product_discription ?? ''),
-        packSize: Number.isFinite(packSizeValue) ? packSizeValue : undefined,
-        totalPieces: Number.isFinite(totalPiecesValue) ? totalPiecesValue : undefined,
-        category: it.category ?? it.product_category ?? it.productCategory ?? undefined,
-        product_category: it.product_category ?? undefined,
-        productCategory: it.productCategory ?? undefined,
-        unitPrice: it.unitPrice ?? it.unit_price ?? undefined,
-        discountAmount: it.discountAmount ?? it.discount_amount ?? undefined,
-        finalPrice: it.finalPrice ?? it.final_price ?? undefined,
-        listPriceTotal: it.listPriceTotal ?? it.list_price_total ?? undefined,
-        quantityPacks: it.quantityPacks ?? undefined,
-        quantity: it.quantity ?? undefined,
-        productId: it.productId ?? undefined,
-        catNo: it.catNo ?? undefined,
-        variantCode: it.variantCode ?? undefined,
-        product_cat: it.product_cat ?? undefined,
-      }
-
-      return normalized
-    })
-  } catch (error) {
-    throw new Error(`Order items failed for order ${orderId}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-  }
-}
-
-function resolveClientRole(): AllowedRole | 'dealer' | null {
+function resolveDashboardSession(): DashboardSession | null {
   if (typeof window === 'undefined') return null
 
   try {
     const staffRaw = localStorage.getItem('staffData')
-    if (hasStoredRole(staffRaw, 'staff_id')) {
-      return hasStoredRole(staffRaw, 'staff_roletype', '0') ? 'admin' : 'staff'
+    if (staffRaw) {
+      const parsed = JSON.parse(staffRaw)
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === '0' ? 'admin' : 'staff',
+          id: String(parsed.staff_id),
+          roletype: String(parsed.staff_roletype ?? ''),
+          name: parsed.staff_name || '',
+        }
+      }
     }
 
-    const userData = localStorage.getItem('UserData')
-    if (hasStoredRole(userData, 'Dealer_Id')) return 'dealer'
-    if (hasStoredRole(userData, 'staff_id')) {
-      return hasStoredRole(userData, 'staff_roletype', '0') ? 'admin' : 'staff'
+    const userRaw = localStorage.getItem('UserData')
+    if (userRaw) {
+      const parsed = JSON.parse(userRaw)
+      if (parsed?.Dealer_Id) {
+        return {
+          role: 'dealer',
+          id: String(parsed.Dealer_Id),
+          name: parsed.Dealer_Name || '',
+        }
+      }
+
+      if (parsed?.staff_id) {
+        return {
+          role: parsed.staff_roletype === '0' ? 'admin' : 'staff',
+          id: String(parsed.staff_id),
+          roletype: String(parsed.staff_roletype ?? ''),
+          name: parsed.staff_name || '',
+        }
+      }
     }
 
     const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
-    if (adminRaw && adminRaw.trim().length > 2) return 'admin'
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw)
+      if (parsed && Object.keys(parsed).length > 0) {
+        return {
+          role: 'admin',
+          id: firstNonEmpty(parsed.id, parsed.admin_id, parsed.Admin_Id, 'admin'),
+          roletype: '0',
+          name: parsed.name || parsed.email || 'Admin',
+        }
+      }
+    }
   } catch {
     return null
   }
@@ -286,187 +188,278 @@ function resolveClientRole(): AllowedRole | 'dealer' | null {
   return null
 }
 
+function buildActorHeaders(session: DashboardSession | null): HeadersInit {
+  return {
+    ...(session?.role ? { 'x-omsons-actor-role': session.role } : {}),
+    ...(session?.id ? { 'x-omsons-actor-id': session.id } : {}),
+    ...(session?.roletype ? { 'x-omsons-actor-roletype': session.roletype } : {}),
+  }
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { cache: 'no-store', ...init })
+  const text = await response.text()
+
+  if (!response.ok) {
+    throw new Error(text || `Request failed with HTTP ${response.status}`)
+  }
+
+  if (/^\s*</.test(text)) {
+    throw new Error('Expected JSON but received HTML')
+  }
+
+  return JSON.parse(text) as T
+}
+
+function formatRupee(value: number) {
+  return `Rs. ${value.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatDate(value: string) {
+  if (!value) return 'Not available'
+  const parsed = moment(value)
+  return parsed.isValid() ? parsed.format('DD MMM YYYY') : 'Not available'
+}
+
+function getRangeValues(preset: RangePreset) {
+  const today = moment()
+  if (preset === 'current_fy') {
+    const fyStart = today.month() >= 3
+      ? today.clone().month(3).startOf('month')
+      : today.clone().subtract(1, 'year').month(3).startOf('month')
+    return {
+      from: fyStart.format('YYYY-MM-DD'),
+      to: today.clone().endOf('day').format('YYYY-MM-DD'),
+    }
+  }
+
+  if (preset === 'this_year') {
+    return {
+      from: today.clone().startOf('year').format('YYYY-MM-DD'),
+      to: today.clone().endOf('day').format('YYYY-MM-DD'),
+    }
+  }
+
+  if (preset === 'last_12_months') {
+    return {
+      from: today.clone().subtract(12, 'months').startOf('day').format('YYYY-MM-DD'),
+      to: today.clone().endOf('day').format('YYYY-MM-DD'),
+    }
+  }
+
+  if (preset === 'all_time') {
+    return { from: '', to: '' }
+  }
+
+  return null
+}
+
+function escapeCsvCell(value: string | number) {
+  const text = String(value ?? '')
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
+}
+
+function categoryMatchesSearch(category: CategoryRow, search: string) {
+  if (!search) return true
+  const needle = search.toLowerCase()
+
+  if (category.category.toLowerCase().includes(needle)) return true
+
+  return category.products.some((product) =>
+    [
+      product.productName,
+      product.catalogueNumber,
+      product.specification,
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(needle)
+  )
+}
+
+function sortCategories(rows: CategoryRow[], sortBy: SortKey) {
+  const sorted = [...rows]
+  sorted.sort((left, right) => {
+    if (sortBy === 'alphabetical') {
+      return left.category.localeCompare(right.category, undefined, { sensitivity: 'base' })
+    }
+
+    if (sortBy === 'latest_purchase') {
+      const leftDate = moment(left.latestPurchaseDate).valueOf() || 0
+      const rightDate = moment(right.latestPurchaseDate).valueOf() || 0
+      if (rightDate !== leftDate) return rightDate - leftDate
+      return right.purchasedQuantity - left.purchasedQuantity
+    }
+
+    if (right.purchasedQuantity !== left.purchasedQuantity) {
+      return right.purchasedQuantity - left.purchasedQuantity
+    }
+    return left.category.localeCompare(right.category, undefined, { sensitivity: 'base' })
+  })
+  return sorted
+}
+
+function downloadReportCsv(report: ReportResponse) {
+  const rows: Array<Array<string | number>> = [
+    [
+      'Dealer ID',
+      'Dealer Name',
+      'Dealer Code',
+      'City',
+      'Date From',
+      'Date To',
+      'Status Filter',
+      'Category',
+      'Product',
+      'Catalogue Number',
+      'Specification',
+      'Purchased Quantity',
+      'Product Order Count',
+      'Category Order Count',
+      'Total Value',
+      'Latest Purchase',
+    ],
+  ]
+
+  for (const category of report.categories) {
+    for (const product of category.products) {
+      rows.push([
+        report.dealer?.Dealer_Id || '',
+        report.dealer?.Dealer_Name || '',
+        report.dealer?.Dealer_Dealercode || '',
+        report.dealer?.Dealer_City || '',
+        report.summary.dateRange.from || 'All Time',
+        report.summary.dateRange.to || 'All Time',
+        report.summary.statusFilter,
+        category.category,
+        product.productName,
+        product.catalogueNumber,
+        product.specification,
+        product.purchasedQuantity,
+        product.orderCount,
+        category.orderCount,
+        product.totalValue,
+        product.latestPurchaseDate,
+      ])
+    }
+  }
+
+  const csv = rows.map((row) => row.map(escapeCsvCell).join(',')).join('\n')
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `dealer-category-report-${report.dealer?.Dealer_Id || 'dealer'}.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff'] }: DealerCategoryReportProps) {
   const router = useRouter()
   const hasHydrated = useHasHydrated()
-  const [dealerSearch, setDealerSearch] = useState('')
-  const [dealerResults, setDealerResults] = useState<Dealer[]>([])
-  const [selectedDealer, setSelectedDealer] = useState<Dealer | null>(null)
-  const [snapshot, setSnapshot] = useState<DealerReportSnapshot>({ dealer: null, orders: [], items: [] })
-  const [catalogueProducts, setCatalogueProducts] = useState<CatalogueProduct[]>([])
-  const [loadingDealers, setLoadingDealers] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const session = hasHydrated ? resolveDashboardSession() : null
+
   const [selectorOpen, setSelectorOpen] = useState(false)
-  const [fromDate, setFromDate] = useState(DEFAULT_FROM)
-  const [toDate, setToDate] = useState(DEFAULT_TO)
-  const currentRole = hasHydrated
-    ? resolveClientRole()
-    : null
-  const accessChecked = hasHydrated
-  const isAllowed =
-    (currentRole === 'admin' || currentRole === 'staff') &&
-    allowedRoles.includes(currentRole)
+  const [dealerSearch, setDealerSearch] = useState('')
+  const [dealerPage, setDealerPage] = useState(1)
+  const [selectedDealer, setSelectedDealer] = useState<Dealer | null>(null)
+  const [rangePreset, setRangePreset] = useState<RangePreset>('all_time')
+  const [customFromDate, setCustomFromDate] = useState('')
+  const [customToDate, setCustomToDate] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [tableSearch, setTableSearch] = useState('')
+  const [sortBy, setSortBy] = useState<SortKey>('quantity_desc')
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({})
+  const [expandedProducts, setExpandedProducts] = useState<Record<string, boolean>>({})
+
+  const deferredDealerSearch = useDeferredValue(dealerSearch)
+  const deferredTableSearch = useDeferredValue(tableSearch)
+  const isAllowedRole = session && (session.role === 'admin' || session.role === 'staff') && allowedRoles.includes(session.role)
+  const presetRange = useMemo(() => getRangeValues(rangePreset), [rangePreset])
+  const fromDate = rangePreset === 'custom' ? customFromDate : (presetRange?.from ?? '')
+  const toDate = rangePreset === 'custom' ? customToDate : (presetRange?.to ?? '')
 
   useEffect(() => {
-    if (!accessChecked) return
-
-    if (!currentRole) {
+    if (!hasHydrated) return
+    if (!session) {
       router.replace('/auth/login')
       return
     }
 
-    if (currentRole === 'dealer') {
+    if (session.role === 'dealer') {
       router.replace('/dashboard/dealer')
       return
     }
 
-    if (!allowedRoles.includes(currentRole)) {
+    if (!allowedRoles.includes(session.role)) {
       router.replace('/auth/login')
-      return
     }
-  }, [accessChecked, allowedRoles, currentRole, router])
+  }, [allowedRoles, hasHydrated, router, session])
 
-  useEffect(() => {
-    if (!accessChecked || !isAllowed) return
-    let active = true
-    fetchJson<CatalogueProduct[]>('/data/nested_omsons_products.json')
-      .then((json) => {
-        if (active) setCatalogueProducts(Array.isArray(json) ? json : [])
+  const dealersQuery = useQuery<DealerListResponse>({
+    queryKey: [
+      'dealer-category-report',
+      'dealers',
+      session?.role,
+      session?.id,
+      deferredDealerSearch,
+      dealerPage,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        page: String(dealerPage),
+        search: deferredDealerSearch,
       })
-      .catch((error) => {
-        if (active) {
-          setCatalogueProducts([])
-          setError(error instanceof Error ? `Catalogue load failed: ${error.message}` : 'Catalogue load failed')
-        }
+      return fetchJson<DealerListResponse>(`/api/reports/dealer-category/dealers?${params.toString()}`, {
+        headers: buildActorHeaders(session),
+      })
+    },
+    enabled: !!isAllowedRole && selectorOpen,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  })
+
+  const reportQuery = useQuery<ReportResponse>({
+    queryKey: [
+      'dealer-category-report',
+      'report',
+      session?.role,
+      session?.id,
+      selectedDealer?.Dealer_Id,
+      fromDate,
+      toDate,
+      statusFilter,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        dealerId: selectedDealer?.Dealer_Id || '',
+        from: fromDate,
+        to: toDate,
+        status: statusFilter,
       })
 
-    return () => { active = false }
-  }, [accessChecked, isAllowed])
+      return fetchJson<ReportResponse>(`/api/reports/dealer-category?${params.toString()}`, {
+        headers: buildActorHeaders(session),
+      })
+    },
+    enabled: !!isAllowedRole && !!selectedDealer?.Dealer_Id,
+    retry: 1,
+    staleTime: 60_000,
+  })
 
-  useEffect(() => {
-    if (!accessChecked || !isAllowed) return
-    const controller = new AbortController()
-    const term = dealerSearch.trim()
+  const visibleCategories = useMemo(() => {
+    const categories = reportQuery.data?.categories ?? []
+    const filtered = categories.filter((category) => categoryMatchesSearch(category, deferredTableSearch))
+    return sortCategories(filtered, sortBy)
+  }, [deferredTableSearch, reportQuery.data?.categories, sortBy])
 
-    if (term.length === 0) {
-      return () => controller.abort()
-    }
-
-    const timer = window.setTimeout(() => {
-      setLoadingDealers(true)
-      fetchDealers(term, controller.signal)
-        .then(rows => {
-          if (!controller.signal.aborted) setDealerResults(rows)
-        })
-        .catch((error) => {
-          if (
-            controller.signal.aborted ||
-            (error instanceof DOMException && error.name === 'AbortError')
-          ) {
-            return
-          }
-
-          setDealerResults([])
-          setError(
-            error instanceof Error
-              ? error.message
-              : 'Failed to load report'
-          )
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoadingDealers(false)
-        })
-    }, 300)
-
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-  }, [dealerSearch, accessChecked, isAllowed])
-
-  useEffect(() => {
-    if (!accessChecked || !isAllowed) return
-    if (!selectedDealer) return
-
-    const controller = new AbortController()
-
-    ;(async () => {
-      try {
-        const orders = await fetchDealerOrders(selectedDealer.Dealer_Id, controller.signal)
-        const dealerOrders = orders.filter(order => !isCancelledOrRejected(order))
-
-        const orderItems = await Promise.all(
-          dealerOrders.map(async order => {
-            const items = await fetchOrderItems(order.order_id, controller.signal).catch((error) => {
-              if (
-                controller.signal.aborted ||
-                (error instanceof DOMException && error.name === 'AbortError')
-              ) {
-                throw error
-              }
-              console.error('dealer category order items failed', error)
-              return [] as OrderItem[]
-            })
-            return items.map(item => ({
-              ...item,
-              Dealer_Name: order.Dealer_Name ?? selectedDealer.Dealer_Name,
-              order_dealer: order.order_dealer ?? selectedDealer.Dealer_Id,
-              order_id: order.order_id,
-              order_date: order.order_date ?? order.orderDate,
-              accept_order: order.accept_order,
-              del_status: order.del_status,
-              order_status: order.order_status,
-              mtstatus: order.mtstatus,
-              reason: order.reason,
-            }))
-          })
-        )
-
-        if (controller.signal.aborted) return
-
-        setSnapshot({ dealer: selectedDealer, orders: dealerOrders, items: orderItems.flat() })
-      } catch (err) {
-        if (
-          controller.signal.aborted ||
-          (err instanceof DOMException && err.name === 'AbortError')
-        ) {
-          return
-        }
-
-        setSnapshot({ dealer: selectedDealer, orders: [], items: [] })
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to load report'
-        )
-      } finally {
-        // Loading state is derived from the selected dealer and snapshot.
-      }
-    })()
-
-    return () => controller.abort()
-  }, [selectedDealer, accessChecked, isAllowed])
-
-  const filteredItems = useMemo(() => {
-    if (!accessChecked || !isAllowed) return []
-    return snapshot.items.filter(item => {
-      const orderDate = dateOnly(item.order_date ?? item.orderdata_datetime)
-      if (!withinRange(orderDate, fromDate, toDate)) return false
-      return true
-    })
-  }, [snapshot.items, fromDate, toDate, accessChecked, isAllowed])
-
-  const report = useMemo(
-    () => dealerCategoryReport.aggregateDealerCategorySales(filteredItems, catalogueProducts),
-    [filteredItems, catalogueProducts],
-  )
-  const reportRows = report.rows
-  const grandTotal = report.grandTotal
-  const loadingReport = !!selectedDealer && snapshot.dealer?.Dealer_Id !== selectedDealer.Dealer_Id && !error
-  const dealerSearchLoading = dealerSearch.trim().length > 0 && loadingDealers
-  const hasVisibleError = Boolean(error)
-
-  if (!accessChecked || !isAllowed) {
+  if (!hasHydrated || !isAllowedRole) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900">
         <div className="mx-auto flex min-h-screen max-w-7xl items-center justify-center px-4 py-8">
@@ -482,58 +475,75 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
     )
   }
 
-  const selectDealer = (dealer: Dealer) => {
-    setSelectedDealer(dealer)
-    setSelectorOpen(false)
-    setDealerSearch(dealer.Dealer_Name)
-    setDealerResults([])
-    setError(null)
+  const selectedSummaryDealer = reportQuery.data?.dealer ?? selectedDealer
+  const selectedReport = reportQuery.data
+  const dealerResults = dealersQuery.data?.data ?? []
+  const dealerLastPage = dealersQuery.data?.last_page ?? 1
+  const dealerTotal = dealersQuery.data?.total ?? 0
+  const showDealerLoading = dealersQuery.isFetching && selectorOpen
+  const showReportLoading = reportQuery.isLoading || reportQuery.isFetching
+
+  const toggleCategory = (category: string) => {
+    setExpandedCategories((prev) => ({ ...prev, [category]: !prev[category] }))
+  }
+
+  const toggleProduct = (productKey: string) => {
+    setExpandedProducts((prev) => ({ ...prev, [productKey]: !prev[productKey] }))
   }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mb-6 rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 px-6 py-6 text-white shadow-2xl shadow-slate-900/10 sm:px-8">
+        <div className="mb-6 rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 px-6 py-6 text-white shadow-2xl shadow-slate-900/10 sm:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="mb-2 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/70">
-                <Store size={12} /> Dealer-wise category sales
+                <Store size={12} /> Dealer purchase report
               </p>
               <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Dealer Category Report</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
-                Select one distributor, then review category totals from historical order item values. Amounts are based on stored order data, not current pricing rules.
+                Review one dealer&apos;s historical purchases by category, product, and contributing orders.
               </p>
             </div>
-            <div className="grid gap-2 text-sm text-white/75 sm:grid-cols-3">
+            <div className="grid gap-2 text-sm text-white/75 sm:grid-cols-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Dealer</div>
-                <div className="mt-1 font-semibold text-white">{selectedDealer?.Dealer_Name ?? 'Not selected'}</div>
+                <div className="mt-1 font-semibold text-white">{selectedSummaryDealer?.Dealer_Name ?? 'Not selected'}</div>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Orders</div>
-                <div className="mt-1 font-semibold text-white">{hasVisibleError ? '—' : snapshot.orders.length.toLocaleString('en-IN')}</div>
+                <div className="mt-1 font-semibold text-white">{selectedReport?.summary.totalOrders?.toLocaleString('en-IN') ?? '0'}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Units</div>
+                <div className="mt-1 font-semibold text-white">{selectedReport?.summary.totalPurchasedQuantity?.toLocaleString('en-IN') ?? '0'}</div>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/45">Categories</div>
-                <div className="mt-1 font-semibold text-white">{hasVisibleError ? '—' : reportRows.length.toLocaleString('en-IN')}</div>
+                <div className="mt-1 font-semibold text-white">{selectedReport?.summary.totalCategories?.toLocaleString('en-IN') ?? '0'}</div>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[1.3fr_0.7fr]">
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-slate-900">Distributor selector</div>
-                <div className="text-xs text-slate-500">Search by distributor name, city, phone, or dealer code.</div>
+                <div className="text-sm font-semibold text-slate-900">Dealer selector</div>
+                <div className="text-xs text-slate-500">
+                  {session.role === 'staff'
+                    ? 'Only your assigned dealers appear here.'
+                    : 'Search by dealer name, dealer code, city, phone, or dealer ID.'}
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => setSelectorOpen(v => !v)}
+                onClick={() => setSelectorOpen((value) => !value)}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
               >
-                {selectorOpen ? 'Close' : 'Select'} <ChevronDown size={14} className={selectorOpen ? 'rotate-180 transition-transform' : 'transition-transform'} />
+                {selectorOpen ? 'Close' : 'Select'}
+                <ChevronDown size={14} className={selectorOpen ? 'rotate-180 transition-transform' : 'transition-transform'} />
               </button>
             </div>
 
@@ -541,57 +551,104 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <input
                 value={dealerSearch}
-                onChange={e => {
-                  setDealerSearch(e.target.value)
+                onChange={(event) => {
+                  setDealerSearch(event.target.value)
+                  setDealerPage(1)
                   setSelectorOpen(true)
                 }}
                 onFocus={() => setSelectorOpen(true)}
-                placeholder="Search distributors..."
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                placeholder={session.role === 'staff' ? 'Search assigned dealers...' : 'Search dealers...'}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
               />
 
-              {selectorOpen && dealerSearch.trim() && (
-                <div className="absolute z-20 mt-2 max-h-80 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-900/10">
-                  {dealerSearchLoading ? (
-                    <div className="px-3 py-4 text-sm text-slate-500">Searching distributors...</div>
-                  ) : dealerResults.length > 0 ? dealerResults.map(dealer => (
-                    <button
-                      key={dealer.Dealer_Id}
-                      type="button"
-                      onClick={() => selectDealer(dealer)}
-                      className="flex w-full items-start justify-between gap-4 rounded-xl px-3 py-3 text-left transition hover:bg-slate-50"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-slate-900">{dealer.Dealer_Name}</div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {dealer.Dealer_City || '—'} · {dealer.Dealer_Number || '—'}
+              {selectorOpen && (
+                <div className="absolute z-20 mt-2 w-full rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-900/10">
+                  {showDealerLoading ? (
+                    <div className="px-3 py-4 text-sm text-slate-500">Loading dealers...</div>
+                  ) : dealersQuery.isError ? (
+                    <div className="px-3 py-4 text-sm text-red-600">
+                      {dealersQuery.error instanceof Error ? dealersQuery.error.message : 'Failed to load dealers.'}
+                    </div>
+                  ) : dealerResults.length > 0 ? (
+                    <>
+                      <div className="max-h-80 overflow-auto">
+                        {dealerResults.map((dealer) => (
+                          <button
+                            key={dealer.Dealer_Id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDealer(dealer)
+                              setExpandedCategories({})
+                              setExpandedProducts({})
+                              setSelectorOpen(false)
+                            }}
+                            className="flex w-full items-start justify-between gap-4 rounded-xl px-3 py-3 text-left transition hover:bg-slate-50"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-slate-900">{dealer.Dealer_Name}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {dealer.Dealer_City || 'No city'} · {dealer.Dealer_Number || 'No phone'}
+                              </div>
+                            </div>
+                            <div className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-semibold text-cyan-700">
+                              {dealer.Dealer_Dealercode || dealer.Dealer_Id}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 flex items-center justify-between border-t border-slate-100 px-2 pt-3 text-xs text-slate-500">
+                        <span>{dealerTotal.toLocaleString('en-IN')} dealers</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={dealerPage <= 1}
+                            onClick={() => setDealerPage((page) => Math.max(1, page - 1))}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Prev
+                          </button>
+                          <span>Page {dealerPage} of {dealerLastPage}</span>
+                          <button
+                            type="button"
+                            disabled={dealerPage >= dealerLastPage}
+                            onClick={() => setDealerPage((page) => Math.min(dealerLastPage, page + 1))}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Next
+                          </button>
                         </div>
                       </div>
-                      <div className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">{dealer.Dealer_Dealercode || dealer.Dealer_Id}</div>
-                    </button>
-                  )) : (
-                    <div className="px-3 py-4 text-sm text-slate-500">No distributors matched your search.</div>
+                    </>
+                  ) : (
+                    <div className="px-3 py-4 text-sm text-slate-500">
+                      {session.role === 'staff'
+                        ? 'No assigned dealers matched your search.'
+                        : 'No dealers matched your search.'}
+                    </div>
                   )}
                 </div>
               )}
             </div>
 
-            {selectedDealer && (
+            {selectedSummaryDealer && (
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Selected distributor</div>
-                    <div className="mt-1 text-lg font-semibold text-slate-900">{selectedDealer.Dealer_Name}</div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Selected dealer</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-900">{selectedSummaryDealer.Dealer_Name}</div>
                     <div className="mt-1 text-sm text-slate-500">
-                      {selectedDealer.Dealer_City || '—'} · {selectedDealer.Dealer_Number || '—'} · {selectedDealer.Dealer_Dealercode || selectedDealer.Dealer_Id}
+                      {selectedSummaryDealer.Dealer_Dealercode || selectedSummaryDealer.Dealer_Id}
+                      {' · '}
+                      {selectedSummaryDealer.Dealer_City || 'No city'}
+                      {selectedSummaryDealer.staffname ? ` · ${selectedSummaryDealer.staffname}` : ''}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => {
                       setSelectedDealer(null)
-                      setSnapshot({ dealer: null, orders: [], items: [] })
-                      setError(null)
+                      setExpandedCategories({})
+                      setExpandedProducts({})
                     }}
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
                   >
@@ -603,93 +660,173 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700">
-                <ShieldAlert size={18} />
-              </div>
-              <div>
-                <div className="text-sm font-semibold text-slate-900">Filters</div>
-                <div className="text-xs text-slate-500">Defaults to the current month.</div>
-              </div>
+            <div className="mb-4">
+              <div className="text-sm font-semibold text-slate-900">Filters</div>
+              <div className="text-xs text-slate-500">Date and order-state filters recompute the full report.</div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Date range</span>
+                <select
+                  value={rangePreset}
+                  onChange={(event) => setRangePreset(event.target.value as RangePreset)}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                >
+                  <option value="all_time">All Time</option>
+                  <option value="current_fy">Current Financial Year</option>
+                  <option value="this_year">This Year</option>
+                  <option value="last_12_months">Last 12 Months</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+              </label>
+
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Status filter</span>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                >
+                  <option value="all">All eligible orders</option>
+                  <option value="accepted">Accepted</option>
+                  <option value="completed">Completed / Successful</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <label className="space-y-2 text-sm">
                 <span className="font-medium text-slate-700">From date</span>
                 <input
                   type="date"
                   value={fromDate}
-                  onChange={e => setFromDate(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                  onChange={(event) => {
+                    setRangePreset('custom')
+                    setCustomFromDate(event.target.value)
+                  }}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
                 />
               </label>
+
               <label className="space-y-2 text-sm">
                 <span className="font-medium text-slate-700">To date</span>
                 <input
                   type="date"
                   value={toDate}
-                  onChange={e => setToDate(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                  onChange={(event) => {
+                    setRangePreset('custom')
+                    setCustomToDate(event.target.value)
+                  }}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
                 />
+              </label>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Category / product search</span>
+                <input
+                  value={tableSearch}
+                  onChange={(event) => setTableSearch(event.target.value)}
+                  placeholder="Search categories or products..."
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                />
+              </label>
+
+              <label className="space-y-2 text-sm">
+                <span className="font-medium text-slate-700">Sort table</span>
+                <select
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as SortKey)}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-cyan-400 focus:bg-white focus:ring-4 focus:ring-cyan-100"
+                >
+                  <option value="quantity_desc">Highest quantity first</option>
+                  <option value="alphabetical">Alphabetical</option>
+                  <option value="latest_purchase">Latest purchase</option>
+                </select>
               </label>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Quantity</div>
-                <div className="mt-1 text-lg font-semibold">{hasVisibleError ? '—' : grandTotal.quantity.toLocaleString('en-IN')}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Units</div>
+                <div className="mt-1 text-lg font-semibold">{selectedReport?.summary.totalPurchasedQuantity?.toLocaleString('en-IN') ?? '0'} pieces</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Pieces</div>
-                <div className="mt-1 text-lg font-semibold">{hasVisibleError ? '—' : grandTotal.pieces.toLocaleString('en-IN')}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Variants</div>
+                <div className="mt-1 text-lg font-semibold">{selectedReport?.summary.totalVariants?.toLocaleString('en-IN') ?? '0'}</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Net Sales</div>
-                <div className="mt-1 text-lg font-semibold text-emerald-700">{hasVisibleError ? '—' : formatRupee(grandTotal.netSales)}</div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sales Value</div>
+                <div className="mt-1 text-lg font-semibold text-emerald-700">{formatRupee(selectedReport?.summary.totalSalesValue ?? 0)}</div>
               </div>
             </div>
           </div>
         </div>
 
-        {error && (
+        {reportQuery.isError && (
           <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+            {reportQuery.error instanceof Error ? reportQuery.error.message : 'Failed to load the dealer report.'}
           </div>
         )}
 
-        {!selectedDealer && !loadingReport && (
+        {selectedReport?.warnings?.map((warning) => (
+          <div key={warning.code} className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {warning.message}
+          </div>
+        ))}
+
+        {!selectedDealer && (
           <div className="mt-4 rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center shadow-sm">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
               <Search size={22} />
             </div>
-            <div className="text-lg font-semibold text-slate-900">Choose a distributor to build the report</div>
-            <div className="mt-2 text-sm text-slate-500">The table appears after orders and order items are loaded.</div>
+            <div className="text-lg font-semibold text-slate-900">Select a dealer to view their purchase report</div>
+            <div className="mt-2 text-sm text-slate-500">The report loads only after you pick a dealer.</div>
           </div>
         )}
 
-        {selectedDealer && loadingReport && (
+        {selectedDealer && showReportLoading && (
           <div className="mt-4 rounded-3xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
-            <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
+            <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-cyan-600" />
             <div className="text-lg font-semibold text-slate-900">Loading dealer report</div>
-            <div className="mt-2 text-sm text-slate-500">Fetching order history and item details...</div>
+            <div className="mt-2 text-sm text-slate-500">Fetching complete order history and product lines...</div>
           </div>
         )}
 
-        {selectedDealer && !loadingReport && !error && reportRows.length === 0 && (
+        {selectedDealer && !showReportLoading && selectedReport && selectedReport.summary.totalOrders === 0 && (
           <div className="mt-4 rounded-3xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
             <AlertCircle size={28} className="mx-auto text-slate-300" />
-            <div className="mt-3 text-lg font-semibold text-slate-900">No matching order items found</div>
-            <div className="mt-2 text-sm text-slate-500">Try widening the date range or selecting another distributor.</div>
+            <div className="mt-3 text-lg font-semibold text-slate-900">No eligible orders were found for this dealer</div>
+            <div className="mt-2 text-sm text-slate-500">Try a wider date range or a different status filter.</div>
           </div>
         )}
 
-        {selectedDealer && reportRows.length > 0 && !loadingReport && !error && (
+        {selectedDealer && !showReportLoading && selectedReport && selectedReport.summary.totalOrders > 0 && visibleCategories.length === 0 && (
+          <div className="mt-4 rounded-3xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
+            <AlertCircle size={28} className="mx-auto text-slate-300" />
+            <div className="mt-3 text-lg font-semibold text-slate-900">No report rows matched the current filters</div>
+            <div className="mt-2 text-sm text-slate-500">This dealer has matching orders, but none of the category rows matched your current search or item data.</div>
+          </div>
+        )}
+
+        {selectedDealer && !showReportLoading && selectedReport && visibleCategories.length > 0 && (
           <div className="mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4 sm:px-6">
-              <div className="text-base font-semibold text-slate-900">Category Breakdown</div>
-              <div className="mt-1 text-sm text-slate-500">
-                {fromDate} to {toDate} · Historical item values only
+            <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div>
+                <div className="text-base font-semibold text-slate-900">Category breakdown</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {selectedReport.summary.dateRange.from || 'All Time'} to {selectedReport.summary.dateRange.to || 'Today'} · {selectedReport.summary.totalOrders.toLocaleString('en-IN')} matching orders
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => downloadReportCsv(selectedReport)}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                <Download size={16} /> Export CSV
+              </button>
             </div>
 
             <div className="overflow-x-auto">
@@ -697,35 +834,143 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
                     <th className="px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Category</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Quantity</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Pieces</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Gross Amount</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Discount</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Net Sales</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Purchased Quantity</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Variants</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Share</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Latest Purchase</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Sales Value</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {reportRows.map(row => (
-                    <tr key={row.category} className="hover:bg-slate-50/60">
-                      <td className="px-5 py-4 font-medium text-slate-900">{row.category}</td>
-                      <td className="px-5 py-4 text-right font-mono text-slate-700">{row.quantity.toLocaleString('en-IN')}</td>
-                      <td className="px-5 py-4 text-right font-mono text-slate-700">{row.pieces.toLocaleString('en-IN')}</td>
-                      <td className="px-5 py-4 text-right font-mono text-slate-700">{formatRupee(row.gross)}</td>
-                      <td className="px-5 py-4 text-right font-mono text-slate-700">{formatRupee(row.discount)}</td>
-                      <td className="px-5 py-4 text-right font-mono font-semibold text-emerald-700">{formatRupee(row.netSales)}</td>
-                    </tr>
-                  ))}
+                  {visibleCategories.map((category) => {
+                    const isExpanded = !!expandedCategories[category.category]
+                    return (
+                      <Fragment key={category.category}>
+                        <tr key={category.category} className="hover:bg-slate-50/60">
+                          <td className="px-5 py-4 font-medium text-slate-900">{category.category}</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.orderCount.toLocaleString('en-IN')}</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.variantCount.toLocaleString('en-IN')}</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.shareOfPurchases.toFixed(2)}%</td>
+                          <td className="px-5 py-4 text-right text-slate-700">{formatDate(category.latestPurchaseDate)}</td>
+                          <td className="px-5 py-4 text-right font-mono text-emerald-700">{formatRupee(category.totalValue)}</td>
+                          <td className="px-5 py-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => toggleCategory(category.category)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              {isExpanded ? 'Hide' : 'View'}
+                              <ChevronRight size={13} className={isExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} />
+                            </button>
+                          </td>
+                        </tr>
+
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={8} className="bg-slate-50/70 px-5 py-5">
+                              <div className="rounded-2xl border border-slate-200 bg-white">
+                                <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">Products in {category.category}</div>
+                                <div className="overflow-x-auto">
+                                  <table className="min-w-full text-sm">
+                                    <thead className="bg-slate-50 text-slate-500">
+                                      <tr>
+                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Product</th>
+                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Catalogue</th>
+                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Specification</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Quantity</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Value</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Latest</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {category.products.map((product) => {
+                                        const isProductExpanded = !!expandedProducts[product.productKey]
+                                        return (
+                                          <Fragment key={product.productKey}>
+                                            <tr key={product.productKey}>
+                                              <td className="px-4 py-3 font-medium text-slate-900">{product.productName}</td>
+                                              <td className="px-4 py-3 font-mono text-slate-600">{product.catalogueNumber || 'Not available'}</td>
+                                              <td className="px-4 py-3 text-slate-600">{product.specification || 'Not available'}</td>
+                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{product.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
+                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{product.orderCount.toLocaleString('en-IN')}</td>
+                                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{formatRupee(product.totalValue)}</td>
+                                              <td className="px-4 py-3 text-right text-slate-700">{formatDate(product.latestPurchaseDate)}</td>
+                                              <td className="px-4 py-3 text-right">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => toggleProduct(product.productKey)}
+                                                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                                >
+                                                  {isProductExpanded ? 'Hide' : 'View'}
+                                                  <ChevronRight size={13} className={isProductExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} />
+                                                </button>
+                                              </td>
+                                            </tr>
+
+                                            {isProductExpanded && (
+                                              <tr>
+                                                <td colSpan={8} className="bg-slate-50 px-4 py-4">
+                                                  <div className="rounded-xl border border-slate-200 bg-white">
+                                                    <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">Contributing orders</div>
+                                                    <div className="overflow-x-auto">
+                                                      <table className="min-w-full text-sm">
+                                                        <thead className="bg-slate-50 text-slate-500">
+                                                          <tr>
+                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Order</th>
+                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Date</th>
+                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Dealer</th>
+                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Quantity</th>
+                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Value</th>
+                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Status</th>
+                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Action</th>
+                                                          </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100">
+                                                          {product.orders.map((order) => (
+                                                            <tr key={`${product.productKey}-${order.orderId}`}>
+                                                              <td className="px-4 py-3 font-mono text-slate-700">{order.orderId}</td>
+                                                              <td className="px-4 py-3 text-slate-600">{formatDate(order.orderDate)}</td>
+                                                              <td className="px-4 py-3 text-slate-600">{order.dealerName}</td>
+                                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{order.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
+                                                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{formatRupee(order.totalValue)}</td>
+                                                              <td className="px-4 py-3 text-right text-slate-600">{order.statusLabel}</td>
+                                                              <td className="px-4 py-3 text-right">
+                                                                <button
+                                                                  type="button"
+                                                                  onClick={() => router.push(`/orders/${order.orderId}`)}
+                                                                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                                                >
+                                                                  View Order
+                                                                </button>
+                                                              </td>
+                                                            </tr>
+                                                          ))}
+                                                        </tbody>
+                                                      </table>
+                                                    </div>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </Fragment>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
                 </tbody>
-                <tfoot className="border-t-2 border-slate-200 bg-slate-50">
-                  <tr>
-                    <td className="px-5 py-4 font-semibold text-slate-900">Grand Total</td>
-                    <td className="px-5 py-4 text-right font-mono font-bold text-slate-900">{grandTotal.quantity.toLocaleString('en-IN')}</td>
-                    <td className="px-5 py-4 text-right font-mono font-bold text-slate-900">{grandTotal.pieces.toLocaleString('en-IN')}</td>
-                    <td className="px-5 py-4 text-right font-mono font-bold text-slate-900">{formatRupee(grandTotal.gross)}</td>
-                    <td className="px-5 py-4 text-right font-mono font-bold text-slate-900">{formatRupee(grandTotal.discount)}</td>
-                    <td className="px-5 py-4 text-right font-mono font-bold text-emerald-700">{formatRupee(grandTotal.netSales)}</td>
-                  </tr>
-                </tfoot>
               </table>
             </div>
           </div>

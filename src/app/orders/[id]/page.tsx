@@ -436,6 +436,66 @@ function closeTo(a: number, b: number): boolean {
   return Math.abs(a - b) <= Math.max(0.01, Math.abs(b) * 0.01);
 }
 
+type RowPricing = {
+  orderedQuantity: number;
+  ready: number;
+  left: number;
+  pieces: number;
+  packs: number;
+  packSize: number;
+  unitPrice: number;
+  gross: number;
+  discount: number;
+  final: number;
+  pct: number;
+};
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function rebalanceRowDiscounts(pricings: RowPricing[], targetDiscountTotal: number): RowPricing[] {
+  const activeRows = pricings
+    .map((pricing, index) => ({ pricing, index }))
+    .filter(({ pricing }) => pricing.gross > 0);
+
+  if (activeRows.length === 0) return pricings;
+
+  const totalGross = activeRows.reduce((sum, row) => sum + row.pricing.gross, 0);
+  if (!(totalGross > 0)) return pricings;
+
+  const lastActiveIndex = activeRows[activeRows.length - 1]?.index ?? pricings.length - 1;
+  let allocatedDiscount = 0;
+
+  return pricings.map((pricing, index) => {
+    if (!(pricing.gross > 0)) {
+      return {
+        ...pricing,
+        discount: 0,
+        final: roundMoney(pricing.gross),
+        pct: 0,
+      };
+    }
+
+    const nextDiscount = index === lastActiveIndex
+      ? roundMoney(Math.max(0, targetDiscountTotal - allocatedDiscount))
+      : roundMoney((targetDiscountTotal * pricing.gross) / totalGross);
+
+    allocatedDiscount += nextDiscount;
+
+    const discount = Math.min(roundMoney(pricing.gross), Math.max(0, nextDiscount));
+    const final = roundMoney(Math.max(0, pricing.gross - discount));
+    const pct = pricing.gross > 0 ? roundMoney((discount / pricing.gross) * 100) : 0;
+
+    return {
+      ...pricing,
+      discount,
+      final,
+      pct,
+    };
+  });
+}
+
 function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMeta?: OrderMeta | null) {
   const orderedQuantity = num(o.orderdata_item_quantity);
   const ready = num(o.dispatchedQuantity ?? o.readyquantity);
@@ -563,19 +623,18 @@ function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode
 function ItemCard({
   o,
   idx,
-  packLookup,
-  orderMeta,
+  pricing,
+  additionalDiscountType,
   onDispatch,
   dispatchLabel,
 }: {
   o: OrderData;
   idx: number;
-  packLookup: Record<string, number>;
-  orderMeta?: OrderMeta | null;
+  pricing: RowPricing;
+  additionalDiscountType: "slab" | "custom" | null;
   onDispatch: () => void;
   dispatchLabel: string;
 }) {
-  const pricing = getRowPricing(o, packLookup, orderMeta);
   const left    = pricing.left;
   const isDeleted = o.del_status === "1";
   const originalRemarksText = [o.remark, o.remarks].filter(Boolean).join(" | ");
@@ -622,9 +681,9 @@ function ItemCard({
         {[
           { label: "Ordered",    val: `${pricing.packs}`, sub: "packs", cls: "text-gray-900" },
           { label: "Price",      val: `₹${pricing.unitPrice.toLocaleString("en-IN")}`, cls: "text-gray-900" },
-          { label: "Discount",   val: `${pricing.pct}%`,          cls: "text-amber-700" },
+          { label: "Discount",   val: `${pricing.pct}%`, sub: additionalDiscountType ? `incl. ${additionalDiscountType}` : undefined, cls: "text-amber-700" },
           { label: "Gross",      val: `₹${pricing.gross.toLocaleString("en-IN")}`, cls: "text-gray-500 line-through" },
-          { label: "Saved",      val: `−₹${pricing.discount.toLocaleString("en-IN")}`, cls: "text-amber-700" },
+          { label: "Saved",      val: `−₹${pricing.discount.toLocaleString("en-IN")}`, sub: additionalDiscountType ? `incl. ${additionalDiscountType}` : undefined, cls: "text-amber-700" },
           { label: "Final",      val: `₹${pricing.final.toLocaleString("en-IN")}`, cls: "text-emerald-700" },
         ].map(f => (
           <div key={f.label}>
@@ -904,7 +963,10 @@ export default function ViewOrderDealerPage() {
   };
 
   const firstOrder = displayOrders[0];
-  const displayOrderMeta = summaryOverride ? { ...(orderMeta ?? {}), ...summaryOverride } : orderMeta;
+  const displayOrderMeta = useMemo(
+    () => (summaryOverride ? { ...(orderMeta ?? {}), ...summaryOverride } : orderMeta),
+    [orderMeta, summaryOverride]
+  );
   const assignedStaffId = firstNonEmptyString(
     orderAccessMeta?.assignedstaff,
     orderAccessMeta?.staffid,
@@ -939,10 +1001,12 @@ export default function ViewOrderDealerPage() {
     acceptOrder,
     delStatus: orderDeleted,
   });
+  const baseRowPricings = useMemo(
+    () => displayOrders.map((o) => getRowPricing(o, packLookup, displayOrderMeta)),
+    [displayOrders, packLookup, displayOrderMeta]
+  );
   // Compute totals from the same row pricing used by the table and cards.
-  const calculatedTotals = displayOrders.reduce((acc, o) => {
-    const pricing = getRowPricing(o, packLookup, displayOrderMeta);
-
+  const calculatedTotals = baseRowPricings.reduce((acc, pricing) => {
     return {
       qty: acc.qty + pricing.orderedQuantity,
       pieces: acc.pieces + pricing.pieces,
@@ -974,6 +1038,11 @@ export default function ViewOrderDealerPage() {
   }, undefined, { itemDiscountTotal: calculatedTotals.discount });
   const discountSummaryRows = getOrderDiscountSummaryRows(discountBreakdown);
   const additionalDiscountBadge = formatAdditionalDiscountBadge(discountBreakdown);
+  const rowPricings = (() => {
+    if (!summaryOverride) return baseRowPricings;
+    if (closeTo(calculatedTotals.discount, totals.discount)) return baseRowPricings;
+    return rebalanceRowDiscounts(baseRowPricings, totals.discount);
+  })();
 
   const buildInvoiceOrder = () => ({
     ...(displayOrderMeta ?? {}),
@@ -1005,8 +1074,8 @@ export default function ViewOrderDealerPage() {
     orderdata_item_quantity: String(totals.qty),
     mtstatus: displayOrderMeta?.mtstatus || firstOrder?.orderdata_status || "",
     outstandingDate: displayOrderMeta?.outstandingDate || "",
-    items: displayOrders.map((o) => {
-      const pricing = getRowPricing(o, packLookup, displayOrderMeta);
+    items: displayOrders.map((o, index) => {
+      const pricing = rowPricings[index] ?? getRowPricing(o, packLookup, displayOrderMeta);
       return {
         id: o.orderdata_id,
         productId: o.orderdata_cat_no,
@@ -1210,7 +1279,9 @@ export default function ViewOrderDealerPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {displayOrders.map((o, idx) => {
                 return (
-                  <ItemCard key={o.orderdata_id} o={o} idx={idx} packLookup={packLookup} orderMeta={displayOrderMeta}
+                  <ItemCard key={o.orderdata_id} o={o} idx={idx}
+                    pricing={rowPricings[idx] ?? getRowPricing(o, packLookup, displayOrderMeta)}
+                    additionalDiscountType={discountBreakdown.additionalDiscountType}
                     dispatchLabel={canEditDispatchDetails ? "Update Dispatch" : "View Dispatch"}
                     onDispatch={() => setActiveDispatchItemId(o.orderdata_id)} />
                 );
@@ -1232,7 +1303,7 @@ export default function ViewOrderDealerPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {displayOrders.map((o, idx) => {
-                      const pricing = getRowPricing(o, packLookup, displayOrderMeta);
+                      const pricing = rowPricings[idx] ?? getRowPricing(o, packLookup, displayOrderMeta);
                       const left = pricing.left;
                       const isDeleted = o.del_status === "1";
                       const isPriority = hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks);
@@ -1271,9 +1342,23 @@ export default function ViewOrderDealerPage() {
                           <td className="px-4 py-3.5 font-mono font-bold" style={{ color: left > 0 ? "#dc2626" : "#9ca3af" }}>{left}</td>
                           <td className="px-4 py-3.5 text-[12px] text-gray-600">{o.product_unit || "—"}</td>
                           <td className="px-4 py-3.5 font-mono text-gray-900 font-semibold">₹{pricing.unitPrice.toLocaleString("en-IN")}</td>
-                          <td className="px-4 py-3.5 font-mono text-gray-900">{pricing.pct}%</td>
+                          <td className="px-4 py-3.5 font-mono text-gray-900">
+                            <div>{pricing.pct}%</div>
+                            {discountBreakdown.additionalDiscountType && (
+                              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-600">
+                                incl. {discountBreakdown.additionalDiscountType}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-4 py-3.5 font-mono text-gray-500 line-through text-[12px]">₹{pricing.gross.toLocaleString("en-IN")}</td>
-                          <td className="px-4 py-3.5 font-mono text-amber-700 font-semibold">−₹{pricing.discount.toLocaleString("en-IN")}</td>
+                          <td className="px-4 py-3.5 font-mono text-amber-700 font-semibold">
+                            <div>−₹{pricing.discount.toLocaleString("en-IN")}</div>
+                            {discountBreakdown.additionalDiscountType && (
+                              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-600">
+                                incl. {discountBreakdown.additionalDiscountType}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-4 py-3.5 font-mono font-bold text-emerald-700">₹{pricing.final.toLocaleString("en-IN")}</td>
                           <td className="px-4 py-3.5"><StatusPill code={String(o.dispatchStatus ?? o.orderdata_status ?? "0")} /></td>
                           <td className="px-4 py-3.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{o.orderdata_datetime || "—"}</td>

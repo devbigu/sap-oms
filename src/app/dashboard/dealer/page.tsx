@@ -11,6 +11,7 @@ import {
 import { CiSearch } from "react-icons/ci";
 import { useCartStore } from "@/Store/store";
 import { fetchDealerStatus } from "@/lib/dealerStatus";
+import PendingOrdersPreview, { type PendingPreviewItem } from "@/components/dashboard/PendingOrdersPreview";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DealerData = {
@@ -24,7 +25,18 @@ type DealerData = {
 type MonthlyData = { month: string; totalorders: number; totalvalue: number };
 type FunnelStage = { label: string; value: number; pct: number; color: string };
 type DraftRow = { producQuanity?: number; price?: number; packSize?: number };
-type OrderHistoryItem = { order_status?: string; status?: string; accept_order?: string };
+type OrderHistoryItem = {
+  order_id?: string;
+  order_status?: string;
+  status?: string;
+  accept_order?: string;
+  order_date?: string;
+  orderDate?: string;
+  order_amount?: string | number;
+  total?: string | number;
+  outstandingDate?: string;
+  Dealer_Name?: string;
+};
 
 const EMPTY_DEALER: DealerData = {
   Dealer_Id: "", Dealer_Name: "", Dealer_Email: "", Dealer_Number: "",
@@ -380,6 +392,27 @@ function DealerDashboardInner() {
   }, 0);
   const orderRows = ordersQ.data?.data ?? [];
   const pendingOrders = orderRows.filter(o => o.order_status === "0" || o.status === "pending").length;
+  const pendingOrderPreview: PendingPreviewItem[] = orderRows
+    .filter((o) => (o.order_status === "0" || o.status === "pending") && o.order_id)
+    .slice()
+    .sort((a, b) => {
+      const dateA = Date.parse(a.orderDate || a.order_date || "");
+      const dateB = Date.parse(b.orderDate || b.order_date || "");
+      if (!Number.isNaN(dateA) || !Number.isNaN(dateB)) {
+        return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA);
+      }
+      return (Number(b.order_id) || 0) - (Number(a.order_id) || 0);
+    })
+    .slice(0, 10)
+    .map((order) => ({
+      id: String(order.order_id),
+      title: order.Dealer_Name || dealer.Dealer_Name || "Pending order",
+      subtitle: order.orderDate || order.order_date ? `Date: ${String(order.orderDate || order.order_date).slice(0, 10)}` : undefined,
+      dueText: order.outstandingDate ? `Due: ${order.outstandingDate}` : undefined,
+      amount: Number(order.order_amount ?? order.total ?? 0),
+      statusText: order.accept_order === "0" ? "Awaiting acceptance" : "Pending",
+      statusTone: order.accept_order === "0" ? "red" : "amber",
+    }));
   const shippedOrders = orderRows.filter(o => o.order_status === "2" || o.status === "shipped").length;
   const processingOrders = Math.max(0, orderRows.length - pendingOrders - shippedOrders);
   const creditDaysRemaining = Math.max(0, creditDays);
@@ -604,6 +637,14 @@ function DealerDashboardInner() {
                 <Link href="/Pages/ledger" className="quick-action-btn">+ Open ledger</Link>
               </div>
             </div>
+
+            <PendingOrdersPreview
+              items={pendingOrderPreview}
+              loading={ordersQ.isLoading}
+              moreHref="/Pages/Ordermanagement"
+              subtitle="Top 10 pending orders from your Mirisoft order history"
+              emptyText="No pending dealer orders in the current Mirisoft feed."
+            />
 
             {/* Charts */}
             <div className="charts-row">

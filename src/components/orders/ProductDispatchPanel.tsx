@@ -207,6 +207,12 @@ function DispatchPanelDialog({
 
       onRecordSaved(json.data as OrderDispatchRecord);
       onSaved();
+      window.dispatchEvent(new CustomEvent("orderDispatchUpdated", {
+        detail: {
+          orderId,
+          orderItemId: selectedItem.orderItemId ?? selectedItem.orderdata_id ?? null,
+        },
+      }));
       onClose();
     } catch {
       setFormError("Failed to save dispatch update.");

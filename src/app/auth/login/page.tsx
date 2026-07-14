@@ -13,6 +13,7 @@ const ROLE_OPTIONS = [
 ]
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/login/login_verify"
+const LOGO_SRC = "/omsons_logo.jpeg"
 
 export default function Login() {
   const router = useRouter()
@@ -146,11 +147,11 @@ export default function Login() {
               <div className="mb-4">
                 <div className="mb-3 flex items-center gap-3">
                   <img
-                    src="https://omsonslabs.com/wp-content/uploads/elementor/thumbs/Logo-White-rjr8rdx3pqxz9p6ypfegb07hgtpvj3g22mnujlpa0w.png"
+                    src={LOGO_SRC}
                     alt="Omsons Logo"
                     width={34}
                     height={34}
-                    className="rounded-full bg-[#1d4ed8] p-1"
+                    className="h-9 w-9 rounded-full bg-[#1d4ed8] object-contain p-1"
                   />
                   <div>
                     <p className="text-sm font-semibold text-slate-950">Omsons</p>
@@ -284,11 +285,11 @@ export default function Login() {
             object-cover + object-left-center covers without distortion,
             cropping from the right side while keeping the subject visible.
           */}
-          <div className="relative hidden bg-[##0150C6] lg:block">
+          <div className="relative hidden bg-[#0150C6] lg:block">
             <img
               src="/login2.png"
               alt="Omsons laboratory glassware"
-              className="absolute inset-0 h-full w-full "
+              className="absolute inset-0 h-full w-full object-cover"
             />
           </div>
 
@@ -296,51 +297,66 @@ export default function Login() {
       </div>
 
       {showNotice && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-md"
-          onClick={() => setShowNotice(false)}
-          aria-hidden="true"
-        >
+        <div>
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="testing-phase-title"
-            className="w-full max-w-[460px] rounded-3xl bg-white p-6 text-slate-900 shadow-[0_30px_80px_rgba(15,23,42,0.28)] ring-1 ring-black/5 sm:p-7"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 flex-none items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-1 ring-amber-100">
-                <AlertTriangle size={24} strokeWidth={2.2} />
-              </div>
+  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-md"
+  onClick={() => setShowNotice(false)}
+  aria-hidden="true"
+>
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="testing-phase-title"
+    className="relative w-full max-w-[460px] rounded-3xl bg-zinc-100 p-6 text-center text-slate-900 shadow-[0_30px_80px_rgba(15,23,42,0.28)] ring-1 ring-black/5 sm:p-7"
+    onClick={(event) => event.stopPropagation()}
+  >
+    {/* Close button */}
+    <button
+      type="button"
+      onClick={() => setShowNotice(false)}
+      aria-label="Close"
+      className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus:ring-4 focus:ring-slate-100"
+    >
+    </button>
 
-              <div className="min-w-0 flex-1">
-                <p
-                  id="testing-phase-title"
-                  className="text-base font-semibold tracking-[-0.01em] text-slate-950 sm:text-lg"
-                >
-                  Testing Phase Notice
-                </p>
-                <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
-                  This software is currently undergoing final testing. Please do not place any orders today.
-                  Ordering will be available from tomorrow.
-                </p>
-              </div>
-            </div>
+    {/* Icon */}
+    <div className="mx-auto flex h-19 w-19 items-center justify-center rounded-full ">
+      <img
+        src={LOGO_SRC}
+        alt="Omsons Logo"
+        className="h-19 w-19 object-contain"
+      />
+    </div>
 
-            <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-              Thank you for your patience and cooperation.
-            </div>
+    <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-black">
+Welcome to the Omsons Partner Portal
+    </p>
 
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setShowNotice(false)}
-                className="inline-flex h-11 items-center justify-center rounded-full bg-amber-500 px-5 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(245,158,11,0.28)] transition hover:bg-amber-600 focus:outline-none focus:ring-4 focus:ring-amber-200"
-              >
-                I Understand
-              </button>
-            </div>
-          </div>
+    <p
+      id="testing-phase-title"
+      className="mt-2 text-lg font-semibold tracking-[-0.01em] text-slate-950 sm:text-xl"
+    >
+      Thank You for Being With Us
+    </p>
+
+    <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
+     We appreciate your continued trust in Omsons. Our new Order Management System is designed to provide a seamless, transparent, and efficient ordering experience, empowering you to serve your customers with confidence.
+    </p>
+
+    <div className="mt-5 rounded-2xl  px-4 py-3 text-sm leading-6">
+Together, we build success.    </div>
+
+    <div className="mt-6 flex justify-center">
+      {/* <button
+        type="button"
+        onClick={() => setShowNotice(false)}
+        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-amber-500 px-5 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(245,158,11,0.28)] transition hover:bg-amber-600 focus:outline-none focus:ring-4 focus:ring-amber-200 sm:w-auto sm:px-8"
+      >
+        Let's Get Started
+      </button> */}
+    </div>
+  </div>
+</div>
         </div>
       )}
     </main>

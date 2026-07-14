@@ -17,6 +17,7 @@ import {
   BookOpen, LogOut, ChevronUp, ChevronDown, Search, AlertCircle, Eye, Receipt,
 } from "lucide-react"
 import { formatRupee, resolveCurrentMonthTotal } from "@/lib/companySales"
+import PendingOrdersPreview, { type PendingPreviewItem } from "@/components/dashboard/PendingOrdersPreview"
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -67,7 +68,18 @@ type StaffDealer = {
   assignedstaff: string
 }
 
-type OrderItem   = { order_id: string; total: string; status?: string; order_status?: string }
+type OrderItem   = {
+  order_id: string
+  total: string
+  status?: string
+  order_status?: string
+  order_date?: string
+  orderDate?: string
+  Dealer_Name?: string
+  order_amount?: string | number
+  outstandingDate?: string
+  accept_order?: string
+}
 type MonthlyData = { month: string[]; total: string[] }
 type TopOrder    = { order_id: string; total: string }
 type TopDealer   = { Dealer_Name: string; total: string }
@@ -259,6 +271,30 @@ function ExecutiveDashboard() {
     myDealers:     dealers.length,
     pendingDiscountRequests: discountRequests.length,
   }), [orders, dealers, discountRequests])
+
+  const pendingOrderPreview = useMemo<PendingPreviewItem[]>(() => (
+    orders
+      .filter(o => o.status === "pending" || o.order_status === "0")
+      .slice()
+      .sort((a, b) => {
+        const dateA = Date.parse(a.orderDate || a.order_date || "")
+        const dateB = Date.parse(b.orderDate || b.order_date || "")
+        if (!Number.isNaN(dateA) || !Number.isNaN(dateB)) {
+          return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA)
+        }
+        return (Number(b.order_id) || 0) - (Number(a.order_id) || 0)
+      })
+      .slice(0, 10)
+      .map(order => ({
+        id: String(order.order_id),
+        title: order.Dealer_Name || "Assigned dealer order",
+        subtitle: order.orderDate || order.order_date ? `Date: ${String(order.orderDate || order.order_date).slice(0, 10)}` : undefined,
+        dueText: order.outstandingDate ? `Due: ${order.outstandingDate}` : undefined,
+        amount: Number(order.order_amount ?? order.total ?? 0),
+        statusText: order.accept_order === "0" ? "Not accepted" : "Pending",
+        statusTone: order.accept_order === "0" ? "red" : "amber",
+      }))
+  ), [orders])
 
   const activeDealers = useMemo(
     () => dealers.filter(d => Number(d.status) === 1).length,
@@ -687,6 +723,14 @@ function ExecutiveDashboard() {
             </div>
 
             {/* ── Charts Row 1 ── */}
+            <PendingOrdersPreview
+              items={pendingOrderPreview}
+              loading={ordersQ.isLoading}
+              moreHref="/Pages/Ordermanagement/outstandingorders"
+              subtitle="Top 10 pending orders from the Mirisoft staff order feed"
+              emptyText="No pending staff orders in the current Mirisoft feed."
+            />
+
             <div className="charts-2">
               <ChartPanel
                 title="Monthly Orders"
