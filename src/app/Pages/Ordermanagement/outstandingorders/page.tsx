@@ -5,6 +5,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
 
+type Role = 'admin' | 'dealer' | 'staff' | 'accountant'
 type PendingOrderData = {
   order_id: string; order_date: string; order_dealer: string; order_amount: string
   order_status: string; staffid: string; order_discount: string; del_status: string
@@ -16,6 +17,54 @@ type ResponseType = { data: PendingOrderData[]; total: number; last_page: number
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 const YEAR           = new Date().getFullYear()
+const ALLOWED_ROLES  = new Set<Role>(['admin', 'staff', 'accountant'])
+
+function decodeJWTPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    return JSON.parse(atob(base64)) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function resolveViewerRole(): Role | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const accountantToken = localStorage.getItem('accountant_token')
+    if (accountantToken) {
+      const payload = decodeJWTPayload(accountantToken)
+      if (typeof payload?.sub === 'string' || localStorage.getItem('AccountantData')) {
+        return 'accountant'
+      }
+    }
+
+    const staffRaw = localStorage.getItem('staffData')
+    if (staffRaw) {
+      const parsed = JSON.parse(staffRaw)
+      if (parsed?.staff_id) return parsed.staff_roletype === '0' ? 'admin' : 'staff'
+    }
+
+    const userRaw = localStorage.getItem('UserData')
+    if (userRaw) {
+      const parsed = JSON.parse(userRaw)
+      if (parsed?.Dealer_Id) return 'dealer'
+      if (parsed?.staff_id) return parsed.staff_roletype === '0' ? 'admin' : 'staff'
+      if (localStorage.getItem('roletype') === '3' && parsed && Object.keys(parsed).length > 0) return 'admin'
+    }
+
+    const adminRaw = localStorage.getItem('AdminData') || localStorage.getItem('admin')
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw)
+      if (parsed && Object.keys(parsed).length > 0) return 'admin'
+    }
+  } catch {}
+
+  return null
+}
 
 function statusBadge(s: string) {
   if (s === "1") return { cls: "badge-approved", dot: "#10b981", label: "Approved" }
@@ -57,14 +106,41 @@ export default function PendingOrdersPage() {
   const router      = useRouter()
   const queryClient = useQueryClient()
 
+  const [viewerRole, setViewerRole]   = useState<Role | null>(null)
+  const [authResolved, setAuthResolved] = useState(false)
   const [page,         setPage]         = useState(1)
   const [search,       setSearch]       = useState("")
   const [searchInput,  setSearchInput]  = useState("")
   const [statusFilter, setStatusFilter] = useState("")
   const [acceptFilter, setAcceptFilter] = useState("")
+  const hasAccess = viewerRole !== null && ALLOWED_ROLES.has(viewerRole)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const role = resolveViewerRole()
+
+      if (!role) {
+        router.replace('/auth/login')
+        setAuthResolved(true)
+        return
+      }
+
+      if (!ALLOWED_ROLES.has(role)) {
+        router.replace(role === 'dealer' ? '/dashboard/dealer' : '/dashboard')
+        setAuthResolved(true)
+        return
+      }
+
+      setViewerRole(role)
+      setAuthResolved(true)
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [router])
 
   const { data: response, isLoading, isError } = useQuery<ResponseType>({
     queryKey: ['pendingorders', page, search],
+    enabled: authResolved && hasAccess,
     queryFn: async () => {
       const res = await axios.get(`${BACKEND_URL}/orderpeginationnew?page=${page}&search=${search}`)
       return res.data
@@ -86,12 +162,13 @@ export default function PendingOrdersPage() {
   const activeFilters = [statusFilter, acceptFilter].filter(Boolean).length
 
   useEffect(() => {
+    if (!authResolved || !hasAccess) return
     if (page >= totalPages) return
     queryClient.prefetchQuery({
       queryKey: ['pendingorders', page + 1, search],
       queryFn: async () => { const res = await axios.get(`${BACKEND_URL}/orderpeginationnew?page=${page + 1}&search=${search}`); return res.data },
     })
-  }, [page, search, totalPages, queryClient])
+  }, [authResolved, hasAccess, page, search, totalPages, queryClient])
 
   useEffect(() => { const t = setTimeout(() => { setPage(1); setSearch(searchInput) }, 400); return () => clearTimeout(t) }, [searchInput])
   useEffect(() => { setPage(1) }, [statusFilter, acceptFilter])
@@ -103,6 +180,8 @@ export default function PendingOrdersPage() {
     return pages
   }
   const handlePageChange = (p: number) => { if (p < 1 || p > totalPages) return; setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+
+  if (!authResolved || !hasAccess) return null
 
   return (
     <>

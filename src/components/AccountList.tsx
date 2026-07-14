@@ -9,7 +9,6 @@ import {
   HiOutlineClipboardDocumentList,
   HiOutlineChartBarSquare,
   HiOutlineCube,
-  HiOutlineClock,
   HiOutlineUserGroup,
   HiOutlineFire,
   HiOutlineArrowRightOnRectangle,
@@ -157,13 +156,6 @@ function AccountList() {
                 <HiOutlineCube className="w-4 h-4 shrink-0" /> Orders
               </Link>
             </li>
-            {role === "2" && (
-              <li>
-                <Link href="/Pages/Ordermanagement/outstandingorders" style={linkStyle} className="hover:text-indigo-600">
-                  <HiOutlineClock className="w-4 h-4 shrink-0" /> Outstanding
-                </Link>
-              </li>
-            )}
             {role === "3" && (
               <>
                 <li>

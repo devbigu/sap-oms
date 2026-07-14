@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
+import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { normalizeDealerStatus, type DealerStatus } from "@/lib/dealerStatus";
 
 type DealerStatusDbDocument = {
@@ -17,10 +17,18 @@ function safeJsonResponse(payload: unknown, status = 200) {
 }
 
 async function getDealerStatusOrDefault(dealerId: string): Promise<DealerStatus> {
-  const db = await getDb();
-  const collection = db.collection<DealerStatusDbDocument>(STATUS_COLLECTION);
-  const doc = await collection.findOne({ dealerId });
-  return doc ? normalizeDealerStatus(doc.status) : "active";
+  try {
+    const db = await getDb();
+    const collection = db.collection<DealerStatusDbDocument>(STATUS_COLLECTION);
+    const doc = await collection.findOne({ dealerId });
+    return doc ? normalizeDealerStatus(doc.status) : "active";
+  } catch (error) {
+    if (isMongoDependencyError(error)) {
+      console.warn("dealer-order status fallback activated", error);
+      return "active";
+    }
+    throw error;
+  }
 }
 
 async function forwardToPhp(endpoint: string, formData: FormData) {
