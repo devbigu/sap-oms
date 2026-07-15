@@ -122,6 +122,8 @@ function matchesStatusFilter(order, filter = "all") {
 }
 
 function withinDateRange(value, fromDate, toDate) {
+  if (!fromDate && !toDate) return true;
+
   const dateMs = parseDateMs(value);
   if (dateMs === null) return false;
 
@@ -400,9 +402,16 @@ function sortOrderContributions(orders) {
 function buildDealerPurchaseLines(input) {
   const lookup = buildCatalogueLookup(input?.catalogueProducts || []);
   const statusFilter = safeText(input?.statusFilter || "all").toLowerCase() || "all";
+  const selectedDealerId = firstNonEmpty(input?.dealerId, input?.dealer?.Dealer_Id);
   const filteredOrders = uniqueOrderHeaders(input?.orders || []).filter((order) => {
     if (!matchesStatusFilter(order, statusFilter)) return false;
-    return withinDateRange(order.order_date || order.orderDate, input?.fromDate, input?.toDate);
+    const orderDealerId = firstNonEmpty(order.order_dealer, order.orderdata_dealerid, order.Dealer_Id, order.dealerId);
+    if (selectedDealerId && orderDealerId && orderDealerId !== selectedDealerId) return false;
+    return withinDateRange(
+      firstNonEmpty(order.order_date, order.orderDate, order.order_datetime, order.created_at, order.createdAt),
+      input?.fromDate,
+      input?.toDate
+    );
   });
 
   const lines = [];
@@ -413,7 +422,11 @@ function buildDealerPurchaseLines(input) {
 
     const items = Array.isArray(input?.orderItemsByOrderId?.[orderId])
       ? input.orderItemsByOrderId[orderId]
-      : [];
+      : Array.isArray(order.items)
+        ? order.items
+        : Array.isArray(order.products)
+          ? order.products
+          : [];
 
     const seenLineKeys = new Set();
     const occurrenceByProductKey = new Map();
@@ -488,6 +501,7 @@ function buildDealerPurchaseLines(input) {
 function buildDealerCategoryReport(input) {
   const { filteredOrders, lines } = buildDealerPurchaseLines(input);
   const categories = new Map();
+  const productRowsByKey = new Map();
   const totalPurchasedQuantity = lines.reduce((sum, line) => sum + line.purchasedQuantity, 0);
   const totalSalesValue = roundMoney(lines.reduce((sum, line) => sum + line.netSales, 0));
   const variantKeys = new Set();
@@ -498,6 +512,49 @@ function buildDealerCategoryReport(input) {
     if (line.orderDateMs !== null && (latestPurchaseDateMs === null || line.orderDateMs > latestPurchaseDateMs)) {
       latestPurchaseDateMs = line.orderDateMs;
     }
+
+    let flatProductEntry = productRowsByKey.get(line.productKey);
+    if (!flatProductEntry) {
+      flatProductEntry = {
+        productKey: line.productKey,
+        productName: line.productName,
+        catalogueNumber: line.catalogueNumber,
+        normalizedCatalogueNumber: line.normalizedCatalogueNumber,
+        category: line.category || UNCATEGORIZED,
+        specification: line.specification,
+        purchasedQuantity: 0,
+        totalValue: 0,
+        latestPurchaseDateMs: null,
+        orderIds: new Set(),
+        orders: new Map(),
+      };
+      productRowsByKey.set(line.productKey, flatProductEntry);
+    }
+
+    flatProductEntry.purchasedQuantity += line.purchasedQuantity;
+    flatProductEntry.totalValue = roundMoney(flatProductEntry.totalValue + line.netSales);
+    flatProductEntry.orderIds.add(line.orderId);
+    if (line.orderDateMs !== null && (flatProductEntry.latestPurchaseDateMs === null || line.orderDateMs > flatProductEntry.latestPurchaseDateMs)) {
+      flatProductEntry.latestPurchaseDateMs = line.orderDateMs;
+    }
+
+    const flatProductOrderEntry = flatProductEntry.orders.get(line.orderId) || {
+      orderId: line.orderId,
+      orderDate: line.orderDate,
+      dealerId: line.dealerId,
+      dealerName: line.dealerName,
+      catalogueNumber: line.catalogueNumber,
+      purchasedQuantity: 0,
+      totalValue: 0,
+      statusLabel: line.orderState === "SentAndSettled"
+        ? "Completed"
+        : line.orderState === "SupposedToGo"
+          ? "Accepted"
+          : "Awaiting",
+    };
+    flatProductOrderEntry.purchasedQuantity += line.purchasedQuantity;
+    flatProductOrderEntry.totalValue = roundMoney(flatProductOrderEntry.totalValue + line.netSales);
+    flatProductEntry.orders.set(line.orderId, flatProductOrderEntry);
 
     let categoryEntry = categories.get(line.category);
     if (!categoryEntry) {
@@ -527,6 +584,8 @@ function buildDealerCategoryReport(input) {
         productKey: line.productKey,
         productName: line.productName,
         catalogueNumber: line.catalogueNumber,
+        normalizedCatalogueNumber: line.normalizedCatalogueNumber,
+        category: line.category || UNCATEGORIZED,
         specification: line.specification,
         purchasedQuantity: 0,
         totalValue: 0,
@@ -550,6 +609,7 @@ function buildDealerCategoryReport(input) {
       orderDate: line.orderDate,
       dealerId: line.dealerId,
       dealerName: line.dealerName,
+      catalogueNumber: line.catalogueNumber,
       purchasedQuantity: 0,
       totalValue: 0,
       statusLabel: line.orderState === "SentAndSettled"
@@ -570,6 +630,8 @@ function buildDealerCategoryReport(input) {
         productKey: productEntry.productKey,
         productName: productEntry.productName,
         catalogueNumber: productEntry.catalogueNumber,
+        normalizedCatalogueNumber: productEntry.normalizedCatalogueNumber,
+        category: productEntry.category,
         specification: productEntry.specification,
         purchasedQuantity: productEntry.purchasedQuantity,
         orderCount: productEntry.orderIds.size,
@@ -602,6 +664,24 @@ function buildDealerCategoryReport(input) {
     return left.category.localeCompare(right.category, undefined, { sensitivity: "base" });
   });
 
+  const productRows = sortProducts(
+    Array.from(productRowsByKey.values()).map((productEntry) => ({
+      productKey: productEntry.productKey,
+      productName: productEntry.productName,
+      catalogueNumber: productEntry.catalogueNumber,
+      normalizedCatalogueNumber: productEntry.normalizedCatalogueNumber,
+      category: productEntry.category,
+      specification: productEntry.specification,
+      purchasedQuantity: productEntry.purchasedQuantity,
+      orderCount: productEntry.orderIds.size,
+      totalValue: productEntry.totalValue,
+      latestPurchaseDate: productEntry.latestPurchaseDateMs === null
+        ? ""
+        : new Date(productEntry.latestPurchaseDateMs).toISOString(),
+      orders: sortOrderContributions(Array.from(productEntry.orders.values())),
+    }))
+  );
+
   const warnings = (input?.failedOrderIds || []).length > 0
     ? [{
         code: "partial_order_detail_failure",
@@ -627,6 +707,7 @@ function buildDealerCategoryReport(input) {
       totalPurchasedQuantity,
       totalCategories: categoryRows.length,
       totalVariants: variantKeys.size,
+      distinctProducts: productRows.length,
       totalSalesValue,
       latestPurchaseDate: latestPurchaseDateMs === null ? "" : new Date(latestPurchaseDateMs).toISOString(),
       dateRange: {
@@ -635,6 +716,7 @@ function buildDealerCategoryReport(input) {
       },
       statusFilter: safeText(input?.statusFilter || "all").toLowerCase() || "all",
     },
+    products: productRows,
     categories: categoryRows,
     warnings,
     meta: {

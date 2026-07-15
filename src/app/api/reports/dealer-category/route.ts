@@ -7,8 +7,8 @@ import { getPhpApiBaseUrl } from "@/lib/phpBackend";
 export const runtime = "nodejs";
 
 const BACKEND_URL = getPhpApiBaseUrl();
-const ORDER_PAGE_SIZE = 1000;
-const MAX_ORDER_PAGES = 25;
+const ORDER_PAGE_SIZE = 200;
+const MAX_ORDER_PAGES = 50;
 const ORDER_ITEM_CONCURRENCY = 5;
 
 type ReportActor = {
@@ -28,9 +28,12 @@ type DealerRow = Record<string, unknown> & {
 
 type OrderHeader = Record<string, unknown> & {
   order_id?: string;
+  orderId?: string;
   order_date?: string;
   orderDate?: string;
   order_dealer?: string;
+  orderdata_dealerid?: string;
+  Dealer_Id?: string;
   Dealer_Name?: string;
   accept_order?: string;
   del_status?: string;
@@ -43,6 +46,7 @@ type OrderListResponse = {
   data?: OrderHeader[];
   last_page?: number;
   count?: number;
+  total?: number;
 };
 
 type NormalizedDealer = {
@@ -60,6 +64,8 @@ const reportHelper = dealerCategoryReport as unknown as {
     orders: OrderHeader[];
     orderItemsByOrderId: Record<string, Record<string, unknown>[]>;
     catalogueProducts: unknown[];
+    dealer?: NormalizedDealer;
+    dealerId?: string;
     fromDate?: string;
     toDate?: string;
     statusFilter?: string;
@@ -79,6 +85,7 @@ const reportHelper = dealerCategoryReport as unknown as {
   }) => {
     dealer: NormalizedDealer | null;
     summary: Record<string, unknown>;
+    products: unknown[];
     categories: unknown[];
     warnings: unknown[];
     meta: Record<string, unknown>;
@@ -89,6 +96,16 @@ const accessHelper = dealerCategoryReportAccess as unknown as {
   normalizeDealerRecord: (row: DealerRow) => NormalizedDealer;
   canStaffAccessDealer: (assignedDealers: NormalizedDealer[], dealerId: string) => boolean;
 };
+
+class DealerCategoryReportError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "DealerCategoryReportError";
+    this.status = status;
+  }
+}
 
 function safeText(value: unknown, max = 240) {
   return typeof value === "string"
@@ -114,14 +131,18 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`External API failed with ${response.status}`);
+    throw new DealerCategoryReportError(502, `External API failed with ${response.status}`);
   }
 
   if (/^\s*</.test(text)) {
-    throw new Error("External API returned HTML instead of JSON");
+    throw new DealerCategoryReportError(502, "External API returned HTML instead of JSON");
   }
 
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new DealerCategoryReportError(502, "External API returned invalid JSON");
+  }
 }
 
 async function fetchStaffDealers(staffId: string) {
@@ -136,51 +157,53 @@ async function fetchDealerById(dealerId: string, staffScopedDealers: NormalizedD
   const scoped = staffScopedDealers.find((dealer) => dealer.Dealer_Id === dealerId);
   if (scoped) return scoped;
 
-  const json = await fetchJson<{ data?: DealerRow[] }>(
+  const json = await fetchJson<{ data?: DealerRow[] | DealerRow; status?: boolean }>(
     `${BACKEND_URL}/getdealer?id=${encodeURIComponent(dealerId)}`,
-    { method: "POST" }
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "type" }),
+    }
   );
-  const rows = Array.isArray(json.data) ? json.data : [];
+  const rows = Array.isArray(json.data) ? json.data : json.data && typeof json.data === "object" ? [json.data] : [];
   return rows.map(accessHelper.normalizeDealerRecord).find((dealer) => dealer.Dealer_Id === dealerId) ?? null;
 }
 
 async function fetchDealerOrders(dealerId: string) {
-  const first = await fetchJson<OrderListResponse>(
-    `${BACKEND_URL}/orderhispegination?page=1&limit=${ORDER_PAGE_SIZE}&search=&id=${encodeURIComponent(dealerId)}`
-  );
+  const rows: OrderHeader[] = [];
+  let page = 1;
+  let lastPage = 1;
 
-  const rows = Array.isArray(first.data) ? first.data : [];
-  const total = Number(first.count ?? rows.length);
-  const inferredLastPage = total > rows.length
-    ? Math.ceil(total / Math.max(rows.length, 1))
-    : 1;
-  const lastPage = Math.min(
-    MAX_ORDER_PAGES,
-    Math.max(1, Number(first.last_page ?? inferredLastPage ?? 1))
-  );
+  while (page <= lastPage && page <= MAX_ORDER_PAGES) {
+    const json = await fetchJson<OrderListResponse>(
+      `${BACKEND_URL}/orderhispegination?page=${page}&limit=${ORDER_PAGE_SIZE}&search=&id=${encodeURIComponent(dealerId)}`
+    );
+    const data = Array.isArray(json.data) ? json.data : [];
+    rows.push(...data);
 
-  if (lastPage <= 1 || rows.length === 0) return rows;
+    const responseLastPage = Number(json.last_page);
+    if (Number.isFinite(responseLastPage) && responseLastPage > 0) {
+      lastPage = responseLastPage;
+    } else {
+      const total = Number(json.count ?? json.total);
+      if (Number.isFinite(total) && total > rows.length) {
+        lastPage = Math.ceil(total / ORDER_PAGE_SIZE);
+      } else if (data.length >= ORDER_PAGE_SIZE) {
+        lastPage = page + 1;
+      } else {
+        lastPage = page;
+      }
+    }
 
-  const pages = await Promise.all(
-    Array.from({ length: lastPage - 1 }, async (_unused, index) => {
-      const page = index + 2;
-      const json = await fetchJson<OrderListResponse>(
-        `${BACKEND_URL}/orderhispegination?page=${page}&limit=${ORDER_PAGE_SIZE}&search=&id=${encodeURIComponent(dealerId)}`
-      );
-      return Array.isArray(json.data) ? json.data : [];
-    })
-  );
+    page += 1;
+  }
 
-  return [...rows, ...pages.flat()];
+  return rows;
 }
 
-async function fetchOrderItems(orderId: string) {
-  const json = await fetchJson<{ data?: unknown }>(
-    `${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`
-  );
-  const raw = json.data;
-
+function normalizeOrderItems(orderId: string, raw: unknown) {
   let rows: Record<string, unknown>[] = [];
+
   if (Array.isArray(raw)) {
     const first = raw[0];
     if (raw.length > 0 && typeof first === "object" && first && Array.isArray((first as { items?: unknown[] }).items)) {
@@ -202,8 +225,8 @@ async function fetchOrderItems(orderId: string) {
     orderdata_price: item.unitPrice ?? item.unit_price ?? item.orderdata_price ?? 0,
     orderdata_discount: item.discountAmount ?? item.discount_amount ?? item.orderdata_discount ?? 0,
     orderdata_afterDisPrice: item.finalPrice ?? item.final_price ?? item.orderdata_afterDisPrice ?? item.orderdata_totalprice ?? 0,
-    product_name: safeText(item.productName ?? item.product_name, 240),
-    product_discription: safeText(item.productDescription ?? item.product_discription, 400),
+    product_name: safeText(item.productName ?? item.product_name ?? item.order_item_description, 240),
+    product_discription: safeText(item.productDescription ?? item.product_discription ?? item.order_item_description, 400),
     packSize: item.packSize ?? item.pack_size ?? undefined,
     totalPieces: item.totalPieces ?? item.total_pieces ?? undefined,
     quantityPacks: item.quantityPacks ?? item.quantity ?? undefined,
@@ -215,6 +238,20 @@ async function fetchOrderItems(orderId: string) {
     discountAmount: item.discountAmount ?? item.discount_amount ?? undefined,
     finalPrice: item.finalPrice ?? item.final_price ?? undefined,
   }));
+}
+
+function extractInlineOrderItems(order: OrderHeader) {
+  return normalizeOrderItems(
+    safeText(order.order_id ?? order.orderId, 120),
+    order.items ?? order.products ?? order.orderItems ?? order.order_items
+  );
+}
+
+async function fetchOrderItems(orderId: string) {
+  const json = await fetchJson<{ data?: unknown }>(
+    `${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`
+  );
+  return normalizeOrderItems(orderId, json.data);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -284,6 +321,8 @@ export async function GET(req: NextRequest) {
 
     const orders = await fetchDealerOrders(dealerId);
     const uniqueOrders = reportHelper.buildDealerPurchaseLines({
+      dealer,
+      dealerId,
       orders,
       orderItemsByOrderId: {},
       catalogueProducts: [],
@@ -294,9 +333,21 @@ export async function GET(req: NextRequest) {
 
     const failedOrderIds: string[] = [];
     const orderItemsByOrderId: Record<string, Record<string, unknown>[]> = {};
+    const ordersNeedingDetail: OrderHeader[] = [];
+
+    for (const order of uniqueOrders) {
+      const orderId = safeText(order.order_id ?? order.orderId, 120);
+      if (!orderId) continue;
+      const inlineItems = extractInlineOrderItems(order);
+      if (inlineItems.length > 0) {
+        orderItemsByOrderId[orderId] = inlineItems;
+      } else {
+        ordersNeedingDetail.push(order);
+      }
+    }
 
     await mapWithConcurrency(
-      uniqueOrders,
+      ordersNeedingDetail,
       ORDER_ITEM_CONCURRENCY,
       async (order) => {
         const orderId = safeText(order.order_id ?? order.orderId, 120);
@@ -327,6 +378,7 @@ export async function GET(req: NextRequest) {
       success: true,
       dealer: report.dealer,
       summary: report.summary,
+      products: report.products,
       categories: report.categories,
       warnings: report.warnings,
       meta: {
@@ -335,12 +387,31 @@ export async function GET(req: NextRequest) {
         role: actor.role,
         orderRouteBase: "/orders",
         statusFilter,
+        orderListEndpoint: "orderhispegination",
+        orderListMethod: "GET",
+        orderListIdentifier: "id",
+        orderDetailEndpoint: "orderdatalist",
+        orderDetailMethod: "GET",
+        orderDetailIdentifier: "id",
+        orderPageSize: ORDER_PAGE_SIZE,
+        maxOrderPages: MAX_ORDER_PAGES,
+        orderItemConcurrency: ORDER_ITEM_CONCURRENCY,
+        inlineOrderItemOrderCount: uniqueOrders.length - ordersNeedingDetail.length,
+        detailFetchedOrderCount: ordersNeedingDetail.length,
+        includedOrderRule: "All non-cancelled/non-rejected orders; accepted and completed filters narrow from that eligible set.",
       },
     });
   } catch (error) {
     console.error("[GET /api/reports/dealer-category]", error);
+    if (error instanceof DealerCategoryReportError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json(
-      { success: false, message: "Dealer category report is unavailable right now." },
+      { success: false, message: "Unable to fetch this dealer's order history." },
       { status: 500 }
     );
   }
