@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import products from '../../../../../public/data/nested_omsons_products.json'
+import products from '../../../../../public/data/omsons_products_from_excel_with_images.json'
 import { buildCatalogueSearchText, normalizeText } from '@/lib/catalogue'
 
 interface Product {
@@ -30,6 +30,27 @@ interface SearchMatch {
   relevance: number
 }
 
+function safeString(value: unknown): string {
+  return typeof value === 'string' ? value : String(value ?? '')
+}
+
+function lower(value: unknown): string {
+  return safeString(value).toLowerCase()
+}
+
+function findFullProduct(match: SearchMatch) {
+  const productList = products as any[]
+  const parentProduct = productList.find((p) => p?.id === match.id || p?.sku === match.sku)
+  if (parentProduct) return parentProduct
+
+  for (const product of productList) {
+    const variant = product?.variants?.find((v: any) => v?.id === match.id || v?.sku === match.sku)
+    if (variant) return variant
+  }
+
+  return null
+}
+
 /**
  * Flattens product variants into searchable items
  */
@@ -37,14 +58,16 @@ function flattenProducts(productList: any[]): Product[] {
   const flattened: Product[] = []
 
   productList.forEach((p) => {
+    if (!p || typeof p !== 'object') return
+
     // Add parent product
     flattened.push({
-      id: p.id,
-      sku: p.sku,
-      name: p.name,
-      category: p.category,
-      categories: p.categories || [],
-      features: p.features || [],
+      id: safeString(p.id || p.sku),
+      sku: safeString(p.sku || p.id),
+      name: safeString(p.name),
+      category: safeString(p.category),
+      categories: Array.isArray(p.categories) ? p.categories : [],
+      features: Array.isArray(p.features) ? p.features : [],
       specsText: p.specsText || '',
       descriptionHtml: p.descriptionHtml || '',
       searchText: buildCatalogueSearchText(p as any),
@@ -55,12 +78,12 @@ function flattenProducts(productList: any[]): Product[] {
       p.variants.forEach((v: any) => {
         if (v.id && v.sku && v.name) {
           flattened.push({
-            id: v.id,
-            sku: v.sku,
-            name: v.name,
-            category: p.category,
-            categories: p.categories || [],
-            features: p.features || [],
+            id: safeString(v.id || v.sku),
+            sku: safeString(v.sku || v.id),
+            name: safeString(v.name),
+            category: safeString(p.category),
+            categories: Array.isArray(p.categories) ? p.categories : [],
+            features: Array.isArray(p.features) ? p.features : [],
             specsText: v.specsText || '',
             descriptionHtml: p.descriptionHtml || '',
             searchText: buildCatalogueSearchText({
@@ -83,14 +106,14 @@ function flattenProducts(productList: any[]): Product[] {
  * Falls back to local ranking if LLM is unavailable
  */
 function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
-  const lowerQuery = query.toLowerCase().trim()
+  const lowerQuery = lower(query).trim()
   const normalizedQuery = normalizeText(query)
   const matches: SearchMatch[] = []
   const seen = new Set<string>()
 
   // 1. EXACT SKU MATCH
   productList.forEach((p) => {
-    if (p.sku.toLowerCase() === lowerQuery && !seen.has(p.id)) {
+    if (lower(p.sku) === lowerQuery && !seen.has(p.id)) {
       matches.push({
         id: p.id,
         sku: p.sku,
@@ -104,8 +127,9 @@ function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
 
   // 2. PARTIAL SKU MATCH (prefix or substring)
   productList.forEach((p) => {
-    if (!seen.has(p.id) && p.sku.toLowerCase().includes(lowerQuery)) {
-      const isPrefix = p.sku.toLowerCase().startsWith(lowerQuery)
+    const sku = lower(p.sku)
+    if (!seen.has(p.id) && sku.includes(lowerQuery)) {
+      const isPrefix = sku.startsWith(lowerQuery)
       matches.push({
         id: p.id,
         sku: p.sku,
@@ -121,7 +145,7 @@ function hybridSearch(query: string, productList: Product[]): SearchMatch[] {
   const queryWords = lowerQuery.split(/\s+/)
   productList.forEach((p) => {
     if (!seen.has(p.id)) {
-      const lowerName = p.name.toLowerCase()
+      const lowerName = lower(p.name)
       const matchedWords = queryWords.filter((w) => lowerName.includes(w)).length
       const wordRatio = matchedWords / queryWords.length
 
@@ -273,13 +297,9 @@ export async function GET(req: NextRequest) {
 
     // Enrich results with full product data
     const enrichedResults = matches.slice(0, limit).map((match) => {
-      const parentProduct = (products as any[]).find((p) => p.id === match.id)
-      const variant = parentProduct?.variants?.find((v: any) => v.id === match.id)
-      const fullData = variant || parentProduct
-
       return {
         ...match,
-        fullProduct: fullData,
+        fullProduct: findFullProduct(match),
       }
     })
 
@@ -320,7 +340,7 @@ export async function POST(req: NextRequest) {
     let filtered = flatProducts
     if (category) {
       filtered = flatProducts.filter(
-        (p) => p.category.toLowerCase() === category.toLowerCase()
+        (p) => lower(p.category) === lower(category)
       )
     }
 
@@ -329,13 +349,9 @@ export async function POST(req: NextRequest) {
 
     // Enrich
     const enrichedResults = matches.slice(0, Math.min(limit, 50)).map((match) => {
-      const parentProduct = (products as any[]).find((p) => p.id === match.id)
-      const variant = parentProduct?.variants?.find((v: any) => v.id === match.id)
-      const fullData = variant || parentProduct
-
       return {
         ...match,
-        fullProduct: fullData,
+        fullProduct: findFullProduct(match),
       }
     })
 

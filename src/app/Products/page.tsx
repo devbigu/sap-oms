@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import { Suspense } from 'react';
-import { SIDEBAR_CATEGORIES } from '@/lib/categories';
+import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from '@/lib/categories';
 import {
   getCatalogueProductDescriptor,
   groupProductsBySection,
@@ -22,7 +22,7 @@ type Variant = {
   specs: Record<string, string>;
   specsText: string;
   pack: number;
-  price: number;      // rupees
+  price: number | null;      // rupees
   priceLabel: string;
   inStock: boolean;
   images: string[];
@@ -47,8 +47,7 @@ type Product = {
 // ─────────────────────────────────────────────────────────────
 
 function matchesSidebarCat(product: Product, label: string): boolean {
-  const exactCats = SIDEBAR_CATEGORIES[label] ?? [];
-  return (product.categories ?? []).some(c => exactCats.includes(c));
+  return matchesCategory(compactCategoryList([product.category, ...(product.categories ?? [])]), label);
 }
 
 function countForSidebarCat(products: Product[], label: string): number {
@@ -62,7 +61,9 @@ function getProductImage(product: Product): string | null {
 // Returns prices in paise (×100) so fmt() stays consistent throughout the app.
 function getLowestPrice(product: Product): { regular: number | null; sale: number | null } {
   const vs = product.variants ?? [];
-  const prices = vs.map(v => v.price * 100).filter(p => p > 0);
+  const prices = vs
+    .map(v => (typeof v.price === "number" && v.price > 0 ? v.price * 100 : 0))
+    .filter(p => p > 0);
   return {
     regular: prices.length ? Math.min(...prices) : null,
     sale:    null,
@@ -263,7 +264,7 @@ function ProductsContent() {
   }, [q, category]);
 
   useEffect(() => {
-    axios.get("/data/nested_omsons_products.json")
+    axios.get("/data/omsons_products_from_excel_with_images.json")
       .then(res => { setAllData(res.data); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);

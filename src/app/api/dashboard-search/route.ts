@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import catalogueProducts from "../../../../public/data/nested_omsons_products.json";
+import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import dashboardSearch from "@/lib/dashboardSearch.js";
 
 export const runtime = "nodejs";

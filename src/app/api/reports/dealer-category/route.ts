@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import catalogueProducts from "../../../../../public/data/nested_omsons_products.json";
+import catalogueProducts from "../../../../../public/data/omsons_products_from_excel_with_images.json";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
 import { getPhpApiBaseUrl } from "@/lib/phpBackend";

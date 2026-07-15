@@ -7,7 +7,7 @@ export async function loadCatalogueProducts(): Promise<CatalogueProduct[]> {
   if (cachedProducts) return cachedProducts;
   if (cataloguePromise) return cataloguePromise;
 
-  cataloguePromise = fetch("/data/nested_omsons_products.json", {
+  cataloguePromise = fetch("/data/omsons_products_from_excel_with_images.json", {
     cache: "force-cache",
   })
     .then(async (response) => {

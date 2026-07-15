@@ -6,7 +6,7 @@ export type CatalogueVariant = {
   specs?: Record<string, string>;
   specsText?: string;
   pack?: number;
-  price?: number;
+  price?: number | null;
   priceLabel?: string;
   inStock?: boolean;
   images?: string[];
@@ -57,6 +57,14 @@ export function normalizeText(value: string | undefined | null): string {
     .toLowerCase()
     .replace(/[’‘]/g, "'")
     .replace(/[“”]/g, '"');
+}
+
+export function normalizeCatalogueNumber(value: string | undefined | null): string {
+  return stripHtml(value)
+    .toLowerCase()
+    .replace(/[â€™â€˜]/g, "'")
+    .replace(/[â€œâ€]/g, '"')
+    .replace(/[\s/_-]+/g, "");
 }
 
 export function getCatalogueSection(product: CatalogueProduct): string {
@@ -175,10 +183,30 @@ export function buildCatalogueSearchText(product: CatalogueProduct): string {
   return normalizeText(parts.join(" "));
 }
 
+export function buildCatalogueNumberSearchText(product: CatalogueProduct): string {
+  const parts: string[] = [
+    product.id ?? "",
+    product.sku ?? "",
+  ];
+
+  for (const variant of product.variants ?? []) {
+    parts.push(
+      variant.id ?? "",
+      variant.sku ?? "",
+    );
+  }
+
+  return parts.map(normalizeCatalogueNumber).join(" ");
+}
+
 export function matchesCatalogueQuery(product: CatalogueProduct, query: string): boolean {
   const q = normalizeText(query);
+  const catalogueQuery = normalizeCatalogueNumber(query);
   if (!q) return true;
-  return buildCatalogueSearchText(product).includes(q);
+  return (
+    buildCatalogueSearchText(product).includes(q) ||
+    Boolean(catalogueQuery && buildCatalogueNumberSearchText(product).includes(catalogueQuery))
+  );
 }
 
 export function buildCatalogueIndex<T extends CatalogueProduct>(products: T[]): CatalogueIndex<T> {

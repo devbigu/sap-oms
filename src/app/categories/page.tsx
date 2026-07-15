@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import axios from 'axios';
-import { SIDEBAR_CATEGORIES, matchesCategory } from '@/lib/categories';
+import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from '@/lib/categories';
 
-type Variant = { inStock: boolean; images: string[]; price: number; pack: number };
-type Product = { sku: string; name: string; categories: string[]; images: string[]; variants?: Variant[] };
+type Variant = { inStock: boolean; images: string[]; price: number | null; pack: number };
+type Product = { sku: string; name: string; category?: string; categories: string[]; images: string[]; variants?: Variant[] };
 
 function fmt(paise: number) {
   return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -28,16 +28,16 @@ export default function CategoriesPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    axios.get('/data/nested_omsons_products.json')
+    axios.get('/data/omsons_products_from_excel_with_images.json')
       .then(res => { setProducts(res.data); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
   const categoryData = Object.keys(SIDEBAR_CATEGORIES).map(label => {
-    const matching = products.filter(p => matchesCategory(p.categories ?? [], label));
+    const matching = products.filter(p => matchesCategory(compactCategoryList([p.category, ...(p.categories ?? [])]), label));
     const image = matching.flatMap(p => p.images ?? []).find(Boolean) ?? null;
     const lowestPaise = matching
-      .flatMap(p => (p.variants ?? []).map(v => v.price * 100))
+      .flatMap(p => (p.variants ?? []).map(v => (typeof v.price === 'number' && v.price > 0 ? v.price * 100 : 0)))
       .filter(p => p > 0);
     const minPrice = lowestPaise.length ? Math.min(...lowestPaise) : null;
     return { label, count: matching.length, image, minPrice };

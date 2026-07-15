@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import axios from 'axios';
 import { useCartStore } from "@/Store/store";
 import {
@@ -12,7 +12,7 @@ import {
 } from '@/lib/catalogue';
 
 // ─────────────────────────────────────────────────────────────
-// TYPES  (matches nested_omsons_products.json)
+// TYPES  (matches omsons_products_from_excel_with_images.json)
 // ─────────────────────────────────────────────────────────────
 type Variant = {
   id: string;
@@ -22,7 +22,7 @@ type Variant = {
   specs: Record<string, string>;
   specsText: string;
   pack: number;
-  price: number;       // rupees
+  price: number | null;       // rupees
   priceLabel: string;
   inStock: boolean;
   images: string[];
@@ -58,7 +58,7 @@ function getVariantImage(product: Product, variant?: Variant | null): string | u
 
 // All prices kept as paise internally so fmt() and the cart stay consistent.
 function variantPricePaise(v: Variant | null): number | null {
-  return v ? v.price * 100 : null;
+  return typeof v?.price === "number" && v.price > 0 ? v.price * 100 : null;
 }
 
 function fmt(paise: number | null): string {
@@ -161,7 +161,7 @@ function RelatedCard({ product }: { product: Product }) {
         <div style={{ padding: "10px 12px 12px" }}>
           <h4 style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", lineHeight: 1.4, margin: "0 0 4px" }}>{product.name}</h4>
           <span style={{ fontSize: 10.5, color: "#94a3b8", display: "block", marginBottom: 5 }}>SKU: {product.sku}</span>
-          {pricePaise !== null && (
+          {pricePaise !== null ? (
             <div>
               <span style={{ fontSize: 13, fontWeight: 700, color: "#6A5ACD" }}>{fmt(pricePaise)}</span>
               {packSize > 1 && (
@@ -171,6 +171,8 @@ function RelatedCard({ product }: { product: Product }) {
                 </div>
               )}
             </div>
+          ) : (
+            <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>On request</p>
           )}
         </div>
       </div>
@@ -181,8 +183,10 @@ function RelatedCard({ product }: { product: Product }) {
 // ─────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────
-export default function ProductDetailsPage({ params }: { params: Promise<{ sku: string }> }) {
-  const sku = decodeURIComponent(React.use(params).sku);
+export default function ProductDetailsPage() {
+  const params = useParams<{ sku?: string | string[] }>();
+  const rawSku = Array.isArray(params?.sku) ? params.sku[0] : params?.sku;
+  const sku = decodeURIComponent(String(rawSku ?? ""));
   const router = useRouter();
 
   const [allProducts,         setAllProducts]         = useState<Product[]>([]);
@@ -209,7 +213,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
 
   // Fetch data
   useEffect(() => {
-    axios.get("/data/nested_omsons_products.json")
+    axios.get("/data/omsons_products_from_excel_with_images.json")
       .then(res => {
         const data: Product[] = res.data;
         setAllProducts(data);
@@ -258,7 +262,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     const numPacks  = quantityAsNumber(quantityValue);
     const vm        = product?.variants?.find(v => v.sku === variantSku);
     const packSize  = vm?.pack ?? 1;
-    const unitPaise = vm ? vm.price * 100 : 0;          // per unit
+    const unitPaise = variantPricePaise(vm ?? null) ?? 0;          // per unit
     const packPaise = unitPaise * packSize;              // per pack
     return {
       quantityValue, numPacks, packSize, unitPaise, packPaise,
@@ -317,6 +321,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     if (!product?.variants) return;
     product.variants.forEach(v => {
       const { numPacks, packSize, unitPaise } = rowCalc(v.sku);
+      if (unitPaise <= 0 || numPacks <= 0 || !v.inStock) return;
       addToCart({ id: v.sku, name: v.name, price: unitPaise, packSize, image: getVariantImage(product, v), initialQty: numPacks });
     });
     setToast({ name: product.name, sku: `${product.variants.length} variants`, bulk: true });
@@ -338,7 +343,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     if (!product) return;
     const vm = product.variants?.find(v => v.sku === variantSku);
     const { numPacks, packSize, unitPaise } = rowCalc(variantSku);
-    if (!vm || numPacks <= 0 || !vm.inStock) return;
+    if (!vm || unitPaise <= 0 || numPacks <= 0 || !vm.inStock) return;
     addVariant(variantSku, vm?.name ?? product.name, unitPaise, numPacks, packSize, getVariantImage(product, vm));
     setSelectedVariantSKU(variantSku);
   };
@@ -516,7 +521,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
               )}
 
               {/* Selected variant summary */}
-              {selectedVariant && displayPricePaise !== null && (
+              {selectedVariant && (
                 <div style={{ background: "#f8fafc", borderRadius: 8, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                     <span style={{ color: "#64748b" }}>Catalogue No.</span>
@@ -542,7 +547,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                     <span style={{ color: "#64748b" }}>{selectedPackSize > 1 ? "Price per pack" : "Price"}</span>
-                    <span style={{ fontWeight: 700, color: "#6A5ACD" }}>{fmt(packPricePaise)}</span>
+                    <span style={{ fontWeight: 700, color: "#6A5ACD" }}>{packPricePaise !== null ? fmt(packPricePaise) : "On request"}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748b" }}>Availability</span>
@@ -601,7 +606,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                     )}
                   </>
                 ) : (
-                  <p style={{ fontSize: 16, fontWeight: 600, color: "#94a3b8", margin: 0 }}>Select a variant</p>
+                  <p style={{ fontSize: 16, fontWeight: 600, color: "#94a3b8", margin: 0 }}>Price on request</p>
                 )}
               </div>
 
@@ -696,7 +701,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                       const isSel    = v.sku === selectedVariantSKU;
                       const { quantityValue, numPacks, packSize, unitPaise, packPaise, totalPaise } = rowCalc(v.sku);
                       const cartItem = cart.find(c => c.id === v.sku);
-                      const canAddRow = numPacks > 0 && v.inStock;
+                      const canAddRow = unitPaise > 0 && numPacks > 0 && v.inStock;
 
                       return (
                         <tr key={`${v.sku}-${idx}`}
@@ -756,7 +761,7 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
                           </td>
 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>
-                            <span style={{ fontWeight: 700, color: "#15803d" }}>{totalPaise ? fmt(totalPaise) : "—"}</span>
+                            <span style={{ fontWeight: 700, color: totalPaise ? "#15803d" : "#94a3b8" }}>{totalPaise ? fmt(totalPaise) : "—"}</span>
                           </td>
 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>
@@ -804,3 +809,4 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ sku: 
     </>
   );
 }
+

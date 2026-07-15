@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { FaMagnifyingGlass } from "react-icons/fa6";
-import { SIDEBAR_CATEGORIES } from "@/lib/categories";
+import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from "@/lib/categories";
 import { useCatalogueProducts } from "@/hooks/useCatalogueProducts";
 import productSearch from "@/lib/productSearch.js";
 import type { CatalogueProduct } from "@/lib/catalogue";
@@ -29,20 +29,7 @@ type HeaderSearchControlProps = {
 function categoryMatchesSelection(product: CatalogueProduct, selectedCategory: string): boolean {
   if (!selectedCategory || selectedCategory === "all") return true;
 
-  const categories = [
-    product.category,
-    ...(product.categories ?? []),
-  ].filter(Boolean);
-
-  return categories.some((category) => {
-    const normalizedCategory = String(category).toLowerCase();
-    const normalizedSelection = selectedCategory.toLowerCase();
-    return (
-      normalizedCategory === normalizedSelection ||
-      normalizedCategory.startsWith(`${normalizedSelection} >`) ||
-      normalizedSelection.startsWith(`${normalizedCategory} >`)
-    );
-  });
+  return matchesCategory(compactCategoryList([product.category, ...(product.categories ?? [])]), selectedCategory);
 }
 
 export default function HeaderSearchControl({

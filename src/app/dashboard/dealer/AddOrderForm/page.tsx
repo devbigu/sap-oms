@@ -562,7 +562,7 @@ function AddOrderPageInner() {
     if (!user) return;
     Promise.all([
       fetch(`${BACKEND_URL}/productname`).then(r => r.json()),
-      axios.get("/data/nested_omsons_products.json").then(r => r.data),
+      axios.get("/data/omsons_products_from_excel_with_images.json").then(r => r.data),
     ]).then(([apiData, localData]) => {
       setProducts(apiData.data ?? []);
       setCatalogueIndex(buildCatalogueIndex(localData ?? []));
