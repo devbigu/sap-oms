@@ -8,8 +8,10 @@ import {
   buildPendingProductFilterOptions,
   buildPendingProductLines,
   buildPendingProductsSummaryFromLines,
+  filterPendingOrdersByRoleScope,
   filterPendingProductLines,
   filterPendingProducts,
+  isEligibleOrderForPendingProducts,
   paginatePendingProducts,
   sortPendingProducts,
   type PendingDealerDirectoryRow,
@@ -271,15 +273,25 @@ async function fetchOrderItems(orderId: string): Promise<PendingProductsItemRow[
   return items;
 }
 
-async function mapWithConcurrency<T, U>(items: T[], limit: number, mapper: (item: T) => Promise<U>) {
-  const results = new Array<U>(items.length);
+async function mapWithConcurrencySettled<T, U>(items: T[], limit: number, mapper: (item: T) => Promise<U>) {
+  const results = new Array<PromiseSettledResult<U>>(items.length);
   let nextIndex = 0;
 
   async function worker() {
     while (nextIndex < items.length) {
       const currentIndex = nextIndex;
       nextIndex += 1;
-      results[currentIndex] = await mapper(items[currentIndex]);
+      try {
+        results[currentIndex] = {
+          status: "fulfilled",
+          value: await mapper(items[currentIndex]),
+        };
+      } catch (reason) {
+        results[currentIndex] = {
+          status: "rejected",
+          reason,
+        };
+      }
     }
   }
 
@@ -327,31 +339,38 @@ async function loadBaseScope(actor: PendingProductsActor, forceRefresh: boolean)
     warnings.push("Dealer assignment metadata is temporarily unavailable. Pending quantities remain accurate.");
   }
 
-  let scopedOrders = orders;
-  if (actor.role === "staff" && dealerDirectoryRows.length > 0) {
-    const allowedDealerIds = new Set(
-      dealerDirectoryRows.map((row) => safeText(row.Dealer_Id, 120)).filter(Boolean)
-    );
-    scopedOrders = orders.filter((order) => allowedDealerIds.has(safeText(order.order_dealer, 120)));
-  }
+  const scopedOrders = filterPendingOrdersByRoleScope({
+    role: actor.role,
+    actorId: actor.actorId,
+    orders,
+    assignedDealerIds: dealerDirectoryRows.map((row) => row.Dealer_Id ?? ""),
+  }).filter(isEligibleOrderForPendingProducts);
 
   const orderIds = scopedOrders
     .map((order) => safeText(order.order_id ?? order.orderId, 120))
     .filter(Boolean);
 
-  let orderItemsByOrderId: Record<string, PendingProductsItemRow[]> = {};
-  try {
-    const orderItems = await mapWithConcurrency(orderIds, ORDER_ITEM_CONCURRENCY, async (orderId) => ({
-      orderId,
-      items: await fetchOrderItems(orderId),
-    }));
+  const orderItemsByOrderId: Record<string, PendingProductsItemRow[]> = {};
+  const orderItems = await mapWithConcurrencySettled(orderIds, ORDER_ITEM_CONCURRENCY, async (orderId) => ({
+    orderId,
+    items: await fetchOrderItems(orderId),
+  }));
 
-    orderItemsByOrderId = orderItems.reduce<Record<string, PendingProductsItemRow[]>>((accumulator, entry) => {
-      accumulator[entry.orderId] = entry.items;
-      return accumulator;
-    }, {});
-  } catch (error) {
-    if (error instanceof PendingProductsError) throw error;
+  let failedOrderDetailCount = 0;
+  for (const result of orderItems) {
+    if (result.status === "fulfilled") {
+      orderItemsByOrderId[result.value.orderId] = result.value.items;
+    } else {
+      failedOrderDetailCount += 1;
+      console.warn("[GET /api/pending-products] order detail failed", result.reason);
+    }
+  }
+
+  if (failedOrderDetailCount > 0) {
+    warnings.push("Some order details could not be loaded. Displayed totals may be incomplete.");
+  }
+
+  if (orderIds.length > 0 && failedOrderDetailCount === orderIds.length) {
     throw new PendingProductsError(502, "Pending product details could not be loaded from the order source.");
   }
 

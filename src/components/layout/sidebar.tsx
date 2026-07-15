@@ -2,18 +2,18 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
 import {
   LayoutDashboard, UserRoundPlus, Users, SquareUser,
   Plus, ClipboardList, Home, LogOut, Package, Images,
   ShieldCheck, Gift, Receipt, TrendingUp, BookOpen, FileText,
   Wallet,
 } from "lucide-react";
+import { clearAuthStorage, type AppRole, type StoredUser } from "@/lib/roleAccess";
+import { useAuthSession } from "@/hooks/useAuthSession";
 
-type Role    = "admin" | "dealer" | "staff" | "accountant";
 type NavItem = { label: string; href: string; icon: React.ReactNode; section?: string };
 type SidebarUser = {
-  role: Role;
+  role: AppRole;
   name?: string;
   username?: string;
   email?: string;
@@ -26,7 +26,7 @@ type SidebarUser = {
   staff_roletype?: string;
 };
 
-const NAV: Record<Role, NavItem[]> = {
+const NAV: Record<AppRole, NavItem[]> = {
   admin: [
     { section: "Overview",    label: "Dashboard",          href: "/dashboard/admin",                                 icon: <LayoutDashboard size={15} /> },
     {                         label: "Profile",            href: "/dashboard/admin/profile",                         icon: <SquareUser size={15} />      },
@@ -84,31 +84,6 @@ const NAV: Record<Role, NavItem[]> = {
   ],
 };
 
-function resolveUser() {
-  if (typeof window === "undefined") return null;
-  try {
-    // Accountant session takes priority when the token is present
-    const acctToken = localStorage.getItem("accountant_token");
-    if (acctToken) {
-      const acct = localStorage.getItem("AccountantData");
-      if (acct) { const p = JSON.parse(acct); return { role: "accountant" as Role, ...p }; }
-    }
-    const d = localStorage.getItem("UserData");
-    if (d) {
-      const p = JSON.parse(d);
-      if (p?.Dealer_Id) return { role: "dealer" as Role, ...p };
-      if (p?.staff_id) return { role: (p.staff_roletype === "0" ? "admin" : "staff") as Role, ...p };
-      if (localStorage.getItem("roletype") === "3" && p && Object.keys(p).length > 0)
-        return { role: "admin" as Role, ...p };
-    }
-    const s = localStorage.getItem("staffData");
-    if (s) { const p = JSON.parse(s); if (p?.staff_id) return { role: "staff" as Role, ...p }; }
-    const a = localStorage.getItem("AdminData") || localStorage.getItem("admin");
-    if (a) { const p = JSON.parse(a); return { role: "admin" as Role, ...p }; }
-  } catch {}
-  return null;
-}
-
 function getInitials(name?: string) {
   if (!name?.trim()) return "AD";
   return name.trim().split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
@@ -121,18 +96,13 @@ function staffRoleLabel(rt?: string) {
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname              = usePathname();
   const router                = useRouter();
-  const [user,    setUser]    = useState<SidebarUser | null>(null);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setUser(resolveUser());
-      setMounted(true);
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  const role: Role = user?.role ?? "admin";
+  const auth                  = useAuthSession();
+  const mounted               = !auth.loading;
+  const user                  =
+    !auth.loading && auth.session.status === "authenticated"
+      ? ({ ...auth.session.user, role: auth.session.role } as StoredUser & SidebarUser)
+      : null;
+  const role                  = user?.role;
 
   const name =
     role === "dealer"     ? user?.Dealer_Name :
@@ -163,16 +133,18 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
       localStorage.removeItem("accountant_token");
       localStorage.removeItem("AccountantData");
       localStorage.removeItem("roletype");
+      window.dispatchEvent(new Event("omsons-auth-changed"));
       router.push("/auth/accountant-login");
     } else {
-      localStorage.clear();
+      clearAuthStorage(localStorage);
+      window.dispatchEvent(new Event("omsons-auth-changed"));
       router.push("/auth/login");
     }
   };
 
   // Group nav by section
   const grouped: { section?: string; items: NavItem[] }[] = [];
-  (NAV[role] ?? NAV.admin).forEach(item => {
+  (role ? NAV[role] : []).forEach(item => {
     if (item.section) {
       grouped.push({ section: item.section, items: [item] });
     } else {

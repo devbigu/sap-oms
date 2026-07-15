@@ -4,119 +4,19 @@ import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 
+import RouteGuard from "@/components/auth/RouteGuard";
 import DashboardSmartSearch from "@/components/dashboard/DashboardSmartSearch";
 import SmartSearchBar from "@/components/SartSearchBar";
 import Sidebar from "@/components/layout/sidebar";
-
-type Role = "admin" | "dealer" | "staff" | "accountant";
-
-type DashboardUser = {
-  role?: Role;
-  name?: string;
-  username?: string;
-  email?: string;
-  id?: string;
-  admin_id?: string;
-  Admin_Id?: string;
-  Dealer_Id?: string;
-  Dealer_Name?: string;
-  Dealer_City?: string;
-  staff_id?: string;
-  staff_name?: string;
-  staff_location?: string;
-  staff_designation?: string;
-  staff_roletype?: string;
-};
-
-const DEMO_ACCOUNTANT_ID = "demo000000000000000000000";
-
-function decodeJWTPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(base64)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredObject(key: string): Record<string, unknown> | null {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function asUser(role: Role, value: Record<string, unknown> | null): DashboardUser | null {
-  return value ? { role, ...(value as DashboardUser) } : null;
-}
-
-function resolveNonAccountantUser(): DashboardUser | null {
-  if (typeof window === "undefined") return null;
-
-  const staff = readStoredObject("staffData");
-  if (typeof staff?.staff_id === "string" && staff.staff_id) {
-    return asUser(staff.staff_roletype === "0" ? "admin" : "staff", staff);
-  }
-
-  const userData = readStoredObject("UserData");
-  if (typeof userData?.Dealer_Id === "string" && userData.Dealer_Id) {
-    return asUser("dealer", userData);
-  }
-  if (typeof userData?.staff_id === "string" && userData.staff_id) {
-    return asUser(userData.staff_roletype === "0" ? "admin" : "staff", userData);
-  }
-  if (localStorage.getItem("roletype") === "3" && userData && Object.keys(userData).length > 0) {
-    return asUser("admin", userData);
-  }
-
-  const admin = readStoredObject("AdminData") ?? readStoredObject("admin");
-  if (admin && Object.keys(admin).length > 0) {
-    return asUser("admin", admin);
-  }
-
-  return null;
-}
-
-function resolveInitialUser(): DashboardUser | null {
-  if (typeof window === "undefined") return null;
-
-  const token = localStorage.getItem("accountant_token");
-  if (token) {
-    const payload = decodeJWTPayload(token);
-    const id = typeof payload?.sub === "string" ? payload.sub : undefined;
-
-    if (id === DEMO_ACCOUNTANT_ID) {
-      const accountant = readStoredObject("AccountantData");
-      return asUser("accountant", accountant ?? { name: "Demo Accountant", email: "demo@omsons.com" });
-    }
-
-    const accountant = readStoredObject("AccountantData");
-    if (accountant) return asUser("accountant", accountant);
-  }
-
-  return resolveNonAccountantUser();
-}
+import { clearAuthStorage, type AppRole, type StoredUser } from "@/lib/roleAccess";
+import { useAuthSession } from "@/hooks/useAuthSession";
 
 let ledgerWarmupStarted = false;
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<DashboardUser | null>(null);
+  const auth = useAuthSession();
   const router = useRouter();
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      setUser(resolveInitialUser());
-    });
-  }, []);
 
   useEffect(() => {
     if (ledgerWarmupStarted) return;
@@ -128,36 +28,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     });
   }, []);
 
-  useEffect(() => {
-    const token = localStorage.getItem("accountant_token");
-    if (!token) return;
-
-    const payload = decodeJWTPayload(token);
-    const id = typeof payload?.sub === "string" ? payload.sub : undefined;
-    if (!id || id === DEMO_ACCOUNTANT_ID) return;
-
-    fetch(`/api/accountants/${id}`)
-      .then((response) => response.json())
-      .then((json) => {
-        if (json.success && json.data && typeof json.data === "object") {
-          setUser({ role: "accountant", ...(json.data as DashboardUser) });
-          return;
-        }
-
-        const accountant = readStoredObject("AccountantData");
-        if (accountant) {
-          setUser({ role: "accountant", ...(accountant as DashboardUser) });
-        }
-      })
-      .catch(() => {
-        const accountant = readStoredObject("AccountantData");
-        if (accountant) {
-          setUser({ role: "accountant", ...(accountant as DashboardUser) });
-        }
-      });
-  }, []);
-
-  const role: Role = user?.role ?? "admin";
+  const user: StoredUser | null =
+    !auth.loading && auth.session.status === "authenticated" ? auth.session.user : null;
+  const role: AppRole | null =
+    !auth.loading && auth.session.status === "authenticated" ? auth.session.role : null;
 
   const displayName =
     role === "accountant"
@@ -188,17 +62,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const userId =
     role === "dealer"
-      ? user?.Dealer_Id
+      ? String(user?.Dealer_Id ?? "")
       : role === "staff"
-        ? user?.staff_id
+        ? String(user?.staff_id ?? "")
         : undefined;
 
   const dashboardActorId =
     role === "dealer"
-      ? user?.Dealer_Id
+      ? String(user?.Dealer_Id ?? "")
       : role === "staff"
-        ? user?.staff_id
-        : user?.staff_id ?? user?.id ?? user?.admin_id ?? user?.Admin_Id ?? user?.email ?? "";
+        ? String(user?.staff_id ?? "")
+        : String(user?.staff_id ?? user?.id ?? user?.admin_id ?? user?.Admin_Id ?? user?.email ?? "");
 
   const dashboardRoleType =
     role === "admin"
@@ -214,12 +88,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return;
     }
 
-    localStorage.clear();
+    clearAuthStorage(localStorage);
+    window.dispatchEvent(new Event("omsons-auth-changed"));
     router.push("/auth/login");
   };
 
   return (
-    <>
+    <RouteGuard>
       <style>{`
         .dl-topbar {
           position: sticky;
@@ -271,28 +146,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           min-width: 0;
           flex: 1;
         }
-        .dl-top-actions > :first-child {
+        .dl-search-area {
           min-width: 0;
+          flex: 1;
+          display: flex;
+          justify-content: flex-end;
         }
-        .sb-logout {
-          width: 30px;
-          height: 30px;
+        .dl-search-area .ss-wrap {
+          width: 100%;
+          max-width: 640px;
+          margin: 0;
+        }
+        .dl-logout {
+          height: 38px;
           flex-shrink: 0;
-          padding: 0;
-          border-radius: 9px;
+          padding: 0 14px;
+          border-radius: 11px;
           background: transparent;
           border: 1px solid rgba(255,255,255,0.09);
           font-size: 13px;
           font-weight: 500;
-          color: #475569;
+          color: rgba(226,232,240,0.72);
           cursor: pointer;
           font-family: inherit;
           display: flex;
           align-items: center;
           justify-content: center;
+          gap: 8px;
           transition: all .16s;
         }
-        .sb-logout:hover {
+        .dl-logout:hover {
           background: rgba(239,68,68,0.1);
           border-color: rgba(239,68,68,0.28);
           color: #f87171;
@@ -304,6 +187,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           }
           .dl-top-actions {
             gap: 10px;
+          }
+        }
+        @media (max-width: 680px) {
+          .dl-sub {
+            display: none;
+          }
+          .dl-logout span {
+            display: none;
+          }
+          .dl-logout {
+            width: 38px;
+            padding: 0;
           }
         }
       `}</style>
@@ -341,23 +236,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
 
             <div className="dl-top-actions">
-              {role === "accountant" ? (
-                <SmartSearchBar
-                  role={role}
-                  userId={userId}
-                  placeholder={searchPlaceholder}
-                />
-              ) : (
-                <DashboardSmartSearch
-                  role={role}
-                  actorId={dashboardActorId}
-                  roletype={dashboardRoleType}
-                  placeholder={searchPlaceholder}
-                />
-              )}
+              <div className="dl-search-area">
+                {role === "accountant" ? (
+                  <SmartSearchBar
+                    role={role ?? "accountant"}
+                    userId={userId}
+                    placeholder={searchPlaceholder}
+                  />
+                ) : (
+                  <DashboardSmartSearch
+                    role={role ?? "staff"}
+                    actorId={dashboardActorId}
+                    roletype={dashboardRoleType}
+                    placeholder={searchPlaceholder}
+                  />
+                )}
+              </div>
 
-              <button className="w-30 h-40 flex items-center justify-center hover:text-red-500" onClick={handleLogout}>
-                <LogOut size={24} />
+              <button className="dl-logout" onClick={handleLogout}>
+                <LogOut size={14} />
+                <span>Sign out</span>
               </button>
             </div>
           </header>
@@ -365,6 +263,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <main style={{ flex: 1 }}>{children}</main>
         </div>
       </div>
-    </>
+    </RouteGuard>
   );
 }

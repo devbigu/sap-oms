@@ -300,6 +300,80 @@ test("staff and dealer scope filters only keep permitted line contributions", ()
   );
 });
 
+test("role order scope is applied before pending product aggregation", () => {
+  const orders = [
+    { order_id: "1001", order_dealer: "D-1", accept_order: "1", del_status: "0" },
+    { order_id: "1002", order_dealer: "D-2", accept_order: "1", del_status: "0" },
+  ];
+  const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
+    role: "dealer",
+    actorId: "D-1",
+    orders,
+  });
+
+  const lines = pendingProducts.buildPendingProductLines({
+    orders: scopedOrders,
+    orderItemsByOrderId: {
+      "1001": [{ orderdata_id: "501", orderdata_orderid: "1001", orderdata_cat_no: "50/8", product_name: "Flask", orderdata_item_quantity: "10" }],
+      "1002": [{ orderdata_id: "601", orderdata_orderid: "1002", orderdata_cat_no: "50/8", product_name: "Flask", orderdata_item_quantity: "900" }],
+    },
+  });
+  const summary = pendingProducts.buildPendingProductsSummaryFromLines(lines);
+
+  assert.deepEqual(scopedOrders.map((order) => order.order_id), ["1001"]);
+  assert.equal(summary.totalPendingUnits, 10);
+});
+
+test("dealer role scope excludes other dealer names, orders, and quantities from mixed endpoint rows", () => {
+  const lines = buildFixtureLines();
+  const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
+    role: "dealer",
+    actorId: "D-1",
+    orders: [
+      { order_id: "1001", order_dealer: "D-1" },
+      { order_id: "1002", order_dealer: "D-2" },
+      { order_id: "1003", order_dealer: "D-1" },
+    ],
+  });
+  const scopedOrderIds = new Set(scopedOrders.map((order) => order.order_id));
+  const dealerLines = lines.filter((line) => scopedOrderIds.has(line.orderId));
+  const detail = pendingProducts.buildPendingProductDrilldown(
+    dealerLines,
+    pendingProducts.aggregatePendingProducts(dealerLines).find((entry) => entry.catalogueNumber === "50/8").productKey
+  );
+
+  assert.equal(detail.aggregate.pendingQuantity, 9);
+  assert.deepEqual(detail.orders.map((order) => order.orderId), ["1001"]);
+  assert.equal(detail.orders.some((order) => order.dealerName === "Dealer B"), false);
+});
+
+test("staff role scope requires assigned dealer membership and excludes unassigned dealers", () => {
+  const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
+    role: "staff",
+    actorId: "77",
+    assignedDealerIds: ["D-1"],
+    orders: [
+      { order_id: "1001", order_dealer: "D-1" },
+      { order_id: "1002", order_dealer: "D-2" },
+    ],
+  });
+
+  assert.deepEqual(scopedOrders.map((order) => order.order_id), ["1001"]);
+});
+
+test("missing staff assignments do not fall back to global admin scope", () => {
+  const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
+    role: "staff",
+    actorId: "77",
+    orders: [
+      { order_id: "1001", order_dealer: "D-1" },
+      { order_id: "1002", order_dealer: "D-2" },
+    ],
+  });
+
+  assert.deepEqual(scopedOrders, []);
+});
+
 test("summary metrics are computed from the full role-scoped line set, not a page slice", () => {
   const summary = pendingProducts.buildPendingProductsSummaryFromLines(buildFixtureLines());
 
