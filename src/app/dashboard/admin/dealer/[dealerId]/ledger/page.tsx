@@ -11,6 +11,7 @@ import AccountBookSummary, { AccountBookStats } from '@/components/ledger/Accoun
 import TransactionTable from '@/components/ledger/TransactionTable'
 import PayMoneyModal, { PaymentData } from '@/components/ledger/PayMoneyModal'
 import { InvoiceModal } from '@/components/InvoiceModel'
+import { resolveStoredAuth } from '@/lib/roleAccess'
 
 const TRANSACTIONS_PAGE_SIZE = 10
 
@@ -84,12 +85,19 @@ interface TransactionsResponse {
   message?: string
 }
 
+function isStaffLedgerSession() {
+  if (typeof window === 'undefined') return false
+  const session = resolveStoredAuth(window.localStorage)
+  return session.status === 'authenticated' && session.role === 'staff'
+}
+
 export default function DealerLedgerPage() {
   const params = useParams()
   const router = useRouter()
   const queryClient = useQueryClient()
   const dealerId = params.dealerId as string
 
+  const [redirectingStaff, setRedirectingStaff] = useState(() => isStaffLedgerSession())
   const [payModalOpen, setPayModalOpen] = useState(false)
   const [payLoading, setPayLoading] = useState(false)
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false)
@@ -101,6 +109,12 @@ export default function DealerLedgerPage() {
   const [walletAdjustLoading, setWalletAdjustLoading] = useState(false)
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [transactionsPage, setTransactionsPage] = useState(1)
+
+  useEffect(() => {
+    if (!dealerId || !isStaffLedgerSession()) return
+    setRedirectingStaff(true)
+    router.replace(`/Pages/ledger/${encodeURIComponent(dealerId)}`)
+  }, [dealerId, router])
 
   // Fetch dealer info and summary
   const {
@@ -114,7 +128,7 @@ export default function DealerLedgerPage() {
       const res = await axios.get(`/api/ledger/${dealerId}`)
       return res.data
     },
-    enabled: !!dealerId,
+    enabled: !!dealerId && !redirectingStaff,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -132,7 +146,7 @@ export default function DealerLedgerPage() {
       })
       return res.data
     },
-    enabled: !!dealerId,
+    enabled: !!dealerId && !redirectingStaff,
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
@@ -147,7 +161,7 @@ export default function DealerLedgerPage() {
       const res = await axios.get(`/api/wallet/${dealerId}`)
       return res.data
     },
-    enabled: !!dealerId,
+    enabled: !!dealerId && !redirectingStaff,
     staleTime: 60 * 1000,
   })
 
@@ -156,7 +170,7 @@ export default function DealerLedgerPage() {
   }, [dealerId])
 
   useEffect(() => {
-    if (!dealerId || !transactionsData?.hasNextPage) return
+    if (!dealerId || redirectingStaff || !transactionsData?.hasNextPage) return
 
     queryClient.prefetchQuery({
       queryKey: ['dealer-transactions', dealerId, transactionsPage + 1],
@@ -168,7 +182,7 @@ export default function DealerLedgerPage() {
       },
       staleTime: 5 * 60 * 1000,
     })
-  }, [dealerId, queryClient, transactionsData?.hasNextPage, transactionsPage])
+  }, [dealerId, queryClient, redirectingStaff, transactionsData?.hasNextPage, transactionsPage])
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -231,6 +245,18 @@ export default function DealerLedgerPage() {
     } finally {
       setWalletAdjustLoading(false)
     }
+  }
+
+  if (redirectingStaff) {
+    return (
+      <div className="min-h-screen bg-gray-100">
+        <div className="p-6 max-w-7xl mx-auto">
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+            Opening assigned dealer ledger...
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (ledgerError) {

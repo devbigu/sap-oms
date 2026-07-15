@@ -18,7 +18,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const auth = useAuthSession();
   const router = useRouter();
 
+  const user: StoredUser | null =
+    !auth.loading && auth.session.status === "authenticated" ? auth.session.user : null;
+  const role: AppRole | null =
+    !auth.loading && auth.session.status === "authenticated" ? auth.session.role : null;
+
   useEffect(() => {
+    if (auth.loading || auth.session.status !== "authenticated") return;
+    if (auth.session.role === "staff" || auth.session.role === "dealer") return;
     if (ledgerWarmupStarted) return;
     ledgerWarmupStarted = true;
 
@@ -26,12 +33,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       console.error("[dashboard ledger preload]", error);
       ledgerWarmupStarted = false;
     });
-  }, []);
-
-  const user: StoredUser | null =
-    !auth.loading && auth.session.status === "authenticated" ? auth.session.user : null;
-  const role: AppRole | null =
-    !auth.loading && auth.session.status === "authenticated" ? auth.session.role : null;
+  }, [auth.loading, auth.session]);
 
   const displayName =
     role === "accountant"
