@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import axios from "axios"
 import { AlertTriangle, Eye, EyeOff } from "lucide-react"
 import { fetchDealerStatus } from "@/lib/dealerStatus"
+import { clearAuthStorage } from "@/lib/roleAccess"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -91,9 +92,13 @@ export default function Login() {
           }
         }
 
+        clearAuthStorage(localStorage)
         localStorage.setItem("status", "true")
         localStorage.setItem("UserData", JSON.stringify(userData))
         localStorage.setItem("roletype", roletype)
+        if (roletype === "1") {
+          localStorage.setItem("staffData", JSON.stringify(userData))
+        }
         if (roletype === "3") {
           localStorage.setItem("AdminData", JSON.stringify(userData))
         }
