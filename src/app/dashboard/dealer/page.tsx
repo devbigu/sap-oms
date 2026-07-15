@@ -10,7 +10,8 @@ import {
 } from "@tanstack/react-query";
 import { CiSearch } from "react-icons/ci";
 import { useCartStore } from "@/Store/store";
-import PendingOrdersPreview, { type PendingPreviewItem } from "@/components/dashboard/PendingOrdersPreview";
+import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview";
+import { clearAuthStorage } from "@/lib/roleAccess";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DealerData = {
@@ -325,7 +326,7 @@ function DealerDashboardInner() {
   const usagePct     = annualTarget > 0 ? Math.min(100, Math.round((currentLimit / annualTarget) * 100)) : 0;
   const initials     = dealer.Dealer_Name?.trim()?.charAt(0)?.toUpperCase() || dealer.Dealer_Email?.trim()?.charAt(0)?.toUpperCase() || "D";
 
-  const handleLogout = () => { localStorage.clear(); router.push("/auth/login"); };
+  const handleLogout = () => { clearAuthStorage(localStorage); window.dispatchEvent(new Event("omsons-auth-changed")); router.push("/auth/login"); };
 
   const [
     draftsQ,
@@ -363,27 +364,6 @@ function DealerDashboardInner() {
   }, 0);
   const orderRows = ordersQ.data?.data ?? [];
   const pendingOrders = orderRows.filter(o => o.order_status === "0" || o.status === "pending").length;
-  const pendingOrderPreview: PendingPreviewItem[] = orderRows
-    .filter((o) => (o.order_status === "0" || o.status === "pending") && o.order_id)
-    .slice()
-    .sort((a, b) => {
-      const dateA = Date.parse(a.orderDate || a.order_date || "");
-      const dateB = Date.parse(b.orderDate || b.order_date || "");
-      if (!Number.isNaN(dateA) || !Number.isNaN(dateB)) {
-        return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA);
-      }
-      return (Number(b.order_id) || 0) - (Number(a.order_id) || 0);
-    })
-    .slice(0, 10)
-    .map((order) => ({
-      id: String(order.order_id),
-      title: order.Dealer_Name || dealer.Dealer_Name || "Pending order",
-      subtitle: order.orderDate || order.order_date ? `Date: ${String(order.orderDate || order.order_date).slice(0, 10)}` : undefined,
-      dueText: order.outstandingDate ? `Due: ${order.outstandingDate}` : undefined,
-      amount: Number(order.order_amount ?? order.total ?? 0),
-      statusText: order.accept_order === "0" ? "Awaiting acceptance" : "Pending",
-      statusTone: order.accept_order === "0" ? "red" : "amber",
-    }));
   const shippedOrders = orderRows.filter(o => o.order_status === "2" || o.status === "shipped").length;
   const processingOrders = Math.max(0, orderRows.length - pendingOrders - shippedOrders);
   const creditDaysRemaining = Math.max(0, creditDays);
@@ -584,13 +564,7 @@ function DealerDashboardInner() {
               </div>
             </div>
 
-            <PendingOrdersPreview
-              items={pendingOrderPreview}
-              loading={ordersQ.isLoading}
-              moreHref="/Pages/Ordermanagement"
-              subtitle="Top 10 pending orders from your Mirisoft order history"
-              emptyText="No pending dealer orders in the current Mirisoft feed."
-            />
+            <PendingProductsPreview role="dealer" moreHref="/dashboard/dealer/pending-products" />
 
             {/* Charts */}
             <div className="charts-row">

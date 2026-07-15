@@ -4,7 +4,7 @@
 
 ▲ Next.js 16.1.6
 - Local:         http://localhost:3000
-- Network:       http://172.17.128.1:3000
+- Network:       http://192.168.31.141:3000
 
 ✓ Starting...
-✓ Ready in 1006ms
+✓ Ready in 940ms

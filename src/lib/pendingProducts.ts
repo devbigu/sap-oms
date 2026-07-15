@@ -238,11 +238,39 @@ function regexFlag(values: unknown[]): boolean {
   );
 }
 
-function isEligibleOrderForPendingProducts(order: PendingProductsOrderRow): boolean {
+export function isEligibleOrderForPendingProducts(order: PendingProductsOrderRow): boolean {
   if (safeText(order.del_status) === "1") return false;
   if (safeText(order.accept_order) !== "1") return false;
   if (regexFlag([order.order_status, order.mtstatus, order.reason])) return false;
   return true;
+}
+
+export function resolvePendingOrderDealerId(order: PendingProductsOrderRow): string {
+  return firstNonEmpty(order.order_dealer, order.orderdata_dealerid, order.Dealer_Id);
+}
+
+export function filterPendingOrdersByRoleScope(input: {
+  role: PendingProductsRole;
+  actorId?: string | number;
+  orders: PendingProductsOrderRow[];
+  assignedDealerIds?: Array<string | number>;
+}): PendingProductsOrderRow[] {
+  const role = input.role;
+  const actorId = safeText(input.actorId);
+
+  if (role === "admin") return input.orders ?? [];
+
+  if (role === "dealer") {
+    if (!actorId) return [];
+    return (input.orders ?? []).filter((order) => resolvePendingOrderDealerId(order) === actorId);
+  }
+
+  const allowedDealerIds = new Set(
+    (input.assignedDealerIds ?? []).map((dealerId) => safeText(dealerId)).filter(Boolean)
+  );
+  if (allowedDealerIds.size === 0) return [];
+
+  return (input.orders ?? []).filter((order) => allowedDealerIds.has(resolvePendingOrderDealerId(order)));
 }
 
 function normalizeLookupEntry(raw: Record<string, unknown>, category: string, image: string, catalogueNumber: string): CatalogueLookupEntry {

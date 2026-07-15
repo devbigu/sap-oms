@@ -51,6 +51,7 @@ type OrderContribution = {
   orderDate: string
   dealerId: string
   dealerName: string
+  catalogueNumber: string
   purchasedQuantity: number
   totalValue: number
   statusLabel: string
@@ -60,6 +61,8 @@ type ProductRow = {
   productKey: string
   productName: string
   catalogueNumber: string
+  normalizedCatalogueNumber?: string
+  category: string
   specification: string
   purchasedQuantity: number
   orderCount: number
@@ -93,11 +96,13 @@ type ReportResponse = {
     totalPurchasedQuantity: number
     totalCategories: number
     totalVariants: number
+    distinctProducts?: number
     totalSalesValue: number
     latestPurchaseDate: string
     dateRange: { from: string; to: string }
     statusFilter: 'all' | 'accepted' | 'completed'
   }
+  products: ProductRow[]
   categories: CategoryRow[]
   warnings: ReportWarning[]
   meta: {
@@ -201,7 +206,13 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const text = await response.text()
 
   if (!response.ok) {
-    throw new Error(text || `Request failed with HTTP ${response.status}`)
+    try {
+      const payload = JSON.parse(text)
+      throw new Error(payload?.message || `Request failed with HTTP ${response.status}`)
+    } catch (error) {
+      if (error instanceof Error && error.message !== text) throw error
+      throw new Error(text || `Request failed with HTTP ${response.status}`)
+    }
   }
 
   if (/^\s*</.test(text)) {
@@ -265,29 +276,27 @@ function escapeCsvCell(value: string | number) {
   return text
 }
 
-function categoryMatchesSearch(category: CategoryRow, search: string) {
+function productMatchesSearch(product: ProductRow, search: string) {
   if (!search) return true
   const needle = search.toLowerCase()
 
-  if (category.category.toLowerCase().includes(needle)) return true
-
-  return category.products.some((product) =>
-    [
-      product.productName,
-      product.catalogueNumber,
-      product.specification,
-    ]
-      .join(' ')
-      .toLowerCase()
-      .includes(needle)
-  )
+  return [
+    product.productName,
+    product.catalogueNumber,
+    product.normalizedCatalogueNumber,
+    product.category,
+    product.specification,
+  ]
+    .join(' ')
+    .toLowerCase()
+    .includes(needle)
 }
 
-function sortCategories(rows: CategoryRow[], sortBy: SortKey) {
+function sortProducts(rows: ProductRow[], sortBy: SortKey) {
   const sorted = [...rows]
   sorted.sort((left, right) => {
     if (sortBy === 'alphabetical') {
-      return left.category.localeCompare(right.category, undefined, { sensitivity: 'base' })
+      return left.productName.localeCompare(right.productName, undefined, { sensitivity: 'base' })
     }
 
     if (sortBy === 'latest_purchase') {
@@ -300,7 +309,7 @@ function sortCategories(rows: CategoryRow[], sortBy: SortKey) {
     if (right.purchasedQuantity !== left.purchasedQuantity) {
       return right.purchasedQuantity - left.purchasedQuantity
     }
-    return left.category.localeCompare(right.category, undefined, { sensitivity: 'base' })
+    return left.productName.localeCompare(right.productName, undefined, { sensitivity: 'base' })
   })
   return sorted
 }
@@ -320,34 +329,30 @@ function downloadReportCsv(report: ReportResponse) {
       'Catalogue Number',
       'Specification',
       'Purchased Quantity',
-      'Product Order Count',
-      'Category Order Count',
+      'Contributing Order Count',
       'Total Value',
       'Latest Purchase',
     ],
   ]
 
-  for (const category of report.categories) {
-    for (const product of category.products) {
-      rows.push([
-        report.dealer?.Dealer_Id || '',
-        report.dealer?.Dealer_Name || '',
-        report.dealer?.Dealer_Dealercode || '',
-        report.dealer?.Dealer_City || '',
-        report.summary.dateRange.from || 'All Time',
-        report.summary.dateRange.to || 'All Time',
-        report.summary.statusFilter,
-        category.category,
-        product.productName,
-        product.catalogueNumber,
-        product.specification,
-        product.purchasedQuantity,
-        product.orderCount,
-        category.orderCount,
-        product.totalValue,
-        product.latestPurchaseDate,
-      ])
-    }
+  for (const product of report.products ?? report.categories.flatMap((category) => category.products.map((row) => ({ ...row, category: category.category })))) {
+    rows.push([
+      report.dealer?.Dealer_Id || '',
+      report.dealer?.Dealer_Name || '',
+      report.dealer?.Dealer_Dealercode || '',
+      report.dealer?.Dealer_City || '',
+      report.summary.dateRange.from || 'All Time',
+      report.summary.dateRange.to || 'All Time',
+      report.summary.statusFilter,
+      product.category,
+      product.productName,
+      product.catalogueNumber,
+      product.specification,
+      product.purchasedQuantity,
+      product.orderCount,
+      product.totalValue,
+      product.latestPurchaseDate,
+    ])
   }
 
   const csv = rows.map((row) => row.map(escapeCsvCell).join(',')).join('\n')
@@ -375,7 +380,6 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [tableSearch, setTableSearch] = useState('')
   const [sortBy, setSortBy] = useState<SortKey>('quantity_desc')
-  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({})
   const [expandedProducts, setExpandedProducts] = useState<Record<string, boolean>>({})
 
   const deferredDealerSearch = useDeferredValue(dealerSearch)
@@ -453,11 +457,11 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
     staleTime: 60_000,
   })
 
-  const visibleCategories = useMemo(() => {
-    const categories = reportQuery.data?.categories ?? []
-    const filtered = categories.filter((category) => categoryMatchesSearch(category, deferredTableSearch))
-    return sortCategories(filtered, sortBy)
-  }, [deferredTableSearch, reportQuery.data?.categories, sortBy])
+  const visibleProducts = useMemo(() => {
+    const products = reportQuery.data?.products ?? []
+    const filtered = products.filter((product) => productMatchesSearch(product, deferredTableSearch))
+    return sortProducts(filtered, sortBy)
+  }, [deferredTableSearch, reportQuery.data?.products, sortBy])
 
   if (!hasHydrated || !isAllowedRole) {
     return (
@@ -482,10 +486,6 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
   const dealerTotal = dealersQuery.data?.total ?? 0
   const showDealerLoading = dealersQuery.isFetching && selectorOpen
   const showReportLoading = reportQuery.isLoading || reportQuery.isFetching
-
-  const toggleCategory = (category: string) => {
-    setExpandedCategories((prev) => ({ ...prev, [category]: !prev[category] }))
-  }
 
   const toggleProduct = (productKey: string) => {
     setExpandedProducts((prev) => ({ ...prev, [productKey]: !prev[productKey] }))
@@ -578,7 +578,6 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
                             type="button"
                             onClick={() => {
                               setSelectedDealer(dealer)
-                              setExpandedCategories({})
                               setExpandedProducts({})
                               setSelectorOpen(false)
                             }}
@@ -647,7 +646,6 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
                     type="button"
                     onClick={() => {
                       setSelectedDealer(null)
-                      setExpandedCategories({})
                       setExpandedProducts({})
                     }}
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
@@ -803,19 +801,19 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
           </div>
         )}
 
-        {selectedDealer && !showReportLoading && selectedReport && selectedReport.summary.totalOrders > 0 && visibleCategories.length === 0 && (
+        {selectedDealer && !showReportLoading && selectedReport && selectedReport.summary.totalOrders > 0 && visibleProducts.length === 0 && (
           <div className="mt-4 rounded-3xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
             <AlertCircle size={28} className="mx-auto text-slate-300" />
             <div className="mt-3 text-lg font-semibold text-slate-900">No report rows matched the current filters</div>
-            <div className="mt-2 text-sm text-slate-500">This dealer has matching orders, but none of the category rows matched your current search or item data.</div>
+            <div className="mt-2 text-sm text-slate-500">This dealer has matching orders, but no product rows matched your current search or item data.</div>
           </div>
         )}
 
-        {selectedDealer && !showReportLoading && selectedReport && visibleCategories.length > 0 && (
+        {selectedDealer && !showReportLoading && selectedReport && visibleProducts.length > 0 && (
           <div className="mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div>
-                <div className="text-base font-semibold text-slate-900">Category breakdown</div>
+                <div className="text-base font-semibold text-slate-900">Product purchase totals</div>
                 <div className="mt-1 text-sm text-slate-500">
                   {selectedReport.summary.dateRange.from || 'All Time'} to {selectedReport.summary.dateRange.to || 'Today'} · {selectedReport.summary.totalOrders.toLocaleString('en-IN')} matching orders
                 </div>
@@ -833,133 +831,84 @@ export default function DealerCategoryReport({ allowedRoles = ['admin', 'staff']
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
+                    <th className="px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Product</th>
+                    <th className="px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Catalogue</th>
                     <th className="px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Category</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Purchased Quantity</th>
+                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Total Quantity</th>
                     <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Variants</th>
-                    <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Share</th>
                     <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Latest Purchase</th>
                     <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Sales Value</th>
                     <th className="px-5 py-4 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {visibleCategories.map((category) => {
-                    const isExpanded = !!expandedCategories[category.category]
+                  {visibleProducts.map((product) => {
+                    const isProductExpanded = !!expandedProducts[product.productKey]
                     return (
-                      <Fragment key={category.category}>
-                        <tr key={category.category} className="hover:bg-slate-50/60">
-                          <td className="px-5 py-4 font-medium text-slate-900">{category.category}</td>
-                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
-                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.orderCount.toLocaleString('en-IN')}</td>
-                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.variantCount.toLocaleString('en-IN')}</td>
-                          <td className="px-5 py-4 text-right font-mono text-slate-700">{category.shareOfPurchases.toFixed(2)}%</td>
-                          <td className="px-5 py-4 text-right text-slate-700">{formatDate(category.latestPurchaseDate)}</td>
-                          <td className="px-5 py-4 text-right font-mono text-emerald-700">{formatRupee(category.totalValue)}</td>
+                      <Fragment key={product.productKey}>
+                        <tr key={product.productKey} className="hover:bg-slate-50/60">
+                          <td className="px-5 py-4">
+                            <div className="font-medium text-slate-900">{product.productName}</div>
+                            {product.specification && (
+                              <div className="mt-1 max-w-md truncate text-xs text-slate-500">{product.specification}</div>
+                            )}
+                          </td>
+                          <td className="px-5 py-4 font-mono text-slate-600">{product.catalogueNumber || 'Not available'}</td>
+                          <td className="px-5 py-4 text-slate-600">{product.category || 'Uncategorized'}</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{product.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
+                          <td className="px-5 py-4 text-right font-mono text-slate-700">{product.orderCount.toLocaleString('en-IN')}</td>
+                          <td className="px-5 py-4 text-right text-slate-700">{formatDate(product.latestPurchaseDate)}</td>
+                          <td className="px-5 py-4 text-right font-mono text-emerald-700">{formatRupee(product.totalValue)}</td>
                           <td className="px-5 py-4 text-right">
                             <button
                               type="button"
-                              onClick={() => toggleCategory(category.category)}
+                              onClick={() => toggleProduct(product.productKey)}
                               className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                             >
-                              {isExpanded ? 'Hide' : 'View'}
-                              <ChevronRight size={13} className={isExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} />
+                              {isProductExpanded ? 'Hide' : 'View'}
+                              <ChevronRight size={13} className={isProductExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} />
                             </button>
                           </td>
                         </tr>
 
-                        {isExpanded && (
+                        {isProductExpanded && (
                           <tr>
                             <td colSpan={8} className="bg-slate-50/70 px-5 py-5">
                               <div className="rounded-2xl border border-slate-200 bg-white">
-                                <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">Products in {category.category}</div>
+                                <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">Contributing orders for {product.productName}</div>
                                 <div className="overflow-x-auto">
                                   <table className="min-w-full text-sm">
                                     <thead className="bg-slate-50 text-slate-500">
                                       <tr>
-                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Product</th>
+                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Order</th>
+                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Date</th>
                                         <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Catalogue</th>
-                                        <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Specification</th>
                                         <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Quantity</th>
-                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
                                         <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Value</th>
-                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Latest</th>
-                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Orders</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Status</th>
+                                        <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Action</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                      {category.products.map((product) => {
-                                        const isProductExpanded = !!expandedProducts[product.productKey]
-                                        return (
-                                          <Fragment key={product.productKey}>
-                                            <tr key={product.productKey}>
-                                              <td className="px-4 py-3 font-medium text-slate-900">{product.productName}</td>
-                                              <td className="px-4 py-3 font-mono text-slate-600">{product.catalogueNumber || 'Not available'}</td>
-                                              <td className="px-4 py-3 text-slate-600">{product.specification || 'Not available'}</td>
-                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{product.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
-                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{product.orderCount.toLocaleString('en-IN')}</td>
-                                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{formatRupee(product.totalValue)}</td>
-                                              <td className="px-4 py-3 text-right text-slate-700">{formatDate(product.latestPurchaseDate)}</td>
-                                              <td className="px-4 py-3 text-right">
-                                                <button
-                                                  type="button"
-                                                  onClick={() => toggleProduct(product.productKey)}
-                                                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                                                >
-                                                  {isProductExpanded ? 'Hide' : 'View'}
-                                                  <ChevronRight size={13} className={isProductExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} />
-                                                </button>
-                                              </td>
-                                            </tr>
-
-                                            {isProductExpanded && (
-                                              <tr>
-                                                <td colSpan={8} className="bg-slate-50 px-4 py-4">
-                                                  <div className="rounded-xl border border-slate-200 bg-white">
-                                                    <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">Contributing orders</div>
-                                                    <div className="overflow-x-auto">
-                                                      <table className="min-w-full text-sm">
-                                                        <thead className="bg-slate-50 text-slate-500">
-                                                          <tr>
-                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Order</th>
-                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Date</th>
-                                                            <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em]">Dealer</th>
-                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Quantity</th>
-                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Value</th>
-                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Status</th>
-                                                            <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.14em]">Action</th>
-                                                          </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-slate-100">
-                                                          {product.orders.map((order) => (
-                                                            <tr key={`${product.productKey}-${order.orderId}`}>
-                                                              <td className="px-4 py-3 font-mono text-slate-700">{order.orderId}</td>
-                                                              <td className="px-4 py-3 text-slate-600">{formatDate(order.orderDate)}</td>
-                                                              <td className="px-4 py-3 text-slate-600">{order.dealerName}</td>
-                                                              <td className="px-4 py-3 text-right font-mono text-slate-700">{order.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
-                                                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{formatRupee(order.totalValue)}</td>
-                                                              <td className="px-4 py-3 text-right text-slate-600">{order.statusLabel}</td>
-                                                              <td className="px-4 py-3 text-right">
-                                                                <button
-                                                                  type="button"
-                                                                  onClick={() => router.push(`/orders/${order.orderId}`)}
-                                                                  className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                                                                >
-                                                                  View Order
-                                                                </button>
-                                                              </td>
-                                                            </tr>
-                                                          ))}
-                                                        </tbody>
-                                                      </table>
-                                                    </div>
-                                                  </div>
-                                                </td>
-                                              </tr>
-                                            )}
-                                          </Fragment>
-                                        )
-                                      })}
+                                      {product.orders.map((order) => (
+                                        <tr key={`${product.productKey}-${order.orderId}`}>
+                                          <td className="px-4 py-3 font-mono text-slate-700">{order.orderId}</td>
+                                          <td className="px-4 py-3 text-slate-600">{formatDate(order.orderDate)}</td>
+                                          <td className="px-4 py-3 font-mono text-slate-600">{order.catalogueNumber || product.catalogueNumber || 'Not available'}</td>
+                                          <td className="px-4 py-3 text-right font-mono text-slate-700">{order.purchasedQuantity.toLocaleString('en-IN')} pieces</td>
+                                          <td className="px-4 py-3 text-right font-mono text-emerald-700">{formatRupee(order.totalValue)}</td>
+                                          <td className="px-4 py-3 text-right text-slate-600">{order.statusLabel}</td>
+                                          <td className="px-4 py-3 text-right">
+                                            <button
+                                              type="button"
+                                              onClick={() => router.push(`/orders/${order.orderId}`)}
+                                              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                            >
+                                              View Order
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      ))}
                                     </tbody>
                                   </table>
                                 </div>

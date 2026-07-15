@@ -97,6 +97,7 @@ export default function Login() {
         if (roletype === "3") {
           localStorage.setItem("AdminData", JSON.stringify(userData))
         }
+        window.dispatchEvent(new Event("omsons-auth-changed"))
 
         setEmail("")
         setPassword("")

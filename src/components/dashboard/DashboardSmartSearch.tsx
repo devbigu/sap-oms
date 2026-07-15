@@ -317,13 +317,13 @@ export default function DashboardSmartSearch({
   return (
     <div ref={rootRef} className="relative ml-auto flex w-full max-w-[640px] min-w-0 flex-1">
       <form
-        className="flex h-11 w-full items-stretch overflow-hidden rounded-xl border border-white/10 bg-white/95 shadow-sm backdrop-blur"
+        className="flex h-[38px] w-full items-stretch overflow-hidden rounded-[11px] border border-white/10 bg-white/[0.09] shadow-sm backdrop-blur transition focus-within:border-indigo-400/60 focus-within:bg-white/[0.12]"
         onSubmit={(event) => {
           event.preventDefault();
           submitSearch(resolvedActiveIndex >= 0 ? flatResults[resolvedActiveIndex] : null);
         }}
       >
-        <div className="flex items-center px-3 text-slate-400">
+        <div className="flex items-center px-3 text-white/45">
           <Search className="h-4 w-4" />
         </div>
         <input
@@ -343,11 +343,11 @@ export default function DashboardSmartSearch({
           }}
           onKeyDown={handleKeyDown}
           autoComplete="off"
-          className="min-w-0 flex-1 bg-transparent pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
+          className="min-w-0 flex-1 bg-transparent pr-3 text-[13.5px] text-white outline-none placeholder:text-white/35"
         />
         <button
           type="submit"
-          className="flex items-center justify-center border-l border-slate-200/80 px-4 text-slate-600 transition hover:bg-slate-100"
+          className="flex items-center justify-center border-l border-white/10 px-4 text-white/60 transition hover:bg-white/10 hover:text-white"
           aria-label="Search"
         >
           {entityLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}

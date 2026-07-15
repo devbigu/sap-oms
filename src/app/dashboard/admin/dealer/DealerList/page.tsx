@@ -41,22 +41,26 @@ type Dealer = {
 
 type DealerResponse = {
   data: Dealer[]
-  total: number
-  last_page: number
+  count?: number
+  total?: number
+  last_page?: number
 }
 
 type AppRole = "admin" | "staff" | "accountant"
 
 const SHIMMER = "animate-pulse bg-gray-200 rounded"
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
-const ITEMS_PER_PAGE = 10
-const BULK_DEALER_FETCH_LIMIT = 1000
+const ITEMS_PER_PAGE = 20
 const getDealerEditRoute = (dealerId: string) => `/dashboard/admin/dealer/${encodeURIComponent(dealerId)}`
 const getDealerViewRoute = (dealerId: string) => `${getDealerEditRoute(dealerId)}/view`
 const getStaffDealerRoute = (dealerId: string) => `/dashboard/staff/dealer/${encodeURIComponent(dealerId)}`
 
 function statusBadge(s: string) {
   return dealerStatusBadge(normalizeDealerStatus(s))
+}
+
+function getDealerResponseTotal(response: DealerResponse | undefined, fallback: number) {
+  return Number(response?.total ?? response?.count ?? fallback) || fallback
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -155,12 +159,12 @@ export default function DealerListPage() {
   }, [response?.data, statusMap])
 
   const total =
-    typeof response?.total === "number"
-      ? response.total
+    response
+      ? getDealerResponseTotal(response, (page - 1) * ITEMS_PER_PAGE + data.length)
       : (page - 1) * ITEMS_PER_PAGE + data.length
 
   const totalPages =
-    response?.last_page ||
+    Number(response?.last_page) ||
     Math.ceil(total / ITEMS_PER_PAGE) ||
     (data.length < ITEMS_PER_PAGE ? page : page + 1)
 
@@ -197,14 +201,15 @@ export default function DealerListPage() {
   }
 
   const fetchAllDealerIds = async () => {
-    const dealerUrl = (pageNumber: number) =>
-      `${BACKEND_URL}/dealerpegination?page=${pageNumber}&limit=${BULK_DEALER_FETCH_LIMIT}&search=`
+    const dealerUrl = (pageNumber: number) => `${BACKEND_URL}/dealerpegination?page=${pageNumber}&search=`
 
     const firstPage = await fetchJson<DealerResponse>(dealerUrl(1))
     const dealerIds = new Set(
       (firstPage.data ?? []).map((dealer) => String(dealer.Dealer_Id ?? "").trim()).filter(Boolean)
     )
-    const lastPage = Math.max(1, Number(firstPage.last_page) || 1)
+    const totalDealerCount = getDealerResponseTotal(firstPage, dealerIds.size)
+    const detectedPageSize = Math.max(1, firstPage.data?.length || ITEMS_PER_PAGE)
+    const lastPage = Math.max(1, Number(firstPage.last_page) || Math.ceil(totalDealerCount / detectedPageSize))
 
     if (lastPage > 1) {
       const remainingPages = await Promise.all(
@@ -218,6 +223,20 @@ export default function DealerListPage() {
           if (dealerId) dealerIds.add(dealerId)
         })
       })
+    }
+
+    let nextPage = lastPage + 1
+    while (dealerIds.size < totalDealerCount) {
+      const nextResponse = await fetchJson<DealerResponse>(dealerUrl(nextPage))
+      const pageDealers = nextResponse.data ?? []
+      if (pageDealers.length === 0) break
+
+      pageDealers.forEach((dealer) => {
+        const dealerId = String(dealer.Dealer_Id ?? "").trim()
+        if (dealerId) dealerIds.add(dealerId)
+      })
+
+      nextPage += 1
     }
 
     return Array.from(dealerIds)

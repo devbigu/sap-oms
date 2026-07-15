@@ -351,6 +351,94 @@ test("All eligible orders contribute to the all-status report", () => {
   assert.equal(report.summary.totalSalesValue, 3225);
 });
 
+test("Report exposes product-wise totals as the primary rows", () => {
+  const report = buildDealerCategoryReport({
+    dealer: { Dealer_Id: "D-1", Dealer_Name: "Desk Scientific" },
+    orders: [
+      { order_id: "O-1", order_dealer: "D-1", order_date: "2026-01-01", accept_order: "1", del_status: "0" },
+      { order_id: "O-2", order_dealer: "D-1", order_date: "2026-01-02", accept_order: "1", del_status: "0" },
+    ],
+    orderItemsByOrderId: {
+      "O-1": [
+        { orderdata_id: "L-1", orderdata_cat_no: "2/1", product_name: "Flask", orderdata_item_quantity: 10, packSize: 1 },
+        { orderdata_id: "L-2", orderdata_cat_no: "1/1", product_name: "Burette", orderdata_item_quantity: 20, packSize: 1 },
+      ],
+      "O-2": [
+        { orderdata_id: "L-3", orderdata_cat_no: "2 / 1", product_name: "Flask variant spelling", orderdata_item_quantity: 2, packSize: 1 },
+        { orderdata_id: "L-4", orderdata_cat_no: "3/1", product_name: "Test Tube", orderdata_item_quantity: 30, packSize: 1 },
+      ],
+    },
+    catalogueProducts: reportCatalogue,
+    statusFilter: "all",
+  });
+
+  const flask = report.products.find((product) => product.normalizedCatalogueNumber === "21");
+  const burette = report.products.find((product) => product.normalizedCatalogueNumber === "11");
+  const testTube = report.products.find((product) => product.normalizedCatalogueNumber === "31");
+
+  assert.equal(report.products.length, 3);
+  assert.equal(flask?.purchasedQuantity, 12);
+  assert.equal(flask?.orderCount, 2);
+  assert.equal(burette?.purchasedQuantity, 20);
+  assert.equal(testTube?.purchasedQuantity, 30);
+});
+
+test("Different catalogue numbers remain separate even when names match", () => {
+  const report = buildDealerCategoryReport({
+    dealer: { Dealer_Id: "D-1", Dealer_Name: "Desk Scientific" },
+    orders: [
+      { order_id: "O-1", order_dealer: "D-1", order_date: "2026-01-01", accept_order: "1", del_status: "0" },
+    ],
+    orderItemsByOrderId: {
+      "O-1": [
+        { orderdata_id: "L-1", orderdata_cat_no: "A100", product_name: "Volumetric Flask", orderdata_item_quantity: 1, packSize: 1 },
+        { orderdata_id: "L-2", orderdata_cat_no: "A200", product_name: "Volumetric Flask", orderdata_item_quantity: 1, packSize: 1 },
+      ],
+    },
+    catalogueProducts: [],
+    statusFilter: "all",
+  });
+
+  assert.equal(report.products.length, 2);
+  assert.deepEqual(report.products.map((product) => product.catalogueNumber).sort(), ["A100", "A200"]);
+});
+
+test("Selected dealer filtering excludes orders returned for another dealer", () => {
+  const report = buildDealerCategoryReport({
+    dealer: { Dealer_Id: "D-1", Dealer_Name: "Desk Scientific" },
+    orders: [
+      { order_id: "O-1", order_dealer: "D-1", order_date: "2026-01-01", accept_order: "1", del_status: "0" },
+      { order_id: "O-2", order_dealer: "D-2", order_date: "2026-01-02", accept_order: "1", del_status: "0" },
+    ],
+    orderItemsByOrderId: {
+      "O-1": [{ orderdata_id: "L-1", orderdata_cat_no: "2/1", orderdata_item_quantity: 2, packSize: 1 }],
+      "O-2": [{ orderdata_id: "L-2", orderdata_cat_no: "2/1", orderdata_item_quantity: 99, packSize: 1 }],
+    },
+    catalogueProducts: reportCatalogue,
+    statusFilter: "all",
+  });
+
+  assert.equal(report.summary.totalOrders, 1);
+  assert.equal(report.summary.totalPurchasedQuantity, 2);
+});
+
+test("All-time reports include eligible orders with missing dates", () => {
+  const report = buildDealerCategoryReport({
+    dealer: { Dealer_Id: "D-1", Dealer_Name: "Desk Scientific" },
+    orders: [
+      { order_id: "O-1", order_dealer: "D-1", accept_order: "1", del_status: "0" },
+    ],
+    orderItemsByOrderId: {
+      "O-1": [{ orderdata_id: "L-1", orderdata_cat_no: "2/1", orderdata_item_quantity: 2, packSize: 1 }],
+    },
+    catalogueProducts: reportCatalogue,
+    statusFilter: "all",
+  });
+
+  assert.equal(report.summary.totalOrders, 1);
+  assert.equal(report.products[0]?.purchasedQuantity, 2);
+});
+
 test("Accepted filter excludes awaiting orders", () => {
   const fixture = buildReportFixture();
   const report = buildDealerCategoryReport({

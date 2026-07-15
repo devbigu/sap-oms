@@ -117,10 +117,25 @@ const pendingProductsQueryClient = new QueryClient({
   },
 });
 
-function resolveDashboardActor(): DashboardActor | null {
+function resolveDashboardActor(expectedRole: Role): DashboardActor | null {
   if (typeof window === "undefined") return null;
 
   try {
+    if (expectedRole === "dealer") {
+      const userRaw = localStorage.getItem("UserData");
+      if (userRaw) {
+        const parsed = JSON.parse(userRaw);
+        if (parsed?.Dealer_Id) {
+          return {
+            role: "dealer",
+            id: String(parsed.Dealer_Id),
+            name: parsed.Dealer_Name || "Dealer",
+          };
+        }
+      }
+      return null;
+    }
+
     const staffRaw = localStorage.getItem("staffData");
     if (staffRaw) {
       const parsed = JSON.parse(staffRaw);
@@ -137,14 +152,6 @@ function resolveDashboardActor(): DashboardActor | null {
     const userRaw = localStorage.getItem("UserData");
     if (userRaw) {
       const parsed = JSON.parse(userRaw);
-      if (parsed?.Dealer_Id) {
-        return {
-          role: "dealer",
-          id: String(parsed.Dealer_Id),
-          name: parsed.Dealer_Name || "Dealer",
-        };
-      }
-
       if (parsed?.staff_id) {
         return {
           role: parsed.staff_roletype === "0" ? "admin" : "staff",
@@ -242,7 +249,7 @@ function ProductMetric({
 }
 
 function PendingProductsDashboardInner({ role }: { role: Role }) {
-  const [actor] = useState<DashboardActor | null>(() => resolveDashboardActor());
+  const [actor] = useState<DashboardActor | null>(() => resolveDashboardActor(role));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
