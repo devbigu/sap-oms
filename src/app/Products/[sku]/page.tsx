@@ -753,15 +753,15 @@ export default function ProductDetailsPage() {
                           </td>
 
                           <td style={{ padding: "11px 16px", color: "#374151", fontWeight: 600 , display:"none" }}>
-                            {packPaise ? fmt(packPaise) : "On request"}
+                            {packPaise ? fmt(packPaise) : "—"}
                           </td>
 
                           <td style={{ padding: "11px 16px", color: "#1e1e1e", fontSize: 12 }}>
-                            {unitPaise ? fmt(unitPaise) : "On request"}
+                            {unitPaise ? fmt(unitPaise) : "—"}
                           </td>
 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>
-                            <span style={{ fontWeight: 700, color: totalPaise ? "#15803d" : "#94a3b8" }}>{totalPaise ? fmt(totalPaise) : "On request"}</span>
+                            <span style={{ fontWeight: 700, color: totalPaise ? "#15803d" : "#94a3b8" }}>{totalPaise ? fmt(totalPaise) : "—"}</span>
                           </td>
 
                           <td style={{ padding: "11px 16px" }} onClick={e => e.stopPropagation()}>

@@ -12,7 +12,7 @@ import { useCartStore } from "@/Store/store"
 import { useRouter } from 'next/navigation'
 
 // ─────────────────────────────────────────────────────────────
-// TYPES  (matches nested_omsons_products.json schema)
+// TYPES  (matches omsons_products_from_excel_with_images.json schema)
 // ─────────────────────────────────────────────────────────────
 type Variant = {
   id: string
@@ -177,7 +177,7 @@ const Header = () => {
 
   // ── Load products once & build search index ─────────────────
   useEffect(() => {
-    fetch("/data/nested_omsons_products.json")
+    fetch("/data/omsons_products_from_excel_with_images.json")
       .then(r => r.json())
       .then((raw: Product[]) => {
         const indexed = raw.map(p => {

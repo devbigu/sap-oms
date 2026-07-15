@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import { Suspense } from 'react';
-import { SIDEBAR_CATEGORIES } from '@/lib/categories';
+import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from '@/lib/categories';
 import {
   getCatalogueProductDescriptor,
   groupProductsBySection,
@@ -47,8 +47,7 @@ type Product = {
 // ─────────────────────────────────────────────────────────────
 
 function matchesSidebarCat(product: Product, label: string): boolean {
-  const exactCats = SIDEBAR_CATEGORIES[label] ?? [];
-  return (product.categories ?? []).some(c => exactCats.includes(c));
+  return matchesCategory(compactCategoryList([product.category, ...(product.categories ?? [])]), label);
 }
 
 function countForSidebarCat(products: Product[], label: string): number {

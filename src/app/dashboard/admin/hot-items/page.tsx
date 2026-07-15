@@ -283,7 +283,7 @@ function buildCatalogOptions(products: CatalogueProductRecord[]): CatalogOption[
 
 async function fetchCatalogueProducts(): Promise<CatalogueProductRecord[]> {
   const json = await fetchJson<unknown>(
-    "/data/nested_omsons_products.json",
+    "/data/omsons_products_from_excel_with_images.json",
     { cache: "no-store" },
     "Catalogue JSON"
   );

@@ -3,9 +3,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import axios from 'axios';
-import { SIDEBAR_CATEGORIES, labelFromSlug, matchesCategory, slugify } from '@/lib/categories';
+import { SIDEBAR_CATEGORIES, compactCategoryList, labelFromSlug, matchesCategory, slugify } from '@/lib/categories';
 
-type Variant = { sku: string; specs: Record<string, string>; pack: number; price: number; inStock: boolean; images: string[] };
+type Variant = { sku: string; specs: Record<string, string>; pack: number; price: number | null; inStock: boolean; images: string[] };
 type Product  = { id: string; sku: string; name: string; category: string; categories: string[]; features: string[]; images: string[]; variants?: Variant[] };
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -16,7 +16,9 @@ function getImage(p: Product) {
   return (p.images ?? []).find(Boolean) ?? null;
 }
 function getLowestPaise(p: Product) {
-  const prices = (p.variants ?? []).map(v => v.price * 100).filter(x => x > 0);
+  const prices = (p.variants ?? [])
+    .map(v => (typeof v.price === 'number' && v.price > 0 ? v.price * 100 : 0))
+    .filter(x => x > 0);
   return prices.length ? Math.min(...prices) : null;
 }
 
@@ -107,14 +109,14 @@ export default function CategoryPage({ params }: { params: Promise<{ slug: strin
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
-    axios.get('/data/nested_omsons_products.json')
+    axios.get('/data/omsons_products_from_excel_with_images.json')
       .then(res => { setAllProducts(res.data); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
   const filtered = useMemo(() => {
     if (!label) return [];
-    let d = allProducts.filter(p => matchesCategory(p.categories ?? [], label));
+    let d = allProducts.filter(p => matchesCategory(compactCategoryList([p.category, ...(p.categories ?? [])]), label));
     if (inStockOnly) d = d.filter(p => p.variants?.some(v => v.inStock) ?? false);
     if (sortBy === 'price_asc')  d = [...d].sort((a, b) => (getLowestPaise(a) ?? Infinity) - (getLowestPaise(b) ?? Infinity));
     if (sortBy === 'price_desc') d = [...d].sort((a, b) => (getLowestPaise(b) ?? 0) - (getLowestPaise(a) ?? 0));

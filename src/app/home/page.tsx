@@ -339,7 +339,7 @@ export default function Page() {
   // Fallback: first 6 products that have images in the local catalog
   useEffect(() => {
     Promise.all([
-      axios.get<JsonProduct[]>("/data/nested_omsons_products.json"),
+      axios.get<JsonProduct[]>("/data/omsons_products_from_excel_with_images.json"),
       fetch("/api/hot-items", { cache: "no-store" })
         .then((r) => r.json())
         .catch(() => ({ success: false, data: { items: [] } })),
