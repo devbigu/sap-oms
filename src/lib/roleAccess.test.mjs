@@ -58,6 +58,8 @@ assert.equal(resolveStoredAuth(storage({ UserData: json({ name: "Mystery" }), ro
 
 assert.equal(resolveStoredAuth(storage({ UserData: json({ name: "A" }), roletype: "3" })).role, "admin");
 assert.equal(resolveStoredAuth(storage({ UserData: json({ staff_id: "s1", staff_roletype: "1" }) })).role, "staff");
+assert.equal(resolveStoredAuth(storage({ UserData: json({ staff_id: "s2", staff_roletype: "2" }), roletype: "1" })).role, "staff");
+assert.equal(resolveStoredAuth(storage({ staffData: json({ staff_id: "s3", staff_roletype: "2" }) })).role, "staff");
 assert.equal(resolveStoredAuth(storage({ UserData: json({ Dealer_Id: "d1", Dealer_Name: "D" }) })).role, "dealer");
 
 assert.equal(canAccessRoute("admin", "/dashboard/admin/custom-discount-approvals"), true);

@@ -1,6 +1,7 @@
 'use client'
 
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import {
@@ -16,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { resolveOrderAmounts } from '@/lib/orderAmounts'
+import { resolveStoredAuth } from '@/lib/roleAccess'
 
 type AccountBook = {
   bookedCount?: number
@@ -151,7 +153,15 @@ function orderAmount(order: RawOrder) {
   return resolveOrderAmounts(order).netPayable
 }
 
+function isStaffLedgerSession() {
+  if (typeof window === 'undefined') return false
+  const session = resolveStoredAuth(window.localStorage)
+  return session.status === 'authenticated' && session.role === 'staff'
+}
+
 export default function DealerLedgerShellPage() {
+  const router = useRouter()
+  const [redirectingStaff, setRedirectingStaff] = useState(() => isStaffLedgerSession())
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
@@ -169,6 +179,12 @@ export default function DealerLedgerShellPage() {
   const [toast, setToast] = useState<Toast | null>(null)
   const objectUrls = useRef<string[]>([])
 
+  useEffect(() => {
+    if (!isStaffLedgerSession()) return
+    setRedirectingStaff(true)
+    router.replace('/Pages/ledger')
+  }, [router])
+
   const { data, isLoading, error } = useQuery<LedgerResponse>({
     queryKey: ['dealer-ledger-shell'],
     queryFn: async () => {
@@ -176,6 +192,7 @@ export default function DealerLedgerShellPage() {
       return res.data
     },
     staleTime: 5 * 60 * 1000,
+    enabled: !redirectingStaff,
   })
 
   useEffect(() => {
@@ -386,6 +403,16 @@ export default function DealerLedgerShellPage() {
       type: 'success',
       text: savedToApi ? 'Payment recorded' : 'Payment saved locally for demo',
     })
+  }
+
+  if (redirectingStaff) {
+    return (
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="mx-auto max-w-7xl rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+          Opening assigned dealer ledger...
+        </div>
+      </div>
+    )
   }
 
   if (error) {

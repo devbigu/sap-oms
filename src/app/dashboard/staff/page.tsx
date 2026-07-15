@@ -28,7 +28,7 @@ const year = new Date().getFullYear()
 
 const NAV_ITEMS = [
   { label: "Dealer List",     href: "/dashboard/admin/dealer/DealerList",        icon: <LayoutDashboard size={15} /> },
-  { label: "Dealer Ledger",   href: "/dashboard/admin/ledger",                   icon: <BookOpen size={15} /> },
+  { label: "Dealer Ledger",   href: "/Pages/ledger",                             icon: <BookOpen size={15} /> },
   { label: "Add Dealer",      href: "/dashboard/admin/dealer/AddDealerForm",     icon: <UserRoundPlus size={15} /> },
   { label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <ClipboardList size={15} /> },
   { label: "Order List",      href: "/Pages/Ordermanagement",                    icon: <ClipboardList size={15} /> },
@@ -695,7 +695,7 @@ function ExecutiveDashboard() {
                 <div className={`stat-badge ${nearCreditLimitDealers.length > 0 ? "badge-red" : "badge-blue"}`}>
                   {nearCreditLimitDealers.length} near limit
                 </div>
-                <Link href="/dashboard/admin/ledger" className="quick-action-btn">+ Open ledger</Link>
+                <Link href="/Pages/ledger" className="quick-action-btn">+ Open ledger</Link>
               </div>
             </div>
 

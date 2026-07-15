@@ -82,6 +82,15 @@ function normalizeRoleFromRoleType(roletype: unknown): AppRole | null {
   return null;
 }
 
+function normalizeRoleFromStaffRoleType(staffRoletype: unknown): AppRole | null {
+  const value = String(staffRoletype ?? "").trim().toLowerCase();
+  if (value === "0" || value === "admin") return "admin";
+  if (value === "1" || value === "2" || value === "staff" || value === "executive" || value === "field executive") {
+    return "staff";
+  }
+  return null;
+}
+
 function session(role: AppRole, user: StoredUser, roletype?: unknown): AuthSession {
   return {
     status: "authenticated",
@@ -105,7 +114,7 @@ export function resolveStoredAuth(storage: AuthStorage): AuthSession {
 
     const staff = parseObject(storage, "staffData");
     if (staff?.staff_id) {
-      const role = normalizeRoleFromRoleType(staff.staff_roletype);
+      const role = normalizeRoleFromStaffRoleType(staff.staff_roletype);
       if (role === "admin" || role === "staff") return session(role, staff, staff.staff_roletype);
       return { status: "unauthenticated", reason: "unsupported-role" };
     }
@@ -113,7 +122,10 @@ export function resolveStoredAuth(storage: AuthStorage): AuthSession {
     const userData = parseObject(storage, "UserData");
     if (userData?.Dealer_Id) return session("dealer", userData, "2");
     if (userData?.staff_id) {
-      const role = normalizeRoleFromRoleType(userData.staff_roletype);
+      const loginRole = normalizeRoleFromRoleType(storage.getItem("roletype"));
+      const role = loginRole === "admin" || loginRole === "staff"
+        ? loginRole
+        : normalizeRoleFromStaffRoleType(userData.staff_roletype);
       if (role === "admin" || role === "staff") return session(role, userData, userData.staff_roletype);
       return { status: "unauthenticated", reason: "unsupported-role" };
     }
