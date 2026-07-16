@@ -103,11 +103,42 @@ test("slab discount is not double-counted in summary rows", () => {
   assert.deepEqual(rows.map((row) => row.label), [
     "Gross Amount",
     "Base Discount (50%)",
-    "slab discount (2%)",
+    "Slab Discount (2%)",
     "Total Discount",
     "Net Payable",
   ]);
   assert.equal(rows.find((row) => row.key === "total")?.amount, 327138.48);
+});
+
+test("OM/2026/3856 slab fixture preserves total discount and net payable", () => {
+  const breakdown = orderAmounts.resolveOrderDiscountBreakdown({
+    order_id: "3856",
+    grossAmount: 1098300,
+    baseDiscountPercent: 50,
+    baseDiscountAmount: 549150,
+    postBaseAmount: 549150,
+    additionalDiscountType: "slab",
+    slabDiscountPercent: 5,
+    slabDiscountAmount: 27457.50,
+    discountAmount: 576607.50,
+    netPayableAmount: 521692.50,
+  });
+
+  assert.equal(breakdown.grossAmount, 1098300);
+  assert.equal(breakdown.baseDiscountAmount, 549150);
+  assert.equal(breakdown.additionalDiscountType, "slab");
+  assert.equal(breakdown.slabDiscountPercent, 5);
+  assert.equal(breakdown.slabDiscountAmount, 27457.50);
+  assert.equal(breakdown.discountAmount, 576607.50);
+  assert.equal(breakdown.netPayableAmount, 521692.50);
+  assert.equal(breakdown.discountAmount, breakdown.baseDiscountAmount + breakdown.slabDiscountAmount);
+
+  const compactRows = orderAmounts.getCompactOrderDiscountRows(breakdown);
+  assert.deepEqual(compactRows.map((row) => [row.label, row.amount]), [
+    ["Base 50%", 549150],
+    ["Slab 5%", 27457.50],
+    ["Total", 576607.50],
+  ]);
 });
 
 test("custom discount is not double-counted in summary rows", () => {

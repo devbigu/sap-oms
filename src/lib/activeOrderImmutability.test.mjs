@@ -20,6 +20,11 @@ async function transpileModule(filePath, replacements) {
 
 const activePeriodUrl = pathToFileURL(path.resolve("src/lib/activeOrderPeriod.js")).href;
 const staffScopeUrl = pathToFileURL(path.resolve("src/lib/staffOrderScope.js")).href;
+const snapshotStubUrl = `data:text/javascript,${encodeURIComponent(`
+  export async function readActiveOrderHeadersSnapshot() {
+    return { key: "stub", state: "miss", rows: [], diagnostics: null };
+  }
+`)}`;
 const paginationUrl = await transpileModule(path.resolve("src/lib/activeOrdersPagination.ts"), [
   [/from\s+["']@\/lib\/activeOrderPeriod\.js["']/g, `from "${activePeriodUrl}"`],
   [/from\s+["']@\/lib\/staffOrderScope\.js["']/g, `from "${staffScopeUrl}"`],
@@ -29,6 +34,7 @@ const dealerViewUrl = await transpileModule(path.resolve("src/lib/dealerOrderVie
 ]);
 const accessUrl = await transpileModule(path.resolve("src/lib/activeOrderAccess.ts"), [
   [/from\s+["']@\/lib\/activeOrderPeriod\.js["']/g, `from "${activePeriodUrl}"`],
+  [/from\s+["']@\/lib\/activeOrderSnapshot["']/g, `from "${snapshotStubUrl}"`],
 ]);
 const pagination = await import(paginationUrl);
 const dealerView = await import(dealerViewUrl);

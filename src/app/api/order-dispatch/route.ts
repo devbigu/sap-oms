@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveActiveOrder } from "@/lib/activeOrderAccess";
 import { MongoServerError } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { invalidateActiveOrderSnapshots } from "@/lib/activeOrderSnapshot";
+import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
 import {
   buildDispatchIdentity,
   buildLegacyDispatchSeed,
@@ -639,6 +641,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    invalidatePendingProductsCache();
+    await invalidateActiveOrderSnapshots("order dispatch updated").catch((error) => {
+      console.warn("[POST /api/order-dispatch] active-order invalidation failed", error);
+    });
     return NextResponse.json({ success: true, data: toResponseRecord(updated) });
   } catch (error) {
     console.error("[POST /api/order-dispatch]", error);

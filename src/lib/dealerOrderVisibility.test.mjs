@@ -91,10 +91,11 @@ test("shared Pending Orders page permits Dealer scope and keys count/list reques
 
 test("Dealer dashboard search scopes headers before fetching item details and isolates item cache", async () => {
   const source = await fs.readFile(path.resolve("src/app/api/dashboard-search/route.ts"), "utf8");
-  const ownershipFilter = source.indexOf('filterOrdersForActor({ role: "dealer"');
+  const ownershipFilter = source.indexOf("const scoped = filterOrdersForActor({");
   const detailBuild = source.indexOf("buildItemSummariesByOrderId(candidateOrders");
   assert.ok(ownershipFilter >= 0);
   assert.ok(detailBuild > ownershipFilter);
+  assert.match(source, /role: actor\.role[\s\S]*actorId: actor\.actorId[\s\S]*assignedDealerIds/);
   assert.match(source, /ACTIVE_ORDER_PERIOD_VERSION}:\$\{actor\.role}:\$\{actor\.actorId/);
 });
 

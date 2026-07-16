@@ -1,6 +1,7 @@
 import { Db } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
+import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
 import {
   OrderAmountSource,
   resolveOrderAmounts,
@@ -181,15 +182,18 @@ async function fetchLiveSnapshot(): Promise<LedgerSnapshot> {
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const [dealers, orders] = await Promise.all([
+    const [dealers, activeOrders] = await Promise.all([
       fetchPaginated("dealerpegination", controller.signal),
-      fetchPaginated("orderpegination", controller.signal),
+      loadActiveOrderHeaders({
+        source: "orderpegination",
+        actor: { role: "admin", actorId: "" },
+      }),
     ]);
 
     return {
       updatedAt: new Date().toISOString(),
       dealers,
-      orders: filterActiveOrders(orders),
+      orders: activeOrders.rows,
     };
   } finally {
     clearTimeout(timer);

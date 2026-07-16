@@ -73,6 +73,12 @@ type DiscountSummaryRow = {
   amount: number;
 };
 
+export type CompactOrderDiscountRow = {
+  key: "base" | "slab" | "custom" | "none" | "additional" | "total";
+  label: string;
+  amount?: number;
+};
+
 type AdditionalDiscountDisplaySource = {
   additionalDiscountType: AdditionalDiscountType;
   slabDiscountPercent: number;
@@ -427,8 +433,8 @@ export function getOrderDiscountSummaryRows(
     rows.push({
       key: "slab",
       label: breakdown.slabDiscountPercent > 0
-        ? `slab discount (${breakdown.slabDiscountPercent}%)`
-        : "slab discount",
+        ? `Slab Discount (${breakdown.slabDiscountPercent}%)`
+        : "Slab Discount",
       amount: breakdown.slabDiscountAmount,
     });
   }
@@ -445,6 +451,56 @@ export function getOrderDiscountSummaryRows(
     { key: "total", label: "Total Discount", amount: breakdown.discountAmount },
     { key: "net", label: labels?.net ?? "Net Payable", amount: breakdown.netPayableAmount }
   );
+
+  return rows;
+}
+
+export function getCompactOrderDiscountRows(
+  breakdown: ResolvedOrderDiscountBreakdown
+): CompactOrderDiscountRow[] {
+  const rows: CompactOrderDiscountRow[] = [
+    {
+      key: "base",
+      label: breakdown.baseDiscountPercent !== undefined
+        ? `Base ${breakdown.baseDiscountPercent}%`
+        : "Base",
+      amount: breakdown.baseDiscountAmount,
+    },
+  ];
+
+  if (breakdown.additionalDiscountType === "slab" && breakdown.slabDiscountAmount > 0) {
+    rows.push({
+      key: "slab",
+      label: breakdown.slabDiscountPercent > 0
+        ? `Slab ${breakdown.slabDiscountPercent}%`
+        : "Slab",
+      amount: breakdown.slabDiscountAmount,
+    });
+  } else if (breakdown.additionalDiscountType === "custom" && breakdown.customDiscountAmount > 0) {
+    rows.push({
+      key: "custom",
+      label: "Approved Custom",
+      amount: breakdown.customDiscountAmount,
+    });
+  } else if (
+    breakdown.hasKnownBaseDiscount &&
+    !breakdown.hasKnownAdditionalDiscount &&
+    breakdown.discountAmount > breakdown.baseDiscountAmount + 0.01
+  ) {
+    rows.push({
+      key: "additional",
+      label: "Additional Discount",
+      amount: roundMoney(breakdown.discountAmount - breakdown.baseDiscountAmount),
+    });
+  } else {
+    rows.push({ key: "none", label: "No Additional Discount" });
+  }
+
+  rows.push({
+    key: "total",
+    label: "Total",
+    amount: breakdown.discountAmount,
+  });
 
   return rows;
 }
@@ -500,8 +556,10 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
   order_discount: string;
   order_discount_amount: string;
   order_net_amount: string;
+  gross: number;
   grossAmount: number;
   discountAmount: number;
+  netPayable: number;
   netPayableAmount: number;
   baseDiscountAmount: number;
   baseDiscountPercent?: number;
@@ -514,6 +572,8 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
   slabDiscountPercent: number;
   hasSlabDiscount: boolean;
   hasCustomDiscount: boolean;
+  hasKnownBaseDiscount: boolean;
+  hasKnownAdditionalDiscount: boolean;
   priceSource: "summary_override" | "php";
 } {
   const amounts = resolveOrderDiscountBreakdown(order, override);
@@ -524,8 +584,10 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
     order_discount: String(amounts.discountAmount),
     order_discount_amount: String(amounts.discountAmount),
     order_net_amount: String(amounts.netPayableAmount),
+    gross: amounts.gross,
     grossAmount: amounts.grossAmount,
     discountAmount: amounts.discountAmount,
+    netPayable: amounts.netPayable,
     netPayableAmount: amounts.netPayableAmount,
     baseDiscountAmount: amounts.baseDiscountAmount,
     baseDiscountPercent: amounts.baseDiscountPercent,
@@ -538,6 +600,8 @@ export function withDisplayOrderAmounts<T extends OrderAmountSource>(
     slabDiscountPercent: amounts.slabDiscountPercent,
     hasSlabDiscount: amounts.hasSlabDiscount,
     hasCustomDiscount: amounts.hasCustomDiscount,
+    hasKnownBaseDiscount: amounts.hasKnownBaseDiscount,
+    hasKnownAdditionalDiscount: amounts.hasKnownAdditionalDiscount,
     priceSource: override ? "summary_override" : "php",
   };
 }

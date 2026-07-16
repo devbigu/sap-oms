@@ -4,6 +4,12 @@ export const OUTSIDE_ACTIVE_ORDER_PERIOD: string;
 export const ORDER_DATE_FIELDS: readonly string[];
 export function normalizeBusinessCalendarDate(value: unknown): string | null;
 export function getOriginalOrderDate(order: unknown): string | null;
+export function inspectOriginalOrderDate(order: unknown): {
+  status: "valid" | "missing_date" | "invalid_date";
+  field: string;
+  rawValue: unknown;
+  date: string | null;
+};
 export function getSnapshotCreationDate(snapshot: unknown): string | null;
 export function isCalendarDateInActiveOrderPeriod(date: unknown): boolean;
 export function isActiveOrder(order: unknown): boolean;

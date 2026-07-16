@@ -9,6 +9,7 @@ export type ActiveOrdersActor = {
 export type UpstreamOrderPage<T> = {
   rows: T[];
   lastPage?: number;
+  total?: number;
 };
 
 export type ActiveOrderFilters = {
@@ -37,7 +38,7 @@ function normalizedMtStatus(value: unknown) {
 }
 
 function orderDedupeKey(order: Record<string, unknown>) {
-  const orderId = text(order.order_id ?? order.orderId);
+  const orderId = text(order.order_id ?? order.orderId ?? order.orderdata_id ?? order.orderdata_orderid);
   if (!orderId) return "";
   return `${resolveOrderDealerId(order)}:${orderId}`;
 }
@@ -57,11 +58,19 @@ export async function scanScopedActiveOrders<T extends Record<string, unknown>>(
 
   for (const upstreamActorId of input.upstreamActorIds) {
     let exhausted = false;
+    const upstreamKeys = new Set<string>();
 
     for (let page = 1; page <= input.maxUpstreamPages; page += 1) {
       pageCalls.push({ upstreamActorId, page });
       const upstream = await input.fetchPage(upstreamActorId, page, input.upstreamPageSize);
       const pageRows = Array.isArray(upstream.rows) ? upstream.rows : [];
+      let newUpstreamRows = 0;
+      for (const order of pageRows) {
+        const key = orderDedupeKey(order);
+        if (!key || upstreamKeys.has(key)) continue;
+        upstreamKeys.add(key);
+        newUpstreamRows += 1;
+      }
       const scopedRows = filterOrdersForActor({
         role: input.actor.role,
         actorId: input.actor.actorId,
@@ -77,11 +86,19 @@ export async function scanScopedActiveOrders<T extends Record<string, unknown>>(
       }
 
       const lastPage = Number(upstream.lastPage ?? 0);
+      const upstreamTotal = Number(upstream.total ?? 0);
       if (
         pageRows.length === 0 ||
         pageRows.length < input.upstreamPageSize ||
+        (Number.isFinite(upstreamTotal) && upstreamTotal > 0 && upstreamKeys.size >= upstreamTotal) ||
         (Number.isFinite(lastPage) && lastPage > 0 && page >= lastPage)
       ) {
+        exhausted = true;
+        break;
+      }
+
+      if (page > 1 && newUpstreamRows === 0) {
+        truncated = true;
         exhausted = true;
         break;
       }

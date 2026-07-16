@@ -4,6 +4,19 @@ import { isActiveOrder } from "./activeOrderPeriod.js";
 
 export type PendingProductsRole = "admin" | "staff" | "dealer";
 
+const pendingProductsGlobal = globalThis as typeof globalThis & {
+  __pendingProductsCacheVersion?: number;
+};
+
+export function getPendingProductsCacheVersion() {
+  return pendingProductsGlobal.__pendingProductsCacheVersion ?? 0;
+}
+
+export function invalidatePendingProductsCache() {
+  pendingProductsGlobal.__pendingProductsCacheVersion = getPendingProductsCacheVersion() + 1;
+  return pendingProductsGlobal.__pendingProductsCacheVersion;
+}
+
 export type PendingProductsOrderRow = {
   order_id?: string | number;
   orderId?: string | number;

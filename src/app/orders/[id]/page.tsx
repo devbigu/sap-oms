@@ -130,6 +130,8 @@ type OrderSummaryOverride = Record<string, unknown> & {
   approvedDiscountPercent?: number | string;
 };
 
+type ActiveOrderHeader = Record<string, unknown>;
+
 type OrderProductNote = {
   orderId?: string;
   orderItemId?: string | null;
@@ -254,6 +256,15 @@ function firstNonEmptyString(...values: unknown[]) {
     if (text) return text;
   }
   return "";
+}
+
+function orderLookupKey(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const trailing = text.match(/(\d+)(?!.*\d)/)?.[1];
+  if (!trailing) return text;
+  const normalized = String(Number(trailing));
+  return normalized === "NaN" ? trailing : normalized;
 }
 
 async function fetchOrderDispatchAccessMeta(
@@ -736,11 +747,13 @@ export default function ViewOrderDealerPage() {
   const [orders,    setOrders   ] = useState<OrderData[]>([]);
   const [loading,   setLoading  ] = useState(true);
   const [orderPeriodBlocked, setOrderPeriodBlocked] = useState(false);
+  const [orderUnavailableMessage, setOrderUnavailableMessage] = useState("This order is outside the active order period.");
   const [orderPeriodVerified, setOrderPeriodVerified] = useState(false);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
   const [localOrderNote, setLocalOrderNote] = useState("");
   const [packLookup, setPackLookup] = useState<Record<string, number>>({});
   const [orderMeta, setOrderMeta] = useState<OrderMeta | null>(null);
+  const [activeOrderHeader, setActiveOrderHeader] = useState<ActiveOrderHeader | null>(null);
   const [orderAccessState, setOrderAccessState] = useState<OrderDispatchAccessState>({ key: "", meta: null });
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
@@ -765,9 +778,12 @@ export default function ViewOrderDealerPage() {
       orders[0]?.order_dealer,
       orders[0]?.orderdata_dealerid,
       orderMeta?.order_dealer,
-      orderMeta?.orderdata_dealerid
+      orderMeta?.orderdata_dealerid,
+      activeOrderHeader?.order_dealer,
+      activeOrderHeader?.orderdata_dealerid,
+      activeOrderHeader?.Dealer_Id
     ),
-    [orderMeta, orders]
+    [activeOrderHeader, orderMeta, orders]
   );
   const orderAccessKey = useMemo(
     () => (id && orderAccessDealerId ? `${id}:${orderAccessDealerId}` : ""),
@@ -784,12 +800,26 @@ export default function ViewOrderDealerPage() {
     })
       .then(async accessResponse => {
         if (!accessResponse.ok) {
+          const accessPayload = await accessResponse.json().catch(() => null);
           setOrderPeriodBlocked(true);
+          setOrderUnavailableMessage(
+            typeof accessPayload?.message === "string" && accessPayload.message.trim()
+              ? accessPayload.message
+              : "Unable to load this order right now."
+          );
           setOrderPeriodVerified(false);
+          setActiveOrderHeader(null);
           setLoading(false);
           return null;
         }
+        const accessPayload = await accessResponse.json().catch(() => null);
+        setActiveOrderHeader(
+          accessPayload?.data && typeof accessPayload.data === "object"
+            ? accessPayload.data as ActiveOrderHeader
+            : null
+        );
         setOrderPeriodBlocked(false);
+        setOrderUnavailableMessage("This order is outside the active order period.");
         setOrderPeriodVerified(true);
         return fetch(url);
       })
@@ -873,7 +903,9 @@ export default function ViewOrderDealerPage() {
       })
       .catch(() => {
         setOrderPeriodBlocked(true);
+        setOrderUnavailableMessage("Unable to load this order right now.");
         setOrderPeriodVerified(false);
+        setActiveOrderHeader(null);
         setLoading(false);
       });
   }, [currentUser, id]);
@@ -922,13 +954,21 @@ export default function ViewOrderDealerPage() {
 
   useEffect(() => {
     if (!orderPeriodVerified || !id) return;
-    fetch(`/api/order-summary-overrides?order_id=${encodeURIComponent(id)}`, { cache: "no-store" })
+    const params = new URLSearchParams({ order_id: id });
+    if (orderAccessDealerId) params.set("dealer_id", orderAccessDealerId);
+    fetch(`/api/order-summary-overrides?${params.toString()}`, { cache: "no-store" })
       .then(r => r.json())
       .then(json => {
-        if (json.success && Array.isArray(json.data)) setSummaryOverride(json.data[0] ?? null);
+        if (json.success && Array.isArray(json.data)) {
+          const normalizedId = orderLookupKey(id);
+          const matched = json.data.find((item: OrderSummaryOverride) =>
+            orderLookupKey(item.orderId ?? item.order_id) === normalizedId
+          );
+          setSummaryOverride(matched ?? json.data[0] ?? null);
+        }
       })
       .catch(() => {});
-  }, [id, orderPeriodVerified]);
+  }, [id, orderAccessDealerId, orderPeriodVerified]);
 
   useEffect(() => {
     if (!orderPeriodVerified || !id || !currentUser?.id) return;
@@ -994,8 +1034,8 @@ export default function ViewOrderDealerPage() {
 
   const firstOrder = displayOrders[0];
   const displayOrderMeta = useMemo(
-    () => (summaryOverride ? { ...(orderMeta ?? {}), ...summaryOverride } : orderMeta),
-    [orderMeta, summaryOverride]
+    () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...(summaryOverride ?? {}) }) as OrderMeta,
+    [activeOrderHeader, orderMeta, summaryOverride]
   );
   const assignedStaffId = firstNonEmptyString(
     orderAccessMeta?.assignedstaff,
@@ -1171,7 +1211,7 @@ export default function ViewOrderDealerPage() {
       <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white border border-gray-200 rounded-lg p-6 text-center">
           <h1 className="text-lg font-semibold text-gray-900">Order unavailable</h1>
-          <p className="mt-2 text-sm text-gray-600">This order is outside the active order period.</p>
+          <p className="mt-2 text-sm text-gray-600">{orderUnavailableMessage}</p>
           <button onClick={() => router.back()} className="mt-5 px-4 py-2 text-sm font-medium border border-gray-300 rounded-md hover:bg-gray-50">Go back</button>
         </div>
       </main>

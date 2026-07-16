@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { normalizeDealerFormSnapshot, validateDealerFormSnapshot } from "@/lib/dealerForm";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { invalidateActiveOrderSnapshots } from "@/lib/activeOrderSnapshot";
+import { invalidateStaffAssignmentCache } from "@/lib/orderScopeServer";
 import {
   appendAuditEntry,
   buildDealerRequestAccessQuery,
@@ -292,6 +294,10 @@ export async function PATCH(
           return buildResponseError("Dealer request could not be finalized", 409);
         }
 
+        invalidateStaffAssignmentCache();
+        await invalidateActiveOrderSnapshots("dealer assignment changed").catch((error) => {
+          console.warn("[dealer-request accept] active-order invalidation failed", error);
+        });
         return NextResponse.json({ success: true, data: toDealerRequestDetail(accepted) });
       } catch (error) {
         await collection.updateOne(

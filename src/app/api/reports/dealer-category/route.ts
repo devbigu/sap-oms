@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
+import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
 import catalogueProducts from "../../../../../public/data/omsons_products_from_excel_with_images.json";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
@@ -8,8 +8,6 @@ import { getPhpApiBaseUrl } from "@/lib/phpBackend";
 export const runtime = "nodejs";
 
 const BACKEND_URL = getPhpApiBaseUrl();
-const ORDER_PAGE_SIZE = 200;
-const MAX_ORDER_PAGES = 50;
 const ORDER_ITEM_CONCURRENCY = 5;
 
 type ReportActor = {
@@ -41,13 +39,6 @@ type OrderHeader = Record<string, unknown> & {
   order_status?: string;
   mtstatus?: string;
   reason?: string;
-};
-
-type OrderListResponse = {
-  data?: OrderHeader[];
-  last_page?: number;
-  count?: number;
-  total?: number;
 };
 
 type NormalizedDealer = {
@@ -171,35 +162,11 @@ async function fetchDealerById(dealerId: string, staffScopedDealers: NormalizedD
 }
 
 async function fetchDealerOrders(dealerId: string) {
-  const rows: OrderHeader[] = [];
-  let page = 1;
-  let lastPage = 1;
-
-  while (page <= lastPage && page <= MAX_ORDER_PAGES) {
-    const json = await fetchJson<OrderListResponse>(
-      `${BACKEND_URL}/orderhispegination?page=${page}&limit=${ORDER_PAGE_SIZE}&search=&id=${encodeURIComponent(dealerId)}`
-    );
-    const data = Array.isArray(json.data) ? json.data : [];
-    rows.push(...data);
-
-    const responseLastPage = Number(json.last_page);
-    if (Number.isFinite(responseLastPage) && responseLastPage > 0) {
-      lastPage = responseLastPage;
-    } else {
-      const total = Number(json.count ?? json.total);
-      if (Number.isFinite(total) && total > rows.length) {
-        lastPage = Math.ceil(total / ORDER_PAGE_SIZE);
-      } else if (data.length >= ORDER_PAGE_SIZE) {
-        lastPage = page + 1;
-      } else {
-        lastPage = page;
-      }
-    }
-
-    page += 1;
-  }
-
-  return rows;
+  const loaded = await loadActiveOrderHeaders({
+    source: "orderhispegination",
+    actor: { role: "dealer", actorId: dealerId },
+  });
+  return loaded.rows as OrderHeader[];
 }
 
 function normalizeOrderItems(orderId: string, raw: unknown) {
@@ -320,7 +287,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const orders = filterActiveOrders(await fetchDealerOrders(dealerId));
+    const orders = await fetchDealerOrders(dealerId);
     const uniqueOrders = reportHelper.buildDealerPurchaseLines({
       dealer,
       dealerId,
@@ -394,8 +361,7 @@ export async function GET(req: NextRequest) {
         orderDetailEndpoint: "orderdatalist",
         orderDetailMethod: "GET",
         orderDetailIdentifier: "id",
-        orderPageSize: ORDER_PAGE_SIZE,
-        maxOrderPages: MAX_ORDER_PAGES,
+        orderHeaderSource: "active-order snapshot",
         orderItemConcurrency: ORDER_ITEM_CONCURRENCY,
         inlineOrderItemOrderCount: uniqueOrders.length - ordersNeedingDetail.length,
         detailFetchedOrderCount: ordersNeedingDetail.length,

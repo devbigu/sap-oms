@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
+import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
 import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import dashboardSearch from "@/lib/dashboardSearch.js";
 import { filterOrdersForActor } from "@/lib/staffOrderScope.js";
@@ -102,35 +103,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 }
 
-async function fetchOrders(urls: string[]): Promise<OrderRow[]> {
-  const settled = await Promise.allSettled(urls.map(async (url) => {
-    const pages: OrderRow[] = [];
-    for (let page = 1; page <= 20; page += 1) {
-      const pageUrl = url.replace(/([?&])page=\d+/, `$1page=${page}`);
-      const response = await fetchJson<{ data?: OrderRow[]; last_page?: number }>(pageUrl);
-      const pageRows = Array.isArray(response.data) ? response.data : [];
-      pages.push(...pageRows);
-      const lastPage = Number(response.last_page ?? 0);
-      if (pageRows.length < 25 || (lastPage > 0 && page >= lastPage)) break;
-    }
-    return pages;
-  }));
-  const rows: OrderRow[] = [];
-  const seen = new Set<string>();
-
-  for (const entry of settled) {
-    if (entry.status !== "fulfilled") continue;
-    for (const row of entry.value) {
-      const orderId = safeText(String(row.order_id ?? ""));
-      if (!orderId || seen.has(orderId)) continue;
-      seen.add(orderId);
-      rows.push(row);
-    }
-  }
-
-  return rows;
-}
-
 async function fetchStaffAssignedDealerIds(staffId: string) {
   const json = await fetchJson<StaffDealerResponse>(`${BACKEND_URL}/staffDealers?id=${encodeURIComponent(staffId)}`);
   return new Set(
@@ -149,38 +121,33 @@ async function fetchCandidateOrders(actor: DashboardActor, query: string) {
 
   if (queryTerms.length === 0) return [];
 
-  if (actor.role === "admin") {
-    return fetchOrders(
-      queryTerms.map((term) =>
-        `${BACKEND_URL}/orderpegination?page=1&limit=25&search=${encodeURIComponent(term)}`
-      )
-    );
-  }
+  const assignedDealerIds = actor.role === "staff"
+    ? Array.from(await fetchStaffAssignedDealerIds(actor.actorId))
+    : [];
+  if (actor.role === "staff" && assignedDealerIds.length === 0) return [];
 
-  if (actor.role === "staff") {
-    const [orders, assignedDealerIds] = await Promise.all([
-      fetchOrders(
-        queryTerms.map((term) =>
-          `${BACKEND_URL}/staffOrderrPagination?page=1&limit=25&search=${encodeURIComponent(term)}&id=${encodeURIComponent(actor.actorId)}`
-        )
-      ),
-      fetchStaffAssignedDealerIds(actor.actorId),
-    ]);
+  const source = actor.role === "admin"
+    ? "orderpegination"
+    : actor.role === "staff"
+      ? "staffOrderrPagination"
+      : "orderhispegination";
+  const loaded = await loadActiveOrderHeaders({ source, actor, assignedDealerIds });
+  const scoped = filterOrdersForActor({
+    role: actor.role,
+    actorId: actor.actorId,
+    assignedDealerIds,
+    orders: loaded.rows,
+  }) as OrderRow[];
+  const loweredTerms = queryTerms.map((term) => term.toLowerCase());
+  const headerMatches = scoped.filter((order) => {
+    const searchable = Object.values(order)
+      .map((value) => safeText(String(value), 240).toLowerCase())
+      .join(" ");
+    return loweredTerms.some((term) => searchable.includes(term));
+  });
 
-    if (assignedDealerIds.size === 0) return [];
-
-    return orders.filter((order) => {
-      const dealerId = safeText(String(order.order_dealer ?? order.orderdata_dealerid ?? order.Dealer_Id ?? ""));
-      return dealerId ? assignedDealerIds.has(dealerId) : false;
-    });
-  }
-
-  const orders = await fetchOrders(
-    queryTerms.map((term) =>
-      `${BACKEND_URL}/orderhispegination?page=1&limit=25&search=${encodeURIComponent(term)}&id=${encodeURIComponent(actor.actorId)}`
-    )
-  );
-  return filterOrdersForActor({ role: "dealer", actorId: actor.actorId, orders });
+  // Item text is fetched only for a bounded fallback set and cached separately.
+  return headerMatches.length > 0 ? headerMatches : scoped;
 }
 
 function collapseWhitespace(value: string) {

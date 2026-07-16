@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from '@/lib/orderAmounts'
+import { getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
@@ -43,6 +43,8 @@ type DispatchRemark = {
 }
 type OrderResponse = { data: OrderData[]; total?: number; count?: number; last_page?: number }
 type OrderSummaryOverride = {
+  orderId?: string | number
+  order_id?: string | number
   grossAmount?: number | string
   discountAmount?: number | string
   netPayableAmount?: number | string
@@ -53,6 +55,20 @@ type OrderSummaryOverride = {
   order_discount?: number | string
   order_discount_amount?: number | string
   order_net_amount?: number | string
+  baseDiscountAmount?: number | string
+  baseDiscountPercent?: number | string
+  postBaseAmount?: number | string
+  amountBeforeSlab?: number | string
+  additionalDiscountType?: string | null
+  additionalDiscountAmount?: number | string
+  customDiscountAmount?: number | string
+  customDiscountPercent?: number | string
+  approvedDiscountAmount?: number | string
+  approvedDiscountPercent?: number | string
+  slabDiscountAmount?: number | string
+  slabDiscountPercent?: number | string
+  allocatedDiscountPercent?: number | string
+  couponDiscountPercent?: number | string
 }
 
 type CustomDiscountRequest = {
@@ -69,6 +85,19 @@ const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 const YEAR           = new Date().getFullYear()
 
+async function invalidateActiveOrderSnapshot(reason: string) {
+  try {
+    const response = await fetch('/api/active-orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    })
+    if (!response.ok) console.warn('[active-orders] snapshot invalidation failed')
+  } catch (error) {
+    console.warn('[active-orders] snapshot invalidation failed', error)
+  }
+}
+
 const ROLE_CONFIG: Record<Role, {
   label: string; pillCls: string; caption: string
   endpoint: (id: string, page: number, search: string) => string
@@ -83,7 +112,7 @@ const ROLE_CONFIG: Record<Role, {
       `/api/active-orders?source=orderpegination&role=admin&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}`,
     showDealerCol: true, showActions: true,
     canDelete: (_s, row) => row.accept_order === '0' && row.del_status === '0',
-    canAccept: () => false,
+    canAccept: (_s, row) => row.del_status === '0',
     requireReason: true,
   },
   dealer: {
@@ -198,28 +227,31 @@ function formatOrderListMoney(amount: number, minimumFractionDigits = 0) {
   return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits, maximumFractionDigits: 2 })}`
 }
 
-function resolveAdditionalDiscountDisplay(amounts: {
-  additionalDiscountType?: string | null
-  customDiscountAmount?: number
-  slabDiscountAmount?: number
-  slabDiscountPercent?: number
-}) {
-  if (amounts.additionalDiscountType === 'custom' && safeNumber(amounts.customDiscountAmount) > 0) {
-    return {
-      label: 'Custom',
-      amountText: formatOrderListMoney(safeNumber(amounts.customDiscountAmount), 2),
-    }
-  }
+function orderLookupKey(value: unknown) {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  const trailing = text.match(/(\d+)(?!.*\d)/)?.[1]
+  if (!trailing) return text
+  const normalized = String(Number(trailing))
+  return normalized === 'NaN' ? trailing : normalized
+}
 
-  if (amounts.additionalDiscountType === 'slab' && safeNumber(amounts.slabDiscountAmount) > 0) {
-    const slabPercent = safeNumber(amounts.slabDiscountPercent)
-    return {
-      label: slabPercent > 0 ? `Slab ${slabPercent}%` : 'Slab',
-      amountText: formatOrderListMoney(safeNumber(amounts.slabDiscountAmount), 2),
-    }
-  }
-
-  return null
+function rememberSummaryOverride(
+  target: Record<string, OrderSummaryOverride>,
+  item: OrderSummaryOverride
+) {
+  const ids = [
+    item.orderId,
+    item.order_id,
+    (item as Record<string, unknown>).orderNumber,
+    (item as Record<string, unknown>).order_number,
+  ]
+  ids.forEach((id) => {
+    const raw = String(id ?? '').trim()
+    const normalized = orderLookupKey(id)
+    if (raw) target[raw] = item
+    if (normalized) target[normalized] = item
+  })
 }
 
 function highlight(text: string, query: string) {
@@ -795,7 +827,7 @@ export default function OrdersPage() {
         if (!json.success) return
         const next: Record<string, OrderSummaryOverride> = {}
         ;(json.data ?? []).forEach((item: OrderSummaryOverride & { orderId?: string }) => {
-          if (item.orderId) next[item.orderId] = item
+          rememberSummaryOverride(next, item)
         })
         setSummaryOverrides(next)
       })
@@ -803,7 +835,7 @@ export default function OrdersPage() {
   }, [allOrderIdsKey])
 
   const filteredAll = allData.filter(o => {
-    const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id])
+    const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id] ?? summaryOverrides[orderLookupKey(o.order_id)])
     if (orderIdInput.trim() && !o.order_id.startsWith(orderIdInput.trim())) return false
     if (dealerInput.trim()  && !(o.Dealer_Name || '').toLowerCase().includes(dealerInput.trim().toLowerCase())) return false
     if (statusSearch !== '' && o.accept_order !== statusSearch) return false
@@ -833,7 +865,7 @@ export default function OrdersPage() {
 
   const exportCSV = () => {
     const rows = (hasClientFilters ? filteredAll : allData).map((o, i) => {
-      const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id])
+      const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id] ?? summaryOverrides[orderLookupKey(o.order_id)])
       const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(o.order_id)]
       const base: Record<string, string | number> = {
         'S.No.':        i + 1,
@@ -854,8 +886,9 @@ export default function OrdersPage() {
             ? 'Partially'
             : '—'
       }
-      const additional = formatAdditionalDiscountBadge(amounts)
-      if (additional) base['Additional Discount'] = additional
+      base['Discount Breakdown'] = getCompactOrderDiscountRows(amounts)
+        .map((row) => row.amount === undefined ? row.label : `${row.label} - ${formatOrderListMoney(row.amount, 2)}`)
+        .join(' | ')
       if (cfg?.showDealerCol) base['Dealer'] = o.Dealer_Name || ''
       return base
     })
@@ -899,6 +932,7 @@ export default function OrdersPage() {
     if (reason) fd.append('reason', reason)
     try {
       const res = await axios.post(`${BACKEND_URL}/deletewithreason`, fd)
+      await invalidateActiveOrderSnapshot('order deleted')
       setToast({ msg: res.data?.msg || 'Deleted.', type: 'ok' })
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     } catch { setToast({ msg: 'Delete failed.', type: 'err' }) }
@@ -909,6 +943,7 @@ export default function OrdersPage() {
     fd.append('id', id); fd.append('status', String(status))
     try {
       const res = await axios.post(`${BACKEND_URL}/acceptstatus_requst`, fd)
+      await invalidateActiveOrderSnapshot(status === 1 ? 'order accepted' : 'order declined')
       setToast({ msg: res.data?.msg || 'Status updated.', type: 'ok' })
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     } catch { setToast({ msg: 'Action failed.', type: 'err' }) }
@@ -1411,11 +1446,8 @@ export default function OrdersPage() {
                     const showAccept = cfg.canAccept(session, order)
                     const hlId       = orderIdInput ? highlight(order.order_id ?? '', orderIdInput) : (order.order_id ?? '')
                     const hlDealer   = dealerInput  ? highlight(order.Dealer_Name || '—', dealerInput) : (order.Dealer_Name || '—')
-                    const amounts    = withDisplayOrderAmounts(order, summaryOverrides[order.order_id])
-                    const discountBadge = formatAdditionalDiscountBadge(amounts)
-                    const additionalDiscountDisplay = session?.role === 'admin'
-                      ? resolveAdditionalDiscountDisplay(amounts)
-                      : null
+                    const amounts    = withDisplayOrderAmounts(order, summaryOverrides[order.order_id] ?? summaryOverrides[orderLookupKey(order.order_id)])
+                    const discountRows = getCompactOrderDiscountRows(amounts)
                     const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(order.order_id)]
                     const customBadge = customDiscountBadge(customDiscountSummary?.customDiscountStatus ?? null)
 
@@ -1439,19 +1471,18 @@ export default function OrdersPage() {
 
                         <td><span className="amount-pill">₹{amounts.grossAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
                         <td className="mono-sm">
-                          {formatOrderListMoney(amounts.discountAmount)}
-                          {additionalDiscountDisplay ? (
-                            <>
-                              <div className="qty-info" style={{ color: '#4f46e5', fontWeight: 600 }}>
-                                {additionalDiscountDisplay.label}
+                          <div style={{ display: 'grid', gap: 2 }}>
+                            {discountRows.map((row) => (
+                              <div key={row.key} className="qty-info" style={{
+                                color: row.key === 'total' ? '#111827' : row.key === 'none' ? '#6b7280' : '#4f46e5',
+                                fontWeight: row.key === 'total' ? 700 : 600,
+                              }}>
+                                {row.amount === undefined
+                                  ? row.label
+                                  : `${row.label} Â· ${formatOrderListMoney(row.amount, 2)}`}
                               </div>
-                              <div className="qty-info" style={{ color: '#4f46e5' }}>
-                                {additionalDiscountDisplay.amountText}
-                              </div>
-                            </>
-                          ) : (
-                            discountBadge && <div className="qty-info" style={{ color: '#4f46e5' }}>{discountBadge}</div>
-                          )}
+                            ))}
+                          </div>
                         </td>
                         <td className="mono-sm">₹{amounts.netPayableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
 

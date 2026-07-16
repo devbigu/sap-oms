@@ -44,3 +44,28 @@ test("active-orders adapter requires an explicit role instead of endpoint infere
   assert.match(source, /parseOrderActor\(\{ role: requestedRole, actorId \}\)/);
   assert.doesNotMatch(source, /fallbackRole/);
 });
+
+test("simultaneous Staff scope reads share one assignment request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  orderScope.invalidateStaffAssignmentCache("29");
+  globalThis.fetch = async () => {
+    calls += 1;
+    return {
+      ok: true,
+      json: async () => ({ data: [{ Dealer_Id: "101", assignedstaff: "29" }] }),
+    };
+  };
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => orderScope.fetchStaffAssignedDealerIds("29")),
+    );
+    assert.equal(calls, 1);
+    assert.equal(results.every((ids) => ids.length === 1 && ids[0] === "101"), true);
+    assert.deepEqual(await orderScope.fetchStaffAssignedDealerIds("29"), ["101"]);
+    assert.equal(calls, 1);
+  } finally {
+    orderScope.invalidateStaffAssignmentCache("29");
+    globalThis.fetch = originalFetch;
+  }
+});

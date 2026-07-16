@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { resolveActiveOrder } from "@/lib/activeOrderAccess";
-import { parseOrderActor, scopeOrdersForActor } from "@/lib/orderScopeServer";
+import { messageForReason, resolveActiveOrder } from "@/lib/activeOrderAccess";
+import { fetchStaffAssignedDealerIds, parseOrderActor, scopeOrdersForActor } from "@/lib/orderScopeServer";
 
 export const runtime = "nodejs";
 
@@ -19,13 +19,35 @@ export async function GET(
     return NextResponse.json({ success: false, message: "Missing order scope identity" }, { status: 401 });
   }
   try {
-    const access = await resolveActiveOrder(id, actor.role === "dealer" ? actor.actorId : undefined);
+    const assignedDealerIds = actor.role === "staff"
+      ? await fetchStaffAssignedDealerIds(actor.actorId)
+      : [];
+    const access = await resolveActiveOrder(id, {
+      actor,
+      assignedDealerIds,
+      dealerId: actor.role === "dealer" ? actor.actorId : dealerId,
+    });
     if (!access.visible) {
-      return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
+      const status = access.reason === "upstream_unavailable" ? 503 : access.reason === "forbidden" ? 403 : 404;
+      return NextResponse.json(
+        { success: false, reason: access.reason, message: access.message },
+        { status },
+      );
     }
     const scoped = await scopeOrdersForActor(access.order ? [access.order] : [], actor);
     if (scoped.length === 0) {
-      return NextResponse.json({ success: false, message: "Order is outside your assigned dealer scope" }, { status: 404 });
+      if (process.env.NODE_ENV !== "production") {
+        console.info("[GET /api/active-order/[id]] scope denied", {
+          requestedRawOrderId: id,
+          normalizedRole: actor.role,
+          actorId: actor.actorId,
+          assignedDealerIds,
+        });
+      }
+      return NextResponse.json(
+        { success: false, reason: "forbidden", message: messageForReason("forbidden") },
+        { status: 403 },
+      );
     }
     return NextResponse.json({ success: true, data: scoped[0] });
   } catch (error) {

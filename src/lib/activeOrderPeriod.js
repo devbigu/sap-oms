@@ -9,6 +9,8 @@ const ORDER_DATE_FIELDS = [
   "orderDatetime",
   "order_created_at",
   "orderCreatedAt",
+  "created_at",
+  "createdAt",
 ];
 
 const SNAPSHOT_DATE_FIELDS = ["createdAt", "created_at", "submittedAt", "submitted_at"];
@@ -59,8 +61,25 @@ function extractDate(record, fields) {
   return null;
 }
 
+function inspectDate(record, fields) {
+  if (!record || typeof record !== "object") return { status: "missing_date", field: "", rawValue: undefined, date: null };
+  for (const field of fields) {
+    const rawValue = record[field];
+    const normalized = normalizeBusinessCalendarDate(rawValue);
+    if (normalized) return { status: "valid", field, rawValue, date: normalized };
+    if (rawValue !== undefined && rawValue !== null && String(rawValue).trim()) {
+      return { status: "invalid_date", field, rawValue, date: null };
+    }
+  }
+  return { status: "missing_date", field: "", rawValue: undefined, date: null };
+}
+
 function getOriginalOrderDate(order) {
   return extractDate(order, ORDER_DATE_FIELDS);
+}
+
+function inspectOriginalOrderDate(order) {
+  return inspectDate(order, ORDER_DATE_FIELDS);
 }
 
 function getSnapshotCreationDate(snapshot) {
@@ -115,6 +134,7 @@ module.exports = {
   ORDER_DATE_FIELDS,
   normalizeBusinessCalendarDate,
   getOriginalOrderDate,
+  inspectOriginalOrderDate,
   getSnapshotCreationDate,
   isCalendarDateInActiveOrderPeriod,
   isActiveOrder,

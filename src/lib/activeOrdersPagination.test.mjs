@@ -191,6 +191,27 @@ test("scanner stops on exhaustion without duplicate page requests", async () => 
   assert.equal(scan.totalIsExact, true);
 });
 
+test("upstream count stops a limit-ignoring endpoint after one complete response", async () => {
+  const rows = activeOrders("complete", 10);
+  const calls = [];
+  const scan = await pagination.scanScopedActiveOrders({
+    actor: { role: "admin", actorId: "admin" },
+    assignedDealerIds: [],
+    upstreamActorIds: [""],
+    upstreamPageSize: 5,
+    maxUpstreamPages: 100,
+    fetchPage: async (_actorId, page) => {
+      calls.push(page);
+      return { rows, total: 10 };
+    },
+  });
+
+  assert.deepEqual(calls, [1]);
+  assert.equal(scan.rows.length, 10);
+  assert.equal(scan.totalIsExact, true);
+  assert.equal(scan.truncated, false);
+});
+
 test("scanner respects the safety limit and marks totals as inexact", async () => {
   const pages = [activeOrders("one", 10), activeOrders("two", 10), activeOrders("three", 10), activeOrders("unread", 10)];
   const { scan, calls } = await scanPages(pages, { maxUpstreamPages: 3 });
@@ -215,5 +236,6 @@ test("real route delegates scanning and visible pagination to the tested adapter
   const route = await fs.readFile(path.resolve("src/app/api/active-orders/route.ts"), "utf8");
   assert.match(route, /scanScopedActiveOrders/);
   assert.match(route, /buildActiveOrdersPage/);
-  assert.match(route, /totalIsExact: scan\.totalIsExact/);
+  assert.match(route, /totalIsExact = scan\.totalIsExact/);
+  assert.match(route, /totalIsExact,/);
 });
