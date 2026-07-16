@@ -30,7 +30,12 @@ function normalizeOrderLookupKey(value: unknown) {
 function orderIdVariants(value: unknown) {
   const raw = safeText(value, 120);
   const normalized = normalizeOrderLookupKey(raw);
-  return Array.from(new Set([raw, normalized].filter(Boolean)));
+  const year = new Date().getFullYear();
+  return Array.from(new Set([
+    raw,
+    normalized,
+    normalized ? `OM/${year}/${normalized}` : "",
+  ].filter(Boolean)));
 }
 
 function normalizeAdditionalDiscountType(value: unknown) {
@@ -171,7 +176,7 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    const orderIdNumber = Number(orderId);
+    const orderIdNumber = Number(normalizeOrderLookupKey(orderId));
     const doc = {
       orderId,
       dealerId,

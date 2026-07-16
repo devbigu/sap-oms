@@ -1479,7 +1479,7 @@ export default function OrdersPage() {
                               }}>
                                 {row.amount === undefined
                                   ? row.label
-                                  : `${row.label} Â· ${formatOrderListMoney(row.amount, 2)}`}
+                                  : `${row.label} - ${formatOrderListMoney(row.amount, 2)}`}
                               </div>
                             ))}
                           </div>
