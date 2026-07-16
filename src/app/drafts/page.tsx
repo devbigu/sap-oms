@@ -40,7 +40,7 @@ async function fetchLatestOrderIdForDealer(dealerId: string | undefined) {
   if (!dealerId) return "";
 
   try {
-    const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(dealerId)}`);
+    const res = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1&search=&id=${encodeURIComponent(dealerId)}`);
     const json = await res.json();
     return String(json?.data?.[0]?.order_id ?? "").trim();
   } catch {

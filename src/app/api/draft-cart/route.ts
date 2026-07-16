@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { ACTIVE_ORDER_CUTOFF_DATE } from "@/lib/activeOrderPeriod.js";
 
 export async function GET(req: NextRequest) {
   const dealerId = req.nextUrl.searchParams.get("dealer_id");
@@ -8,7 +9,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const db    = await getDb();
-    const draft = await db.collection("draftcarts").findOne({ dealer_id: dealerId });
+    const draft = await db.collection("draftcarts").findOne({ dealer_id: dealerId, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
     if (!draft) return NextResponse.json({ success: true, data: null });
     return NextResponse.json({ success: true, data: { ...draft, _id: draft._id.toString() } });
   } catch (e: any) {
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
     const db  = await getDb();
     const now = new Date().toISOString();
     await db.collection("draftcarts").updateOne(
-      { dealer_id },
+      { dealer_id, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } },
       { $set: { dealer_id, items, updatedAt: now }, $setOnInsert: { createdAt: now } },
       { upsert: true }
     );
@@ -47,7 +48,7 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const db = await getDb();
-    await db.collection("draftcarts").deleteOne({ dealer_id: dealerId });
+    await db.collection("draftcarts").deleteOne({ dealer_id: dealerId, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
     return NextResponse.json({ success: true });
   } catch (e: any) {
     console.error("[DELETE /api/draft-cart]", e);

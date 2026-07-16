@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import dashboardSearch from "@/lib/dashboardSearch.js";
+import { filterOrdersForActor } from "@/lib/staffOrderScope.js";
 
 export const runtime = "nodejs";
 
@@ -49,6 +51,8 @@ type OrderRow = Record<string, unknown> & {
   order_net_amount?: string | number;
   netPayableAmount?: string | number;
   order_dealer?: string;
+  orderdata_dealerid?: string;
+  Dealer_Id?: string;
 };
 
 type StaffDealerResponse = {
@@ -99,13 +103,24 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function fetchOrders(urls: string[]): Promise<OrderRow[]> {
-  const settled = await Promise.allSettled(urls.map((url) => fetchJson<{ data?: OrderRow[] }>(url)));
+  const settled = await Promise.allSettled(urls.map(async (url) => {
+    const pages: OrderRow[] = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const pageUrl = url.replace(/([?&])page=\d+/, `$1page=${page}`);
+      const response = await fetchJson<{ data?: OrderRow[]; last_page?: number }>(pageUrl);
+      const pageRows = Array.isArray(response.data) ? response.data : [];
+      pages.push(...pageRows);
+      const lastPage = Number(response.last_page ?? 0);
+      if (pageRows.length < 25 || (lastPage > 0 && page >= lastPage)) break;
+    }
+    return pages;
+  }));
   const rows: OrderRow[] = [];
   const seen = new Set<string>();
 
   for (const entry of settled) {
     if (entry.status !== "fulfilled") continue;
-    for (const row of Array.isArray(entry.value.data) ? entry.value.data : []) {
+    for (const row of entry.value) {
       const orderId = safeText(String(row.order_id ?? ""));
       if (!orderId || seen.has(orderId)) continue;
       seen.add(orderId);
@@ -149,22 +164,23 @@ async function fetchCandidateOrders(actor: DashboardActor, query: string) {
           `${BACKEND_URL}/staffOrderrPagination?page=1&limit=25&search=${encodeURIComponent(term)}&id=${encodeURIComponent(actor.actorId)}`
         )
       ),
-      fetchStaffAssignedDealerIds(actor.actorId).catch(() => new Set<string>()),
+      fetchStaffAssignedDealerIds(actor.actorId),
     ]);
 
-    if (assignedDealerIds.size === 0) return orders;
+    if (assignedDealerIds.size === 0) return [];
 
     return orders.filter((order) => {
-      const dealerId = safeText(String(order.order_dealer ?? ""));
-      return dealerId ? assignedDealerIds.has(dealerId) : true;
+      const dealerId = safeText(String(order.order_dealer ?? order.orderdata_dealerid ?? order.Dealer_Id ?? ""));
+      return dealerId ? assignedDealerIds.has(dealerId) : false;
     });
   }
 
-  return fetchOrders(
+  const orders = await fetchOrders(
     queryTerms.map((term) =>
       `${BACKEND_URL}/orderhispegination?page=1&limit=25&search=${encodeURIComponent(term)}&id=${encodeURIComponent(actor.actorId)}`
     )
   );
+  return filterOrdersForActor({ role: "dealer", actorId: actor.actorId, orders });
 }
 
 function collapseWhitespace(value: string) {
@@ -195,8 +211,9 @@ function collectItemSearchText(rows: Record<string, unknown>[]) {
   );
 }
 
-async function fetchOrderItemSearchText(orderId: string) {
-  const cached = orderItemSummaryCache.get(orderId);
+async function fetchOrderItemSearchText(orderId: string, actor: DashboardActor) {
+  const cacheKey = `${ACTIVE_ORDER_PERIOD_VERSION}:${actor.role}:${actor.actorId || "admin"}:${orderId}`;
+  const cached = orderItemSummaryCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < ORDER_ITEM_CACHE_TTL_MS) {
     return cached.searchText;
   }
@@ -218,11 +235,11 @@ async function fetchOrderItemSearchText(orderId: string) {
   }
 
   const searchText = collectItemSearchText(rows);
-  orderItemSummaryCache.set(orderId, { cachedAt: Date.now(), searchText });
+  orderItemSummaryCache.set(cacheKey, { cachedAt: Date.now(), searchText });
   return searchText;
 }
 
-async function buildItemSummariesByOrderId(orders: OrderRow[], query: string) {
+async function buildItemSummariesByOrderId(orders: OrderRow[], query: string, actor: DashboardActor) {
   const queryInfo = dashboardSearch.getDashboardQueryInfo(query);
   const orderIds = orders
     .map((order) => safeText(String(order.order_id ?? "")))
@@ -231,7 +248,7 @@ async function buildItemSummariesByOrderId(orders: OrderRow[], query: string) {
 
   const settled = await Promise.allSettled(
     orderIds.map(async (orderId) => {
-      const searchText = await fetchOrderItemSearchText(orderId);
+      const searchText = await fetchOrderItemSearchText(orderId, actor);
       const normalizedQuery = normalizeText(queryInfo.normalizedText);
       const matchedByItemText = Boolean(
         normalizedQuery &&
@@ -313,11 +330,11 @@ export async function GET(req: NextRequest) {
     const candidateOrdersPromise = fetchCandidateOrders(actor, query);
     const dealersPromise = actor.role === "admin" ? fetchAdminDealers(query) : Promise.resolve([]);
     const staffPromise = actor.role === "admin" ? fetchAdminStaff(query) : Promise.resolve([]);
-    const candidateOrders = await candidateOrdersPromise;
+    const candidateOrders = filterActiveOrders(await candidateOrdersPromise);
     const [dealers, staff, itemSummariesByOrderId] = await Promise.all([
       dealersPromise,
       staffPromise,
-      buildItemSummariesByOrderId(candidateOrders, query),
+      buildItemSummariesByOrderId(candidateOrders, query, actor),
     ]);
 
     const response = dashboardSearch.buildDashboardSearchResponse({

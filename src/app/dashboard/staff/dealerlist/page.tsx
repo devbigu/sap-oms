@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search } from "lucide-react";
+import { Eye, EyeOff, Search } from "lucide-react";
+import {
+  applyDealerStatusOverrides,
+  fetchDealerStatusOverrides,
+} from "@/lib/dealerStatus";
 
 type Dealer = {
   Dealer_Id: string | number;
@@ -12,6 +16,7 @@ type Dealer = {
   Dealer_Email?: string;
   Dealer_Number?: string;
   Dealer_Username?: string;
+  Dealer_Password?: string;
   Dealer_Dealercode?: string;
   Dealer_Image?: string;
 
@@ -50,6 +55,7 @@ const API_BASE = (
   process.env.NEXT_PUBLIC_API_URL ??
   "https://mirisoft.co.in/sas/dealerapi"
 ).replace(/\/+$/, "");
+const DEALERS_PER_PAGE = 10;
 
 function isRecord(value: unknown): value is StoredStaffRecord {
   return (
@@ -285,6 +291,20 @@ function getInitials(name: string): string {
     .join("");
 }
 
+function compareNewestDealerFirst(left: Dealer, right: Dealer): number {
+  const leftId = Number(left.Dealer_Id);
+  const rightId = Number(right.Dealer_Id);
+
+  if (Number.isFinite(leftId) && Number.isFinite(rightId)) {
+    return rightId - leftId;
+  }
+
+  return String(right.Dealer_Id).localeCompare(String(left.Dealer_Id), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
 async function parseDealerResponse(
   response: Response
 ): Promise<DealerApiResponse> {
@@ -324,6 +344,10 @@ export default function StaffDealerListPage() {
     useState<StaffSession | null>(null);
 
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(
+    () => new Set()
+  );
   const [loading, setLoading] =
     useState(true);
 
@@ -368,16 +392,15 @@ export default function StaffDealerListPage() {
           currentStaff.id
         );
 
-        const response = await fetch(
-          `${API_BASE}/api/test`,
-          {
+        const [response, statusOverrides] = await Promise.all([
+          fetch(`${API_BASE}/api/staffDealers?id=${encodeURIComponent(currentStaff.id)}`, {
             cache: "no-store",
             signal: controller.signal,
-          }
-        );
+          }),
+          fetchDealerStatusOverrides().catch(() => []),
+        ]);
 
-        const payload =
-          await parseDealerResponse(response);
+        const payload = await parseDealerResponse(response);
 
         const allDealers = Array.isArray(
           payload.data
@@ -385,13 +408,11 @@ export default function StaffDealerListPage() {
           ? payload.data
           : [];
 
-        const assignedDealers =
-          allDealers.filter((dealer) =>
-            isDealerAssignedToStaff(
-              dealer,
-              currentStaff.id
-            )
-          );
+        const assignedDealers = applyDealerStatusOverrides(allDealers, statusOverrides)
+          .filter((dealer) => {
+            const assignmentIds = getDealerAssignedStaffIds(dealer);
+            return assignmentIds.length === 0 || isDealerAssignedToStaff(dealer, currentStaff.id);
+          });
 
         console.log(
           `Found ${assignedDealers.length} assigned dealers for staff ${currentStaff.id}`
@@ -434,23 +455,54 @@ export default function StaffDealerListPage() {
       .trim()
       .toLowerCase();
 
-    if (!query) return dealers;
-
-    return dealers.filter((dealer) =>
-      [
-        dealer.Dealer_Name,
-        dealer.Dealer_City,
-        dealer.Dealer_Email,
-        dealer.Dealer_Number,
-        dealer.Dealer_Username,
-        dealer.Dealer_Dealercode,
-      ].some((value) =>
-        String(value ?? "")
-          .toLowerCase()
-          .includes(query)
+    return dealers
+      .filter((dealer) =>
+        !query ||
+        [
+          dealer.Dealer_Name,
+          dealer.Dealer_City,
+          dealer.Dealer_Email,
+          dealer.Dealer_Number,
+          dealer.Dealer_Username,
+          dealer.Dealer_Dealercode,
+        ].some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(query)
+        )
       )
-    );
+      .sort(compareNewestDealerFirst);
   }, [dealers, search]);
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(visibleDealers.length / DEALERS_PER_PAGE)
+  );
+
+  const paginatedDealers = useMemo(() => {
+    const start = (page - 1) * DEALERS_PER_PAGE;
+    return visibleDealers.slice(start, start + DEALERS_PER_PAGE);
+  }, [page, visibleDealers]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPage(1), 0);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (page <= totalPages) return;
+    const timer = window.setTimeout(() => setPage(totalPages), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, totalPages]);
+
+  const togglePassword = (dealerId: string) => {
+    setVisiblePasswords((current) => {
+      const next = new Set(current);
+      if (next.has(dealerId)) next.delete(dealerId);
+      else next.add(dealerId);
+      return next;
+    });
+  };
 
   return (
     <main className="min-h-screen bg-gray-100 p-6">
@@ -522,7 +574,7 @@ export default function StaffDealerListPage() {
 
             {staffSession?.id && (
               <p className="mt-1 text-xs text-gray-400">
-                Staff ID: {staffSession.id}
+                Dealers assigned to staff ID: {staffSession.id}
               </p>
             )}
           </div>
@@ -555,6 +607,10 @@ export default function StaffDealerListPage() {
                     Username
                   </th>
 
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Password
+                  </th>
+
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">
                     Operations
                   </th>
@@ -568,7 +624,7 @@ export default function StaffDealerListPage() {
                   }).map((_, index) => (
                     <tr key={index}>
                       {Array.from({
-                        length: 7,
+                        length: 8,
                       }).map(
                         (_, columnIndex) => (
                           <td
@@ -587,7 +643,7 @@ export default function StaffDealerListPage() {
                   visibleDealers.length === 0 && (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-6 py-14 text-center text-sm text-gray-500"
                       >
                         {search
@@ -598,7 +654,7 @@ export default function StaffDealerListPage() {
                   )}
 
                 {!loading &&
-                  visibleDealers.map(
+                  paginatedDealers.map(
                     (dealer, index) => {
                       const dealerId =
                         String(
@@ -613,6 +669,7 @@ export default function StaffDealerListPage() {
                         `/dashboard/staff/dealer/${encodeURIComponent(
                           dealerId
                         )}`;
+                      const passwordVisible = visiblePasswords.has(dealerId);
 
                       return (
                         <tr
@@ -620,7 +677,7 @@ export default function StaffDealerListPage() {
                           className="hover:bg-gray-50"
                         >
                           <td className="px-4 py-4 text-gray-500">
-                            {index + 1}
+                            {(page - 1) * DEALERS_PER_PAGE + index + 1}
                           </td>
 
                           <td className="px-4 py-4">
@@ -662,6 +719,31 @@ export default function StaffDealerListPage() {
                               "-"}
                           </td>
 
+                          <td className="px-4 py-4">
+                            <div className="flex min-w-[130px] items-center gap-2">
+                              <span className={`font-mono text-xs ${passwordVisible ? "text-gray-700" : "tracking-widest text-gray-400"}`}>
+                                {passwordVisible
+                                  ? dealer.Dealer_Password || "-"
+                                  : "********"}
+                              </span>
+                              {dealer.Dealer_Password && (
+                                <button
+                                  type="button"
+                                  onClick={() => togglePassword(dealerId)}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded text-gray-500 transition hover:bg-gray-100 hover:text-gray-800"
+                                  aria-label={passwordVisible ? "Hide dealer password" : "Show dealer password"}
+                                  title={passwordVisible ? "Hide password" : "Show password"}
+                                >
+                                  {passwordVisible ? (
+                                    <EyeOff className="h-4 w-4" />
+                                  ) : (
+                                    <Eye className="h-4 w-4" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+
                           <td className="px-4 py-4 text-right">
                             <Link
                               href={
@@ -679,6 +761,50 @@ export default function StaffDealerListPage() {
               </tbody>
             </table>
           </div>
+
+          {!loading && !error && (
+            <div className="flex flex-col gap-3 border-t border-gray-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-gray-500">
+                Showing {visibleDealers.length === 0 ? 0 : (page - 1) * DEALERS_PER_PAGE + 1}
+                {"-"}
+                {Math.min(page * DEALERS_PER_PAGE, visibleDealers.length)} of {visibleDealers.length}
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  disabled={page === 1}
+                  className="rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                {Array.from({ length: totalPages }, (_, index) => index + 1).map((pageNumber) => (
+                  <button
+                    key={pageNumber}
+                    type="button"
+                    onClick={() => setPage(pageNumber)}
+                    aria-label={`Go to page ${pageNumber}`}
+                    aria-current={page === pageNumber ? "page" : undefined}
+                    className={`h-9 min-w-9 rounded-md border px-2 text-sm transition ${
+                      page === pageNumber
+                        ? "border-indigo-600 bg-indigo-600 text-white"
+                        : "border-gray-200 text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    {pageNumber}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  disabled={page === totalPages}
+                  className="rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </main>

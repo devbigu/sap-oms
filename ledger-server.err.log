@@ -1,0 +1,245 @@
+[GET /api/wallet/[dealerId]] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/wallet/[dealerId]] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/wallet/[dealerId]] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[ledger mongo connection] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[ledger mongo connection] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/ledger/[dealerId]/transactions payments] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/ledger/[dealerId] payments] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+hot-items GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/order-summary-overrides] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/drafts] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/drafts] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/drafts] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/order-notes] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/order-summary-overrides] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}

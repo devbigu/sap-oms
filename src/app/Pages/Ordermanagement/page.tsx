@@ -6,6 +6,8 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
 import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from '@/lib/orderAmounts'
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
+import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
   buildCustomDiscountProgressMap,
   getCustomDiscountProgressKeyForOrder,
@@ -78,7 +80,7 @@ const ROLE_CONFIG: Record<Role, {
   admin: {
     label: 'Admin', pillCls: 'role-admin', caption: 'All dealer orders across the system',
     endpoint: (_id, page, search) =>
-      `${BACKEND_URL}/orderpegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}`,
+      `/api/active-orders?source=orderpegination&role=admin&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}`,
     showDealerCol: true, showActions: true,
     canDelete: (_s, row) => row.accept_order === '0' && row.del_status === '0',
     canAccept: () => false,
@@ -87,7 +89,7 @@ const ROLE_CONFIG: Record<Role, {
   dealer: {
     label: 'Dealer', pillCls: 'role-dealer', caption: 'Your order history',
     endpoint: (id, page, search) =>
-      `${BACKEND_URL}/orderhispegination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}&id=${id}`,
+      `/api/active-orders?source=orderhispegination&role=dealer&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
     showDealerCol: false, showActions: true,
     canDelete: (_s, row) => row.accept_order === '0' && row.del_status === '0',
     canAccept: () => false,
@@ -96,7 +98,7 @@ const ROLE_CONFIG: Record<Role, {
   staff: {
     label: 'Staff', pillCls: 'role-staff', caption: 'Orders assigned to you',
     endpoint: (id, page, search) =>
-      `${BACKEND_URL}/staffOrderrPagination?page=${page}&limit=${ITEMS_PER_PAGE}&search=${search}&id=${id}`,
+      `/api/active-orders?source=staffOrderrPagination&role=staff&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
     showDealerCol: true, showActions: true,
     canDelete: () => false,
     canAccept: (s, row) => s.roletype !== '2' && row.del_status === '0',
@@ -744,11 +746,20 @@ export default function OrdersPage() {
   const serverSearch = dealerInput
 
   const { data: response, isLoading, isError } = useQuery<OrderResponse>({
-    queryKey: ['orders', session?.role, session?.id, page, serverSearch],
+    queryKey: ['orders', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, session?.role, session?.id, page, serverSearch, orderIdInput, statusSearch, mtFilter, amountMin, amountMax, dateFrom, dateTo],
     queryFn: async () => {
       if (!session || !cfg) throw new Error('No session')
-      const res = await axios.get(cfg.endpoint(session.id, page, serverSearch))
-      return res.data
+      const params = new URLSearchParams()
+      if (orderIdInput) params.set('order_id', orderIdInput)
+      if (statusSearch) params.set('accepted', statusSearch)
+      if (mtFilter) params.set('mt_status', mtFilter)
+      if (amountMin) params.set('amount_min', amountMin)
+      if (amountMax) params.set('amount_max', amountMax)
+      if (dateFrom) params.set('date_from', dateFrom)
+      if (dateTo) params.set('date_to', dateTo)
+      const suffix = params.toString()
+      const res = await axios.get(`${cfg.endpoint(session.id, page, serverSearch)}${suffix ? `&${suffix}` : ''}`)
+      return filterActiveOrderResponse(res.data)
     },
     enabled: !!session,
     placeholderData: keepPreviousData,
@@ -759,7 +770,8 @@ export default function OrdersPage() {
     queryKey: ['custom-discount-requests', session?.role, session?.id],
     queryFn: async () => {
       if (!session || session.role === 'dealer') return []
-      const res = await fetch(`/api/custom-discount-requests?limit=500`, {
+      const actorScope = session.role === 'staff' ? `&staff_id=${encodeURIComponent(session.id)}` : ''
+      const res = await fetch(`/api/custom-discount-requests?limit=500${actorScope}`, {
         cache: 'no-store',
       })
       const json = await res.json()

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
+import { ACTIVE_ORDER_CUTOFF_DATE } from "@/lib/activeOrderPeriod.js";
+import { resolveActiveOrder } from "@/lib/activeOrderAccess";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -39,16 +41,21 @@ export async function POST(
     }
 
     const db = await getDb();
-    const existing = await db.collection("custom_discount_requests").findOne({ _id: oid });
+    const existing = await db.collection("custom_discount_requests").findOne({ _id: oid, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
     if (!existing) {
       return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
     }
     if (String(existing.dealerId) !== dealerId) {
       return NextResponse.json({ success: false, message: "Request belongs to another dealer" }, { status: 403 });
     }
+    const sourceOrderId = safeText(existing.orderId || existing.order_id, 120);
+    if (sourceOrderId) {
+      const access = await resolveActiveOrder(sourceOrderId, dealerId);
+      if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 409 });
+    }
 
     const updated = await db.collection("custom_discount_requests").findOneAndUpdate(
-      { _id: oid },
+      { _id: oid, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } },
       {
         $inc: { reorderCount: 1 },
         $set: {

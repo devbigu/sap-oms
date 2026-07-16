@@ -594,7 +594,12 @@ function AddOrderPageInner() {
     if (seededRef.current) return;
 
     setReorderLoading(true);
-    fetch(`/api/custom-discount-requests/${encodeURIComponent(reorderIdParam)}`)
+    fetch(`/api/custom-discount-requests/${encodeURIComponent(reorderIdParam)}`, {
+      headers: {
+        "x-omsons-actor-role": "dealer",
+        "x-omsons-actor-id": String(user.Dealer_Id),
+      },
+    })
       .then((r) => {
         if (r.status === 404) throw new Error("NOT_FOUND");
         if (!r.ok) throw new Error("NETWORK");
@@ -701,7 +706,12 @@ function AddOrderPageInner() {
         let request: CustomDiscountRequest | null = null;
 
         if (approvalRequestId) {
-          const res = await fetch(`/api/custom-discount-requests/${encodeURIComponent(approvalRequestId)}`);
+          const res = await fetch(`/api/custom-discount-requests/${encodeURIComponent(approvalRequestId)}`, {
+            headers: {
+              "x-omsons-actor-role": "dealer",
+              "x-omsons-actor-id": String(user.Dealer_Id),
+            },
+          });
           if (res.ok) {
             const json = await res.json();
             if (json.success) request = json.data as CustomDiscountRequest;
@@ -1468,7 +1478,7 @@ function AddOrderPageInner() {
   const getLatestOrderIdForDealer = async () => {
     if (!user?.Dealer_Id) return "";
     try {
-      const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+      const res = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
       const json = await res.json();
       return String(json?.data?.[0]?.order_id ?? "").trim();
     } catch {
@@ -1483,7 +1493,7 @@ function AddOrderPageInner() {
     setExpectedOrderLoading(true);
     const loadLatestOrderId = async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+        const res = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
         const json = await res.json();
         return String(json?.data?.[0]?.order_id ?? "").trim();
       } catch {

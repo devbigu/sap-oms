@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import {
   QueryClient,
   QueryClientProvider,
@@ -265,26 +266,34 @@ function AccountantDashboardInner() {
   useEffect(() => {
     async function load() {
       try {
-        const [cOrdRes, cDealRes, statsRes, pendingRes, ordersRes] = await Promise.all([
-          fetch(`${BACKEND_URL}/getMonthlyreporttoporder`),
+        const [cDealRes, statsRes, pendingRes, ordersRes] = await Promise.all([
           fetch(`${BACKEND_URL}/getMonthlyreporttopdealer`),
           fetch(`${BACKEND_URL}/dealercount`),
-          fetch(`${BACKEND_URL}/orderpeginationnew?page=1&search=`),
-          fetch(`${BACKEND_URL}/orderpegination?page=1&limit=10&search=`),
+          fetch(`/api/active-orders?source=orderpeginationnew&role=accountant&page=1&limit=10&search=`),
+          fetch(`/api/active-orders?source=orderpegination&role=accountant&page=1&limit=10&search=`),
         ]);
 
-        const [cOrd, cDeal, statsJson, pendingJson, ordersJson] = await Promise.all([
-          cOrdRes.json(), cDealRes.json(), statsRes.json(), pendingRes.json(), ordersRes.json(),
+        const [cDeal, statsJson, pendingJson, ordersJson] = await Promise.all([
+          cDealRes.json(), statsRes.json(), pendingRes.json(), ordersRes.json(),
         ]);
 
-        setChartOrders(cOrd.top   || []);
+        const activeRecent = filterActiveOrders<Order>(ordersJson.data || []).slice(0, 10);
+        setChartOrders(activeRecent
+          .map((order) => ({ order_id: order.order_id, total: String(order.order_net_amount ?? order.order_discount ?? order.order_amount ?? 0) }))
+          .sort((left, right) => Number(right.total) - Number(left.total)));
         setChartDealers(cDeal.top || []);
 
         const sd = Array.isArray(statsJson.data) ? statsJson.data[0] : statsJson.data;
         setStats(sd || { dealerCount:0, staffCount:0, orderCount:0, PorderCount:0 });
 
-        setPendingOrders((pendingJson.data || []).slice(0, 10));
-        setRecentOrders((ordersJson.data || []).slice(0, 10));
+        const activePending = filterActiveOrders<PendingOrder>(pendingJson.data || []).slice(0, 10);
+        setPendingOrders(activePending);
+        setRecentOrders(activeRecent);
+        setStats((current) => ({
+          ...current,
+          orderCount: Number(ordersJson.total ?? activeRecent.length),
+          PorderCount: Number(pendingJson.total ?? activePending.length),
+        }));
       } catch (e) {
         console.error("Dashboard load error:", e);
       } finally {
@@ -329,7 +338,10 @@ function AccountantDashboardInner() {
     queries: [
       {
         queryKey: ["accountantSidebarSummary", "pendingVerification"],
-        queryFn: () => fetchJson<{ data: PendingOrder[] }>(`${BACKEND_URL}/orderpeginationnew?page=1&search=`),
+        queryFn: async () => {
+          const result = await fetchJson<{ data: PendingOrder[] }>(`/api/active-orders?source=orderpeginationnew&role=accountant&page=1&limit=1000&search=`);
+          return { ...result, data: filterActiveOrders(result.data) };
+        },
       },
       {
         queryKey: ["accountantSidebarSummary", "ledger"],

@@ -1,5 +1,6 @@
 import { Db } from "mongodb";
 import { getDb } from "@/lib/mongodb";
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import {
   OrderAmountSource,
   resolveOrderAmounts,
@@ -7,7 +8,7 @@ import {
 } from "@/lib/orderAmounts";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
-const CACHE_ID = "collective_ledger_snapshot";
+const CACHE_ID = `collective_ledger_snapshot:${ACTIVE_ORDER_PERIOD_VERSION}`;
 const CACHE_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = Number(process.env.LEDGER_FETCH_TIMEOUT_MS ?? 30_000);
 const MAX_PAGES = 10;
@@ -188,7 +189,7 @@ async function fetchLiveSnapshot(): Promise<LedgerSnapshot> {
     return {
       updatedAt: new Date().toISOString(),
       dealers,
-      orders,
+      orders: filterActiveOrders(orders),
     };
   } finally {
     clearTimeout(timer);
@@ -201,7 +202,7 @@ async function readCachedSnapshot(db: Db): Promise<LedgerSnapshot | null> {
   return {
     updatedAt: String(doc.updatedAt || new Date(0).toISOString()),
     dealers: Array.isArray(doc.dealers) ? doc.dealers : [],
-    orders: Array.isArray(doc.orders) ? doc.orders : [],
+    orders: filterActiveOrders(Array.isArray(doc.orders) ? doc.orders : []),
   };
 }
 
@@ -373,7 +374,7 @@ export function uniqueLedgerOrders(orders: ExternalOrder[]) {
 
 export function ordersForDealer(orders: ExternalOrder[], dealerId: string) {
   return uniqueLedgerOrders(
-    orders.filter((order) => orderMatchesDealer(order, dealerId) && isLedgerOrder(order))
+    filterActiveOrders(orders).filter((order) => orderMatchesDealer(order, dealerId) && isLedgerOrder(order))
   );
 }
 
@@ -394,7 +395,7 @@ export function summarizeOrders(orders: ExternalOrder[]): AccountBookSummary {
   let supposedToGoPaise = 0;
   let awaitingPaise = 0;
 
-  for (const order of orders) {
+  for (const order of filterActiveOrders(orders)) {
     const state = classifyOrder(order);
     if (state === "Cancelled") continue;
 

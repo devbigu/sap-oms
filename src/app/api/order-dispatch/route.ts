@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { resolveActiveOrder } from "@/lib/activeOrderAccess";
 import { MongoServerError } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import {
@@ -410,6 +411,8 @@ export async function GET(req: NextRequest) {
       if (!doc) {
         return NextResponse.json({ success: false, message: "Dispatch record not found" }, { status: 404 });
       }
+      const access = await resolveActiveOrder(doc.orderId, doc.dealerId);
+      if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
       if (!authorizeView(actor, { dealerId: doc.dealerId, assignedStaffId: doc.assignedStaffId ?? undefined })) {
         return NextResponse.json({ success: false, message: "Unauthorized dispatch access" }, { status: 403 });
       }
@@ -419,6 +422,9 @@ export async function GET(req: NextRequest) {
     if (!orderId || isExpectedOrderNumber(orderId)) {
       return NextResponse.json({ success: false, message: "A raw orderId is required" }, { status: 400 });
     }
+
+    const activeAccess = await resolveActiveOrder(orderId);
+    if (!activeAccess.visible) return NextResponse.json({ success: false, message: activeAccess.reason }, { status: 404 });
 
     const payload = await fetchPhpOrderPayload(orderId);
     if (payload.items.length === 0) {
@@ -476,6 +482,8 @@ export async function POST(req: NextRequest) {
     if (!orderId || isExpectedOrderNumber(orderId)) {
       return NextResponse.json({ success: false, message: "A raw orderId is required" }, { status: 400 });
     }
+    const activeAccess = await resolveActiveOrder(orderId, requestedDealerId);
+    if (!activeAccess.visible) return NextResponse.json({ success: false, message: activeAccess.reason }, { status: 409 });
     if (!orderItemId && !normalizeSku(sku)) {
       return NextResponse.json({ success: false, message: "orderItemId or a valid SKU is required" }, { status: 400 });
     }

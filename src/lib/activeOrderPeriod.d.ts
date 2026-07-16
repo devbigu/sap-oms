@@ -1,0 +1,13 @@
+export const ACTIVE_ORDER_CUTOFF_DATE: "2026-07-13";
+export const ACTIVE_ORDER_PERIOD_VERSION: string;
+export const OUTSIDE_ACTIVE_ORDER_PERIOD: string;
+export const ORDER_DATE_FIELDS: readonly string[];
+export function normalizeBusinessCalendarDate(value: unknown): string | null;
+export function getOriginalOrderDate(order: unknown): string | null;
+export function getSnapshotCreationDate(snapshot: unknown): string | null;
+export function isCalendarDateInActiveOrderPeriod(date: unknown): boolean;
+export function isActiveOrder(order: unknown): boolean;
+export function isActiveOrderSnapshot(snapshot: unknown): boolean;
+export function filterActiveOrders<T>(orders: T[] | null | undefined): T[];
+export function filterActiveOrderSnapshots<T>(snapshots: T[] | null | undefined): T[];
+export function filterActiveOrderResponse<T>(payload: T): T;

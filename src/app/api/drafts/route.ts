@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { ACTIVE_ORDER_CUTOFF_DATE, filterActiveOrderSnapshots } from "@/lib/activeOrderPeriod.js";
+
+const activeDraftQuery = (dealerId: string) => ({ dealer_id: dealerId, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
 
 function toDoc(doc: any): object {
   return {
@@ -22,17 +25,17 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
 
     if (req.nextUrl.searchParams.get("count") === "1") {
-      const count = await db.collection("order_drafts").countDocuments({ dealer_id: dealerId });
+      const count = await db.collection("order_drafts").countDocuments(activeDraftQuery(dealerId));
       return NextResponse.json({ success: true, count });
     }
 
     const docs = await db
       .collection("order_drafts")
-      .find({ dealer_id: dealerId })
+      .find(activeDraftQuery(dealerId))
       .sort({ updatedAt: -1 })
       .toArray();
 
-    return NextResponse.json({ success: true, data: docs.map(toDoc) });
+    return NextResponse.json({ success: true, data: filterActiveOrderSnapshots(docs).map(toDoc) });
   } catch (e: any) {
     console.error("[GET /api/drafts]", e);
     return NextResponse.json({ success: false, message: e.message }, { status: 500 });

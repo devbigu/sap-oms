@@ -1,5 +1,6 @@
 import { mergeOrderItemsWithDispatchRecords, type OrderDispatchRecord } from "./orderDispatch";
 import { getSearchQueryInfo, normalizeCatalogueNumber } from "./productSearch.js";
+import { isActiveOrder } from "./activeOrderPeriod.js";
 
 export type PendingProductsRole = "admin" | "staff" | "dealer";
 
@@ -239,6 +240,7 @@ function regexFlag(values: unknown[]): boolean {
 }
 
 export function isEligibleOrderForPendingProducts(order: PendingProductsOrderRow): boolean {
+  if (!isActiveOrder(order)) return false;
   if (safeText(order.del_status) === "1") return false;
   if (safeText(order.accept_order) !== "1") return false;
   if (regexFlag([order.order_status, order.mtstatus, order.reason])) return false;
@@ -257,12 +259,13 @@ export function filterPendingOrdersByRoleScope(input: {
 }): PendingProductsOrderRow[] {
   const role = input.role;
   const actorId = safeText(input.actorId);
+  const activeOrders = (input.orders ?? []).filter((order) => isActiveOrder(order));
 
-  if (role === "admin") return input.orders ?? [];
+  if (role === "admin") return activeOrders;
 
   if (role === "dealer") {
     if (!actorId) return [];
-    return (input.orders ?? []).filter((order) => resolvePendingOrderDealerId(order) === actorId);
+    return activeOrders.filter((order) => resolvePendingOrderDealerId(order) === actorId);
   }
 
   const allowedDealerIds = new Set(
@@ -270,7 +273,7 @@ export function filterPendingOrdersByRoleScope(input: {
   );
   if (allowedDealerIds.size === 0) return [];
 
-  return (input.orders ?? []).filter((order) => allowedDealerIds.has(resolvePendingOrderDealerId(order)));
+  return activeOrders.filter((order) => allowedDealerIds.has(resolvePendingOrderDealerId(order)));
 }
 
 function normalizeLookupEntry(raw: Record<string, unknown>, category: string, image: string, catalogueNumber: string): CatalogueLookupEntry {

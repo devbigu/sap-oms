@@ -12,6 +12,8 @@ import { CiSearch } from "react-icons/ci";
 import { useCartStore } from "@/Store/store";
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview";
 import { clearAuthStorage } from "@/lib/roleAccess";
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
+import { buildDealerOrderView } from "@/lib/dealerOrderView";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DealerData = {
@@ -36,6 +38,7 @@ type OrderHistoryItem = {
   total?: string | number;
   outstandingDate?: string;
   Dealer_Name?: string;
+  order_dealer?: string | number;
 };
 
 const EMPTY_DEALER: DealerData = {
@@ -165,30 +168,12 @@ function DealerDashboardInner() {
         const dealerId = parsed.Dealer_Id;
         if (!dealerId) { setLoading(false); return; }
 
-        const fd = new FormData();
-        fd.append("id", dealerId);  // ← was "dealer_id", endpoints expect "id"
-
-        const API = "https://mirisoft.co.in/sas/dealerapi/api";
-        const [ordersData, valuesData] = await Promise.allSettled([
-          safeFetch(`${API}/getMonthlyreporttotalorderdealer`, { method: "POST", body: fd }),
-          safeFetch(`${API}/getMonthlyreporttotalvaluedealer`, { method: "POST", body: fd }),
-        ]);
-
-        if (ordersData.status === "fulfilled") {
-          const rows = normaliseMonthlyResponse(ordersData.value, "orders");
-          
-          setMonthlyOrders(rows);
-        } else {
-          console.error("[orders] fetch failed:", ordersData.reason);
-        }
-
-        if (valuesData.status === "fulfilled") {
-          const rows = normaliseMonthlyResponse(valuesData.value, "value");
-         
-          setMonthlyValues(rows);
-        } else {
-          console.error("[values] fetch failed:", valuesData.reason);
-        }
+        const activeResponse = await fetchJson<{ data: OrderHistoryItem[] }>(
+          `/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealerId)}`
+        );
+        const orderView = buildDealerOrderView(activeResponse.data, dealerId);
+        setMonthlyOrders(orderView.monthly);
+        setMonthlyValues(orderView.monthly);
 
         // Funnel from dealer data
         const annual  = Number(parsed.annualtarget) || 0;
@@ -339,8 +324,8 @@ function DealerDashboardInner() {
         enabled: !!dealer.Dealer_Id,
       },
       {
-        queryKey: ["dealerSidebarSummary", "orders", dealer.Dealer_Id],
-        queryFn: () => fetchJson<{ data: OrderHistoryItem[] }>(`https://mirisoft.co.in/sas/dealerapi/api/orderhispegination?page=1&search=&id=${encodeURIComponent(dealer.Dealer_Id)}`),
+        queryKey: ["dealerSidebarSummary", "orders", ACTIVE_ORDER_PERIOD_VERSION, "dealer", dealer.Dealer_Id],
+        queryFn: () => fetchJson<{ data: OrderHistoryItem[] }>(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealer.Dealer_Id)}`),
         enabled: !!dealer.Dealer_Id,
       },
     ],
@@ -362,9 +347,10 @@ function DealerDashboardInner() {
       return rowSum + qty * pack * price;
     }, 0);
   }, 0);
-  const orderRows = ordersQ.data?.data ?? [];
-  const pendingOrders = orderRows.filter(o => o.order_status === "0" || o.status === "pending").length;
-  const shippedOrders = orderRows.filter(o => o.order_status === "2" || o.status === "shipped").length;
+  const orderView = buildDealerOrderView(filterActiveOrders(ordersQ.data?.data ?? []), dealer.Dealer_Id);
+  const orderRows = orderView.orders as OrderHistoryItem[];
+  const pendingOrders = orderView.pendingCount;
+  const shippedOrders = orderView.completedCount;
   const processingOrders = Math.max(0, orderRows.length - pendingOrders - shippedOrders);
   const creditDaysRemaining = Math.max(0, creditDays);
   const paymentAlert = currentLimit > 0 || creditDaysRemaining <= 7;

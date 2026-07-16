@@ -3,6 +3,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
 import moment from "moment";
+import { ACTIVE_ORDER_CUTOFF_DATE, OUTSIDE_ACTIVE_ORDER_PERIOD, isActiveOrder } from "@/lib/activeOrderPeriod.js";
 import { hasPriorityTag } from "@/lib/orderPriority";
 import {
     getOrderDiscountSummaryRows,
@@ -18,6 +19,8 @@ import {
 import {
     mergeProductNotesIntoInvoiceItems,
 } from "@/lib/orderProductNotes.mjs";
+import { resolveStoredAuth } from "@/lib/roleAccess";
+import { normalizeScopeId, resolveOrderDealerId } from "@/lib/staffOrderScope.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface OrderInvoiceData {
@@ -49,6 +52,8 @@ export interface OrderInvoiceData {
     slabDiscountAmount?: string | number;
     slabDiscountPercent?: string | number;
     amountBeforeSlab?: string | number;
+    order_dealer?: string | number;
+    orderdata_dealerid?: string | number;
 
 }
 
@@ -77,9 +82,34 @@ export interface InvoiceResult {
     error?: string;
 }
 
-type InvoiceDownloadOptions = {
+export type InvoiceDownloadOptions = {
     normalizedRole?: string | null;
+    actorId?: string | number | null;
 };
+
+function resolveInvoiceActor(options?: InvoiceDownloadOptions) {
+    const explicitRole = normalizeScopeId(options?.normalizedRole).toLowerCase();
+    const explicitActorId = normalizeScopeId(options?.actorId);
+    if (explicitRole) return { role: explicitRole, actorId: explicitActorId };
+    if (typeof window === "undefined") return { role: "", actorId: "" };
+
+    const auth = resolveStoredAuth(localStorage);
+    if (auth.status !== "authenticated") return { role: "", actorId: "" };
+    const actorId = auth.role === "dealer"
+        ? normalizeScopeId(auth.user.Dealer_Id)
+        : auth.role === "staff"
+            ? normalizeScopeId(auth.user.staff_id)
+            : normalizeScopeId(auth.user.id ?? auth.user.admin_id ?? auth.user.Admin_Id);
+    return { role: auth.role, actorId };
+}
+
+export function canGenerateOrderInvoiceForActor(order: OrderInvoiceData, options?: InvoiceDownloadOptions) {
+    if (!isActiveOrder(order)) return false;
+    const actor = resolveInvoiceActor(options);
+    if (actor.role !== "dealer") return true;
+    const ownerId = resolveOrderDealerId(order as unknown as Record<string, unknown>);
+    return Boolean(actor.actorId && ownerId && actor.actorId === ownerId);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -433,6 +463,7 @@ function resolveCatalogueNumber(item: any): string {
 
 // ─── Main PDF Generator ───────────────────────────────────────────────────────
 export async function generateOrderInvoicePDF(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<Blob> {
+    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error(OUTSIDE_ACTIVE_ORDER_PERIOD);
     const dp = getDealerProfile();
     const summaryOverride = await fetchOrderSummaryOverride(order);
     const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
@@ -1022,8 +1053,10 @@ function tcLines(): string[] {
 // ─── Upload to Supabase ────────────────────────────────────────────────────────
 export async function uploadOrderInvoiceToSupabase(
     pdfBlob: Blob,
-    order: OrderInvoiceData
+    order: OrderInvoiceData,
+    options?: InvoiceDownloadOptions
 ): Promise<InvoiceResult> {
+    if (!canGenerateOrderInvoiceForActor(order, options)) return { success: false, message: OUTSIDE_ACTIVE_ORDER_PERIOD };
     try {
         const summaryOverride = await fetchOrderSummaryOverride(order);
         const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
@@ -1063,6 +1096,7 @@ export async function uploadOrderInvoiceToSupabase(
 
 // ─── Download to device ────────────────────────────────────────────────────────
 export async function downloadOrderInvoice(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<InvoiceResult> {
+    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error(OUTSIDE_ACTIVE_ORDER_PERIOD);
     try {
         const blob = await generateOrderInvoicePDF(order, options);
         const url = URL.createObjectURL(blob);
@@ -1080,13 +1114,16 @@ export async function downloadOrderInvoice(order: OrderInvoiceData, options?: In
 }
 
 // ─── List invoices ─────────────────────────────────────────────────────────────
-export async function listInvoices(_dealerId: string, limit = 100) {
+export async function listInvoices(dealerId: string, limit = 100) {
     try {
-        const { data, error } = await supabase
+        let query = supabase
             .from("invoices").select("*")
+            .gte("invoice_date", ACTIVE_ORDER_CUTOFF_DATE)
             .order("created_at", { ascending: false }).limit(limit);
+        if (dealerId) query = query.eq("dealer_id", dealerId);
+        const { data, error } = await query;
         if (error) return { success: false, message: "Failed", error: error.message, data: [] };
-        return { success: true, message: "OK", data: data || [] };
+        return { success: true, message: "OK", data: (data || []).filter((invoice) => isActiveOrder({ order_date: invoice.invoice_date })) };
     } catch (err) {
         return { success: false, message: "Error", error: err instanceof Error ? err.message : "Unknown", data: [] };
     }
@@ -1095,6 +1132,15 @@ export async function listInvoices(_dealerId: string, limit = 100) {
 // ─── Delete invoice ────────────────────────────────────────────────────────────
 export async function deleteInvoice(invoiceId: string, filePath: string) {
     try {
+        const { data: invoice } = await supabase
+            .from("invoices")
+            .select("invoice_date")
+            .eq("invoice_id", invoiceId)
+            .gte("invoice_date", ACTIVE_ORDER_CUTOFF_DATE)
+            .maybeSingle();
+        if (!invoice || !isActiveOrder({ order_date: invoice.invoice_date })) {
+            return { success: false, message: OUTSIDE_ACTIVE_ORDER_PERIOD };
+        }
         await supabase.storage.from("invoices").remove([filePath]);
         const { error } = await supabase.from("invoices").delete().eq("invoice_id", invoiceId);
         if (error) return { success: false, message: "Delete failed", error: error.message };

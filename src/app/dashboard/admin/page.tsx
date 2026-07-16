@@ -23,6 +23,7 @@ import {
 import { fetchDealerStatusOverrides, normalizeDealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview";
 import { clearAuthStorage } from "@/lib/roleAccess";
+import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const year = new Date().getFullYear();
@@ -220,27 +221,33 @@ function AdminDashboardInner() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [orderRes, dealerRes, staffRes] = await Promise.all([
-          fetch(`${BACKEND_URL}/getMonthlyreporttoporder`),
+        const [activeOrdersRes, activePendingRes, dealerRes, staffRes] = await Promise.all([
+          fetch(`/api/active-orders?source=orderpegination&role=admin&page=1&limit=1000&search=`),
+          fetch(`/api/active-orders?source=orderpeginationnew&role=admin&page=1&limit=1&search=`),
           fetch(`${BACKEND_URL}/getMonthlyreporttopdealer`),
           fetch(`${BACKEND_URL}/dealercount`),
         ]);
 
-        const orderJson = await parseJsonResponse<any>(orderRes);
+        const activeOrdersJson = await parseJsonResponse<any>(activeOrdersRes);
+        const activePendingJson = await parseJsonResponse<any>(activePendingRes);
         const dealerJson = await parseJsonResponse<any>(dealerRes);
         const staffJson = await parseJsonResponse<any>(staffRes);
 
-        setData(orderJson.top || []);
+        const activeOrders = filterActiveOrders<any>(activeOrdersJson.data || []);
+        setData(activeOrders
+          .map((order) => ({ order_id: String(order.order_id || ""), total: String(order.order_net_amount ?? order.order_discount ?? order.order_amount ?? 0) }))
+          .sort((left, right) => Number(right.total) - Number(left.total))
+          .slice(0, 10));
         setDealerData(dealerJson.top || []);
 
         // Handle staffJson.data - could be array or object
         const statsData = Array.isArray(staffJson.data) ? staffJson.data[0] : staffJson.data;
-        setAdminData(statsData || {
+        setAdminData({ ...(statsData || {
           dealerCount: 0,
           staffCount: 0,
           orderCount: 0,
           PorderCount: 0,
-        });
+        }), orderCount: Number(activeOrdersJson.total ?? activeOrders.length), PorderCount: Number(activePendingJson.total ?? 0) });
       } catch (error) {
         console.error("Error fetching data:", error);
       } finally {
@@ -262,7 +269,10 @@ function AdminDashboardInner() {
     queries: [
       {
         queryKey: ["adminSidebarSummary", "outstandingOrders"],
-        queryFn: () => fetchJson<{ data: PendingOrderRecord[] }>(`${BACKEND_URL}/orderpeginationnew?page=1&search=`),
+        queryFn: async () => {
+          const result = await fetchJson<{ data: PendingOrderRecord[] }>(`/api/active-orders?source=orderpeginationnew&role=admin&page=1&limit=1000&search=`);
+          return { ...result, data: filterActiveOrders(result.data) };
+        },
       },
       {
         queryKey: ["adminSidebarSummary", "discountApprovals"],

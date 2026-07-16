@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
+import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import { Download, Search, Package } from 'lucide-react'
 import { hasPriorityTag } from '@/lib/orderPriority'
 import {
@@ -106,14 +108,14 @@ export default function DispatchStatusPage() {
   }, [])
 
   const { data: response, isLoading, isError } = useQuery<OrderResponse>({
-    queryKey: ['dispatchstatus', page, search, user?.Dealer_Id],
+    queryKey: ['dispatchstatus', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, page, search, user?.staff_id],
     queryFn: async () => {
       const res = await axios.get(
-        `${BACKEND_URL}/Orderstspegination?page=${page}&search=${search}&id=${user?.Dealer_Id}`
+        `/api/active-orders?source=Orderstspegination&role=staff&page=${page}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(user?.staff_id || "")}`
       )
-      return res.data
+      return filterActiveOrderResponse(res.data)
     },
-    enabled: !!user?.Dealer_Id,
+    enabled: !!user?.staff_id,
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
@@ -149,14 +151,14 @@ export default function DispatchStatusPage() {
 
   // Prefetch next page
   useEffect(() => {
-    if (!user?.Dealer_Id) return
+    if (!user?.staff_id) return
     queryClient.prefetchQuery({
-      queryKey: ['dispatchstatus', page + 1, search, user.Dealer_Id],
+      queryKey: ['dispatchstatus', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, page + 1, search, user.staff_id],
       queryFn: async () => {
         const res = await axios.get(
-          `${BACKEND_URL}/Orderstspegination?page=${page + 1}&search=${search}&id=${user.Dealer_Id}`
+          `/api/active-orders?source=Orderstspegination&role=staff&page=${page + 1}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(user.staff_id || "")}`
         )
-        return res.data
+        return filterActiveOrderResponse(res.data)
       },
     })
   }, [page, search, user])

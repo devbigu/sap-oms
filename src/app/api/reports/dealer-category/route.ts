@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import catalogueProducts from "../../../../../public/data/omsons_products_from_excel_with_images.json";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
@@ -319,7 +320,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const orders = await fetchDealerOrders(dealerId);
+    const orders = filterActiveOrders(await fetchDealerOrders(dealerId));
     const uniqueOrders = reportHelper.buildDealerPurchaseLines({
       dealer,
       dealerId,

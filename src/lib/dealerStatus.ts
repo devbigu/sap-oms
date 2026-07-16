@@ -48,6 +48,23 @@ export function isInactiveDealerStatus(status: unknown): boolean {
   return normalizeDealerStatus(status) === "inactive";
 }
 
+export function isActiveDealerStatus(status: unknown): boolean {
+  return normalizeDealerStatus(status) === "active";
+}
+
+export function applyDealerStatusOverrides<
+  T extends { Dealer_Id: string | number; status?: unknown },
+>(dealers: T[], overrides: DealerStatusDocument[]): Array<T & { status: DealerStatus }> {
+  const statusMap = new Map(
+    overrides.map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
+  );
+
+  return dealers.map((dealer) => ({
+    ...dealer,
+    status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
+  }));
+}
+
 function extractMessage(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "Request failed";
   const record = payload as Record<string, unknown>;

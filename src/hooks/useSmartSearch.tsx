@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 const BASE_URL = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -31,7 +32,6 @@ const roleApiConfig: Record<Role, { endpoint: string; paramKey: string; idRequir
   ],
   dealer: [
     { endpoint: "/Orderstspegination", paramKey: "search", idRequired: true },
-    { endpoint: "/orderdatalist", paramKey: "search", idRequired: true },
   ],
   staff: [
     { endpoint: "/orderhispegination", paramKey: "search", idRequired: true },
@@ -90,18 +90,24 @@ const roleRouteMap: Record<Role, Record<string, string>> = {
 async function fetchWithSearch(
   endpoint: string,
   search: string,
-  userId?: string | number
+  userId?: string | number,
+  role?: Role
 ): Promise<any[]> {
   try {
     const params = new URLSearchParams({ page: "1", search });
     if (userId) params.set("id", String(userId));
-    const res = await fetch(`${BASE_URL}${endpoint}?${params.toString()}`, {
+    const isOrderEndpoint = /Orderstspegination|orderhispegination|orderpegination/i.test(endpoint);
+    const source = endpoint.replace(/^\//, "");
+    const url = isOrderEndpoint
+      ? `/api/active-orders?source=${encodeURIComponent(source)}&role=${encodeURIComponent(role || "admin")}&limit=25&${params.toString()}`
+      : `${BASE_URL}${endpoint}?${params.toString()}`;
+    const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
     });
     if (!res.ok) return [];
     const data = await res.json();
     // Handle various response shapes
-    return (
+    const rows = (
       data?.data ||
       data?.dealers ||
       data?.staff ||
@@ -109,6 +115,7 @@ async function fetchWithSearch(
       data?.products ||
       (Array.isArray(data) ? data : [])
     );
+    return /order/i.test(endpoint) ? filterActiveOrders(rows) : rows;
   } catch {
     return [];
   }
@@ -217,6 +224,16 @@ export function useSmartSearch(userCtx: UserContext) {
   const [geminiSuggestion, setGeminiSuggestion] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const timer = window.setTimeout(() => {
+      setResults([]);
+      setGeminiSuggestion(null);
+      setLoading(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [userCtx.id, userCtx.role]);
+
   const search = useCallback(
     async (query: string) => {
       if (!query.trim()) {
@@ -231,13 +248,37 @@ export function useSmartSearch(userCtx: UserContext) {
         setLoading(true);
         try {
           const { role, id } = userCtx;
+          if (role === "staff" || role === "dealer") {
+            const response = await fetch(`/api/dashboard-search?q=${encodeURIComponent(query)}`, {
+              cache: "no-store",
+              headers: {
+                "x-omsons-actor-role": role,
+                "x-omsons-actor-id": String(id ?? ""),
+              },
+            });
+            const json = response.ok ? await response.json() : { results: [] };
+            const scopedResults: SearchResult[] = (Array.isArray(json.results) ? json.results : [])
+              .map((item: any) => ({
+                id: item.id ?? "",
+                label: item.title ?? "Result",
+                sublabel: item.subtitle ?? item.metadata ?? "",
+                route: item.href ?? (role === "dealer" ? "/dashboard/dealer" : "/dashboard/staff"),
+                category: `${item.type ?? "results"}${item.type === "staff" ? "" : "s"}`,
+                badge: item.type ?? "result",
+              }))
+              .filter((item: SearchResult) => Boolean(item.id && item.route));
+            setResults(scopedResults);
+            const gemini = await callGemini(query, role, scopedResults);
+            setGeminiSuggestion(gemini.route ?? null);
+            return;
+          }
           const endpoints = roleApiConfig[role] || [];
 
           // Fetch all relevant endpoints in parallel
           const fetched = await Promise.all(
             endpoints.map(async (cfg) => {
               const userId = cfg.idRequired ? id : undefined;
-              const raw = await fetchWithSearch(cfg.endpoint, query, userId);
+              const raw = await fetchWithSearch(cfg.endpoint, query, userId, role);
               // Detect category from endpoint name
               let category = "results";
               if (cfg.endpoint.includes("dealer")) category = "dealers";

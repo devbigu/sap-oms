@@ -8,6 +8,9 @@ import { exportOrdersToSupabase, downloadPDFDirectly } from "@/lib/Exporttopdf";
 import { InvoiceModal } from "@/components/InvoiceModel";
 import { downloadOrderInvoice, uploadOrderInvoiceToSupabase, generateOrderInvoicePDF } from "@/lib/invoicegenerator";
 import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from "@/lib/orderAmounts";
+import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from "@/lib/activeOrderPeriod.js";
+import { useAuthSession } from "@/hooks/useAuthSession";
+import type { AppRole } from "@/lib/roleAccess";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Order = {
@@ -25,6 +28,7 @@ type Order = {
   remark?: string;
   remarks?: string;
   reason?: string;
+  order_dealer?: string | number;
 };
 type ApiResponse = { msg: string; count: number; status: boolean; data: Order[] };
 type OrderNoteOverlay = {
@@ -92,12 +96,6 @@ function logPhpExchange(label: string, details: PhpExchangeLog) {
   console.groupEnd();
 }
 
-const getDealerId = () => {
-  if (typeof window === "undefined") return "225";
-  try { return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225"; }
-  catch { return "225"; }
-};
-
 function formatMoney(amount: number) {
   return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
@@ -110,8 +108,13 @@ function extractOrderNote(order: Order, overlayNote?: string) {
   return remarks.match(/Order note:\s*([^|]+)/i)?.[1]?.trim() || "";
 }
 
-async function fetchOrders(page: number, search: string, id: string): Promise<ApiResponse> {
-  const url = `${BACKEND}/orderhispegination?page=${page}&search=${search}&id=${id}`;
+async function fetchOrders(page: number, search: string, role: AppRole, actorId: string): Promise<ApiResponse> {
+  const source = role === "dealer"
+    ? "orderhispegination"
+    : role === "staff"
+      ? "staffOrderrPagination"
+      : "orderpegination";
+  const url = `/api/active-orders?source=${source}&role=${encodeURIComponent(role)}&page=${page}&limit=${PAGE_SIZE}&search=${encodeURIComponent(search)}${actorId ? `&id=${encodeURIComponent(actorId)}` : ""}`;
   const r = await fetch(url);
 
   if (!r.ok) {
@@ -119,7 +122,7 @@ async function fetchOrders(page: number, search: string, id: string): Promise<Ap
     logPhpExchange("orderhispegination", {
       method: "GET",
       url,
-      request: { page, search, id },
+      request: { page, search, role, actorId },
       error: { status: r.status, statusText: r.statusText, response: errorBody },
     });
     throw new Error("Failed");
@@ -129,11 +132,11 @@ async function fetchOrders(page: number, search: string, id: string): Promise<Ap
   logPhpExchange("orderhispegination", {
     method: "GET",
     url,
-    request: { page, search, id },
+    request: { page, search, role, actorId },
     response: rawData,
   });
 
-  return rawData;
+  return filterActiveOrderResponse(rawData);
 }
 
 // Status mapping from reference: 0=In process, 1=Packing, 2=Dispatch, 3=Not in stock, 4=Successful
@@ -169,7 +172,7 @@ function SkeletonRow() {
 }
 
 // ─── Per-row Invoice Button — always visible ──────────────────────────────────
-function InvoiceRowButton({ order }: { order: Order }) {
+function InvoiceRowButton({ order, role, actorId }: { order: Order; role: AppRole | null; actorId: string }) {
   const [loading,  setLoading ] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [toast,    setToast   ] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -181,7 +184,7 @@ function InvoiceRowButton({ order }: { order: Order }) {
 
   const handleDownload = async () => {
     setLoading(true); setShowMenu(false);
-    const res = await downloadOrderInvoice(order);
+    const res = await downloadOrderInvoice(order, { normalizedRole: role, actorId });
     setLoading(false);
     showToast(res.success ? "success" : "error", res.success ? "PDF downloaded" : (res.error || "Download failed"));
   };
@@ -189,8 +192,9 @@ function InvoiceRowButton({ order }: { order: Order }) {
   const handleUpload = async () => {
     setLoading(true); setShowMenu(false);
     try {
-      const blob = await generateOrderInvoicePDF(order);
-      const res  = await uploadOrderInvoiceToSupabase(blob, order);
+      const options = { normalizedRole: role, actorId };
+      const blob = await generateOrderInvoicePDF(order, options);
+      const res  = await uploadOrderInvoiceToSupabase(blob, order, options);
       showToast(res.success ? "success" : "error", res.success ? "Invoice saved to cloud" : (res.error || "Upload failed"));
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Failed";
@@ -407,24 +411,35 @@ function DeleteModal({ orderId, onConfirm, onClose }: { orderId: string; onConfi
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function OrderHistoryPage() {
   const router = useRouter();
+  const auth = useAuthSession();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [dealerId, setDealerId] = useState(() => getDealerId());
   const [year] = useState(new Date().getFullYear());
   const [deleteOrderId, setDeleteOrderId] = useState<string | null>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [orderNotes, setOrderNotes] = useState<Record<string, OrderNoteOverlay>>({});
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({});
 
-  useEffect(() => { setDealerId(getDealerId()); }, []);
+  const actorRole = !auth.loading && auth.session.status === "authenticated"
+    ? auth.session.role
+    : null;
+  const actorId = !auth.loading && auth.session.status === "authenticated"
+    ? actorRole === "dealer"
+      ? String(auth.session.user.Dealer_Id ?? "").trim()
+      : actorRole === "staff"
+        ? String(auth.session.user.staff_id ?? "").trim()
+        : String(auth.session.user.id ?? auth.session.user.admin_id ?? auth.session.user.Admin_Id ?? "").trim()
+    : "";
+  const dealerId = actorRole === "dealer" ? actorId : "";
+  const actorReady = actorRole === "admin" || actorRole === "accountant" || Boolean(actorId);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ["orders", page, query, dealerId],
-    queryFn: () => fetchOrders(page, query, dealerId),
+    queryKey: ["orders", ACTIVE_ORDER_PERIOD_VERSION, actorRole, actorId, page, query],
+    queryFn: () => fetchOrders(page, query, actorRole as AppRole, actorId),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
-    enabled: !!dealerId,
+    enabled: !auth.loading && auth.session.status === "authenticated" && actorReady,
   });
 
   const orders = data?.data ?? [];
@@ -676,7 +691,7 @@ export default function OrderHistoryPage() {
                                   </button>
 
                                   {/* Invoice button — always present */}
-                                  <InvoiceRowButton order={displayOrder} />
+                                  <InvoiceRowButton order={displayOrder} role={actorRole} actorId={actorId} />
 
                                   {!isDeleted && (
                                     <button

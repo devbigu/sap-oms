@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import dashboardSearch from "./dashboardSearch.js";
+import { filterOrdersForActor } from "./staffOrderScope.js";
+import {
+  ACTIVE_ORDER_FIXTURES,
+  DEALER_A,
+  DEALER_B,
+  STAFF_1,
+} from "./activeOrderFixtures.mjs";
 
 const {
   buildDashboardSearchResponse,
@@ -42,7 +49,7 @@ const products = [
 const orders = [
   {
     order_id: "3841",
-    order_date: "2026-02-14",
+    order_date: "2027-02-14",
     Dealer_Name: "Alpha Labs",
     order_status: "Pending",
     order_amount: "257544",
@@ -50,7 +57,7 @@ const orders = [
   },
   {
     order_id: "5001",
-    order_date: "2026-03-01",
+    order_date: "2027-03-01",
     Dealer_Name: "Beta Labs",
     order_status: "Packed",
     order_amount: "1000",
@@ -198,7 +205,7 @@ test("Dealer cannot search another dealer order", () => {
 test("Exact foreign order id returns no order result to dealer", () => {
   const response = buildDashboardSearchResponse({
     role: "dealer",
-    query: "OM-2026-5001",
+    query: "OM-2027-5001",
     orders: [],
   });
 
@@ -268,7 +275,7 @@ test("Formatted OM order number matches", () => {
 test("Hyphenated order format matches safely", () => {
   const response = buildDashboardSearchResponse({
     role: "admin",
-    query: "OM-2026-3841",
+    query: "OM-2027-3841",
     orders,
   });
 
@@ -414,5 +421,54 @@ test("Query URL fallback is encoded correctly", () => {
 });
 
 test("Order display formatting keeps repository route shape", () => {
-  assert.equal(buildOrderDisplayNumber("3841", "2026-02-14"), "OM/2026/3841");
+  assert.equal(buildOrderDisplayNumber("3841", "2027-02-14"), "OM/2027/3841");
+});
+
+test("dashboard order search applies active-period and actor scope before product-line matching", () => {
+  const itemSearch = Object.fromEntries(
+    ACTIVE_ORDER_FIXTURES.map((order) => [
+      String(order.order_id),
+      { searchText: "cutoff-fixture-flask", matchedByItemText: true, matchedLabel: "Fixture Flask" },
+    ]),
+  );
+  const buildFor = (role, actorId, assignedDealerIds = []) => {
+    const scopedOrders = filterOrdersForActor({
+      role,
+      actorId,
+      assignedDealerIds,
+      orders: ACTIVE_ORDER_FIXTURES,
+    });
+    return buildDashboardSearchResponse({
+      role,
+      query: "cutoff-fixture-flask",
+      orders: scopedOrders,
+      itemSummariesByOrderId: itemSearch,
+    }).groups.orders.map((order) => order.id).sort();
+  };
+
+  const adminIds = buildFor("admin", "1");
+  const staffIds = buildFor("staff", STAFF_1, [DEALER_A]);
+  const dealerAIds = buildFor("dealer", DEALER_A);
+  const dealerBIds = buildFor("dealer", DEALER_B);
+
+  assert.equal(adminIds.includes("12001"), false);
+  assert.deepEqual(staffIds, ["13001", "14001", "15001"]);
+  assert.deepEqual(dealerAIds, ["13001", "14001", "15001"]);
+  assert.deepEqual(dealerBIds, ["14002", "15002"]);
+  assert.equal(staffIds.some((id) => dealerBIds.includes(id)), false);
+});
+
+test("role-specific cached search inputs cannot expose a previous actor's orders", () => {
+  const cachedInputs = new Map();
+  cachedInputs.set("dealer:101", filterOrdersForActor({ role: "dealer", actorId: DEALER_A, orders: ACTIVE_ORDER_FIXTURES }));
+  cachedInputs.set("dealer:202", filterOrdersForActor({ role: "dealer", actorId: DEALER_B, orders: ACTIVE_ORDER_FIXTURES }));
+
+  const idsFor = (key) => buildDashboardSearchResponse({
+    role: "dealer",
+    query: "15",
+    orders: cachedInputs.get(key),
+  }).groups.orders.map((order) => order.id);
+
+  assert.deepEqual(idsFor("dealer:101"), ["15001"]);
+  assert.deepEqual(idsFor("dealer:202"), ["15002"]);
 });

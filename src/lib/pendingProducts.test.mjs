@@ -26,6 +26,7 @@ async function transpileTypeScriptModule(filePath, replacements = []) {
 async function loadPendingProductsModule() {
   const orderProductNotesUrl = pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs")).href;
   const productSearchUrl = pathToFileURL(path.resolve("src/lib/productSearch.js")).href;
+  const activeOrderPeriodUrl = pathToFileURL(path.resolve("src/lib/activeOrderPeriod.js")).href;
 
   const orderDispatchPath = path.resolve("src/lib/orderDispatch.ts");
   const orderDispatchUrl = await transpileTypeScriptModule(orderDispatchPath, [
@@ -36,6 +37,7 @@ async function loadPendingProductsModule() {
   const pendingProductsUrl = await transpileTypeScriptModule(pendingProductsPath, [
     [/from\s+["']\.\/orderDispatch["']/g, `from "${orderDispatchUrl}"`],
     [/from\s+["']\.\/productSearch\.js["']/g, `from "${productSearchUrl}"`],
+    [/from\s+["']\.\/activeOrderPeriod\.js["']/g, `from "${activeOrderPeriodUrl}"`],
   ]);
 
   return import(pendingProductsUrl);
@@ -47,7 +49,7 @@ function buildFixtureLines() {
   const orders = [
     {
       order_id: "1001",
-      order_date: "2026-07-01T00:00:00.000Z",
+      order_date: "2026-08-01T00:00:00.000Z",
       order_dealer: "D-1",
       Dealer_Name: "Dealer A",
       accept_order: "1",
@@ -57,7 +59,7 @@ function buildFixtureLines() {
     },
     {
       order_id: "1002",
-      order_date: "2026-07-04T00:00:00.000Z",
+      order_date: "2026-08-04T00:00:00.000Z",
       order_dealer: "D-2",
       Dealer_Name: "Dealer B",
       accept_order: "1",
@@ -67,7 +69,7 @@ function buildFixtureLines() {
     },
     {
       order_id: "1003",
-      order_date: "2026-07-02T00:00:00.000Z",
+      order_date: "2026-08-02T00:00:00.000Z",
       order_dealer: "D-1",
       Dealer_Name: "Dealer A",
       accept_order: "1",
@@ -77,7 +79,7 @@ function buildFixtureLines() {
     },
     {
       order_id: "1004",
-      order_date: "2026-07-03T00:00:00.000Z",
+      order_date: "2026-08-03T00:00:00.000Z",
       order_dealer: "D-3",
       Dealer_Name: "Dealer C",
       accept_order: "0",
@@ -87,7 +89,7 @@ function buildFixtureLines() {
     },
     {
       order_id: "1005",
-      order_date: "2026-07-05T00:00:00.000Z",
+      order_date: "2026-08-05T00:00:00.000Z",
       order_dealer: "D-4",
       Dealer_Name: "Dealer D",
       accept_order: "1",
@@ -97,7 +99,7 @@ function buildFixtureLines() {
     },
     {
       order_id: "1006",
-      order_date: "2026-07-06T00:00:00.000Z",
+      order_date: "2026-08-06T00:00:00.000Z",
       order_dealer: "D-1",
       Dealer_Name: "Dealer A",
       accept_order: "1",
@@ -200,7 +202,7 @@ function buildFixtureLines() {
         orderedQuantity: 10,
         dispatchedQuantity: 4,
         currentStatus: "packing",
-        updates: [{ id: "u1", quantity: 4, remark: "Packed", status: "packing", actorId: "77", actorRole: "staff", createdAt: "2026-07-02T12:00:00.000Z" }],
+        updates: [{ id: "u1", quantity: 4, remark: "Packed", status: "packing", actorId: "77", actorRole: "staff", createdAt: "2026-08-02T12:00:00.000Z" }],
       },
       {
         orderId: "1001",
@@ -211,7 +213,7 @@ function buildFixtureLines() {
         orderedQuantity: 5,
         dispatchedQuantity: 2,
         currentStatus: "dispatched",
-        updates: [{ id: "u2", quantity: 2, remark: "Loaded", status: "dispatched", actorId: "1", actorRole: "admin", createdAt: "2026-07-03T12:00:00.000Z" }],
+        updates: [{ id: "u2", quantity: 2, remark: "Loaded", status: "dispatched", actorId: "1", actorRole: "admin", createdAt: "2026-08-03T12:00:00.000Z" }],
       },
     ],
   };
@@ -302,8 +304,8 @@ test("staff and dealer scope filters only keep permitted line contributions", ()
 
 test("role order scope is applied before pending product aggregation", () => {
   const orders = [
-    { order_id: "1001", order_dealer: "D-1", accept_order: "1", del_status: "0" },
-    { order_id: "1002", order_dealer: "D-2", accept_order: "1", del_status: "0" },
+    { order_id: "1001", order_date: "2026-08-01", order_dealer: "D-1", accept_order: "1", del_status: "0" },
+    { order_id: "1002", order_date: "2026-08-02", order_dealer: "D-2", accept_order: "1", del_status: "0" },
   ];
   const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
     role: "dealer",
@@ -330,9 +332,9 @@ test("dealer role scope excludes other dealer names, orders, and quantities from
     role: "dealer",
     actorId: "D-1",
     orders: [
-      { order_id: "1001", order_dealer: "D-1" },
-      { order_id: "1002", order_dealer: "D-2" },
-      { order_id: "1003", order_dealer: "D-1" },
+      { order_id: "1001", order_date: "2026-08-01", order_dealer: "D-1" },
+      { order_id: "1002", order_date: "2026-08-02", order_dealer: "D-2" },
+      { order_id: "1003", order_date: "2026-08-03", order_dealer: "D-1" },
     ],
   });
   const scopedOrderIds = new Set(scopedOrders.map((order) => order.order_id));
@@ -353,8 +355,8 @@ test("staff role scope requires assigned dealer membership and excludes unassign
     actorId: "77",
     assignedDealerIds: ["D-1"],
     orders: [
-      { order_id: "1001", order_dealer: "D-1" },
-      { order_id: "1002", order_dealer: "D-2" },
+      { order_id: "1001", order_date: "2026-08-01", order_dealer: "D-1" },
+      { order_id: "1002", order_date: "2026-08-02", order_dealer: "D-2" },
     ],
   });
 
@@ -421,4 +423,88 @@ test("default sort places the highest pending quantity first", () => {
   );
 
   assert.deepEqual(sorted.map((entry) => entry.catalogueNumber), ["50/8", "50/9"]);
+});
+
+test("staff cutoff fixture produces exact pending totals after assignment scope is applied", () => {
+  const orders = [
+    { order_id: "13001", order_date: "2026-07-13", order_dealer: "101", Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
+    { order_id: "14001", order_date: "2026-07-14", order_dealer: 101, Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
+    { order_id: "14002", order_date: "2026-07-14", order_dealer: "202", Dealer_Name: "Dealer B", accept_order: "1", del_status: "0" },
+    { order_id: "12001", order_date: "2026-07-12 23:59:59", order_dealer: "101", Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
+  ];
+  const scopedOrders = pendingProducts.filterPendingOrdersByRoleScope({
+    role: "staff",
+    actorId: "29",
+    assignedDealerIds: [101],
+    orders,
+  });
+  const lines = pendingProducts.buildPendingProductLines({
+    orders: scopedOrders,
+    orderItemsByOrderId: {
+      "13001": [
+        { orderdata_id: "a1", orderdata_orderid: "13001", orderdata_cat_no: "F-1", product_name: "Flask", orderdata_item_quantity: "10" },
+        { orderdata_id: "a2", orderdata_orderid: "13001", orderdata_cat_no: "B-1", product_name: "Burette", orderdata_item_quantity: "5" },
+      ],
+      "14001": [
+        { orderdata_id: "b1", orderdata_orderid: "14001", orderdata_cat_no: " f-1 ", product_name: "Flask", orderdata_item_quantity: "8" },
+        { orderdata_id: "b2", orderdata_orderid: "14001", orderdata_cat_no: "T-1", product_name: "Test Tube", orderdata_item_quantity: "20" },
+      ],
+      "14002": [{ orderdata_id: "c1", orderdata_orderid: "14002", orderdata_cat_no: "F-1", product_name: "Flask", orderdata_item_quantity: "100" }],
+      "12001": [{ orderdata_id: "d1", orderdata_orderid: "12001", orderdata_cat_no: "F-1", product_name: "Flask", orderdata_item_quantity: "50" }],
+    },
+    dispatchRecordsByOrderId: {
+      "13001": [
+        { orderId: "13001", orderItemId: "a1", normalizedSku: "F-1", occurrence: 1, orderedQuantity: 10, dispatchedQuantity: 4, updates: [] },
+        { orderId: "13001", orderItemId: "a2", normalizedSku: "B-1", occurrence: 1, orderedQuantity: 5, dispatchedQuantity: 5, updates: [] },
+      ],
+      "14001": [
+        { orderId: "14001", orderItemId: "b1", normalizedSku: "F-1", occurrence: 1, orderedQuantity: 8, dispatchedQuantity: 3, updates: [] },
+      ],
+    },
+  });
+  const aggregates = pendingProducts.aggregatePendingProducts(lines);
+  const flask = aggregates.find((entry) => entry.catalogueNumber === "F-1");
+  const testTube = aggregates.find((entry) => entry.catalogueNumber === "T-1");
+
+  assert.deepEqual(scopedOrders.map((order) => String(order.order_id)), ["13001", "14001"]);
+  assert.ok(flask);
+  assert.deepEqual(
+    {
+      ordered: flask.orderedQuantity,
+      dispatched: flask.dispatchedQuantity,
+      pending: flask.pendingQuantity,
+      orders: flask.pendingOrders,
+    },
+    { ordered: 18, dispatched: 7, pending: 11, orders: 2 },
+  );
+  assert.equal(testTube.pendingQuantity, 20);
+  assert.equal(aggregates.some((entry) => entry.catalogueNumber === "B-1"), false);
+  assert.deepEqual(pendingProducts.buildPendingProductsSummaryFromLines(lines), {
+    productsPending: 2,
+    totalPendingUnits: 31,
+    ordersWithPendingItems: 2,
+    dealersAffected: 1,
+  });
+
+  const drilldown = pendingProducts.buildPendingProductDrilldown(lines, flask.productKey);
+  assert.equal(drilldown.aggregate.pendingQuantity, 11);
+  assert.deepEqual(drilldown.orders.map((order) => order.orderId).sort(), ["13001", "14001"]);
+  assert.equal(drilldown.orders.some((order) => order.dealerName === "Dealer B"), false);
+});
+
+test("dealer pending-product results and independently cached role views remain isolated", () => {
+  const mixedOrders = [
+    { order_id: "A-NEW", order_date: "2026-07-15", order_dealer: "101", Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
+    { order_id: "A-OLD", order_date: "2026-07-12", order_dealer: "101", Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
+    { order_id: "B-NEW", order_date: "2026-07-15", order_dealer: "202", Dealer_Name: "Dealer B", accept_order: "1", del_status: "0" },
+  ];
+  const cache = new Map();
+  for (const actorId of ["101", "202"]) {
+    cache.set(actorId, pendingProducts.filterPendingOrdersByRoleScope({ role: "dealer", actorId, orders: mixedOrders }));
+  }
+
+  assert.deepEqual(cache.get("101").map((order) => order.order_id), ["A-NEW"]);
+  assert.deepEqual(cache.get("202").map((order) => order.order_id), ["B-NEW"]);
+  assert.equal(cache.get("101").some((order) => order.Dealer_Name === "Dealer B"), false);
+  assert.equal(cache.get("202").some((order) => order.Dealer_Name === "Dealer A"), false);
 });

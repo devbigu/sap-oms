@@ -256,8 +256,16 @@ function firstNonEmptyString(...values: unknown[]) {
   return "";
 }
 
-async function fetchOrderDispatchAccessMeta(orderId: string, dealerId: string): Promise<OrderDispatchAccessMeta | null> {
-  const url = `${BACKEND}/orderhispegination?page=1&limit=20&search=${encodeURIComponent(orderId)}&id=${encodeURIComponent(dealerId)}`;
+async function fetchOrderDispatchAccessMeta(
+  orderId: string,
+  dealerId: string,
+  actor: DispatchUserSession
+): Promise<OrderDispatchAccessMeta | null> {
+  const source = actor.role === "dealer" || actor.role === "staff" ? "orderhispegination" : "orderpegination";
+  const targetDealer = actor.role === "staff" && dealerId
+    ? `&target_dealer=${encodeURIComponent(dealerId)}`
+    : "";
+  const url = `/api/active-orders?source=${source}&role=${encodeURIComponent(actor.role)}&page=1&limit=20&search=${encodeURIComponent(orderId)}${actor.id ? `&id=${encodeURIComponent(actor.id)}` : ""}${targetDealer}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`orderhispegination failed with ${response.status}`);
@@ -727,6 +735,8 @@ export default function ViewOrderDealerPage() {
 
   const [orders,    setOrders   ] = useState<OrderData[]>([]);
   const [loading,   setLoading  ] = useState(true);
+  const [orderPeriodBlocked, setOrderPeriodBlocked] = useState(false);
+  const [orderPeriodVerified, setOrderPeriodVerified] = useState(false);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
   const [localOrderNote, setLocalOrderNote] = useState("");
   const [packLookup, setPackLookup] = useState<Record<string, number>>({});
@@ -768,9 +778,24 @@ export default function ViewOrderDealerPage() {
   useEffect(() => {
     if (!id) return;
     const url = `${BACKEND}/orderdatalist?id=${id}`;
-    fetch(url)
-      .then(r => r.json())
+    fetch(`/api/active-order/${encodeURIComponent(id)}`, {
+      cache: "no-store",
+      headers: buildDispatchHeaders(currentUser),
+    })
+      .then(async accessResponse => {
+        if (!accessResponse.ok) {
+          setOrderPeriodBlocked(true);
+          setOrderPeriodVerified(false);
+          setLoading(false);
+          return null;
+        }
+        setOrderPeriodBlocked(false);
+        setOrderPeriodVerified(true);
+        return fetch(url);
+      })
+      .then(r => r ? r.json() : null)
       .then(d => {
+        if (!d) return;
         logPhpExchange("orderdatalist", {
           method: "GET",
           url,
@@ -845,15 +870,20 @@ export default function ViewOrderDealerPage() {
           setOrderMeta(meta);
         }
         setLoading(false);
+      })
+      .catch(() => {
+        setOrderPeriodBlocked(true);
+        setOrderPeriodVerified(false);
+        setLoading(false);
       });
-  }, [id]);
+  }, [currentUser, id]);
 
   useEffect(() => {
-    if (!id || !orderAccessDealerId || !orderAccessKey) return;
+    if (!orderPeriodVerified || !id || !orderAccessDealerId || !orderAccessKey || !currentUser) return;
 
     let cancelled = false;
 
-    fetchOrderDispatchAccessMeta(id, orderAccessDealerId)
+    fetchOrderDispatchAccessMeta(id, orderAccessDealerId, currentUser)
       .then((meta) => {
         if (!cancelled) setOrderAccessState({ key: orderAccessKey, meta });
       })
@@ -864,20 +894,20 @@ export default function ViewOrderDealerPage() {
     return () => {
       cancelled = true;
     };
-  }, [id, orderAccessDealerId, orderAccessKey]);
+  }, [currentUser, id, orderAccessDealerId, orderAccessKey, orderPeriodVerified]);
 
   useEffect(() => {
-    if (!id) return;
+    if (!orderPeriodVerified || !id) return;
     fetch(`/api/order-notes?order_id=${encodeURIComponent(id)}`)
       .then(r => r.json())
       .then(json => {
         if (json.success && json.data?.[0]?.note) setLocalOrderNote(json.data[0].note);
       })
       .catch(() => {});
-  }, [id]);
+  }, [id, orderPeriodVerified]);
 
   useEffect(() => {
-    if (!id) return;
+    if (!orderPeriodVerified || !id) return;
     fetch(`/api/order-product-notes?orderId=${encodeURIComponent(id)}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((json) => {
@@ -888,20 +918,20 @@ export default function ViewOrderDealerPage() {
         }
       })
       .catch(() => setFallbackProductNotes([]));
-  }, [id]);
+  }, [id, orderPeriodVerified]);
 
   useEffect(() => {
-    if (!id) return;
+    if (!orderPeriodVerified || !id) return;
     fetch(`/api/order-summary-overrides?order_id=${encodeURIComponent(id)}`, { cache: "no-store" })
       .then(r => r.json())
       .then(json => {
         if (json.success && Array.isArray(json.data)) setSummaryOverride(json.data[0] ?? null);
       })
       .catch(() => {});
-  }, [id]);
+  }, [id, orderPeriodVerified]);
 
   useEffect(() => {
-    if (!id || !currentUser?.id) return;
+    if (!orderPeriodVerified || !id || !currentUser?.id) return;
 
     fetch(`/api/order-dispatch?orderId=${encodeURIComponent(id)}`, {
       cache: "no-store",
@@ -916,7 +946,7 @@ export default function ViewOrderDealerPage() {
         }
       })
       .catch(() => setDispatchRecords([]));
-  }, [currentUser, id]);
+  }, [currentUser, id, orderPeriodVerified]);
 
   // Load product pack sizes (catNo → packSize) from local product data
   useEffect(() => {
@@ -1047,6 +1077,7 @@ export default function ViewOrderDealerPage() {
   const buildInvoiceOrder = () => ({
     ...(displayOrderMeta ?? {}),
     order_id: id,
+    order_dealer: dealerIdForDispatch,
     order_date: firstOrder?.orderdata_datetime || displayOrderMeta?.order_date || new Date().toISOString(),
     order_amount: totals.gross,
     order_discount: totals.discount,
@@ -1104,6 +1135,7 @@ export default function ViewOrderDealerPage() {
     setInvoiceLoading(true);
     const result = await downloadOrderInvoice(buildInvoiceOrder() as OrderInvoiceData, {
       normalizedRole: currentUser?.role,
+      actorId: currentUser?.id,
     });
     setInvoiceLoading(false);
     setInvoiceToast({
@@ -1133,6 +1165,18 @@ export default function ViewOrderDealerPage() {
 
   const visibleDealerFields = dealerFields.filter(f => f.value);
   const orderNote = extractOrderNote(displayOrders, localOrderNote);
+
+  if (orderPeriodBlocked) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white border border-gray-200 rounded-lg p-6 text-center">
+          <h1 className="text-lg font-semibold text-gray-900">Order unavailable</h1>
+          <p className="mt-2 text-sm text-gray-600">This order is outside the active order period.</p>
+          <button onClick={() => router.back()} className="mt-5 px-4 py-2 text-sm font-medium border border-gray-300 rounded-md hover:bg-gray-50">Go back</button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <>

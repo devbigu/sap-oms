@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { buildDraftApprovalState } from "@/lib/customDiscountRequests";
+import { ACTIVE_ORDER_CUTOFF_DATE } from "@/lib/activeOrderPeriod.js";
+import { resolveActiveOrder } from "@/lib/activeOrderAccess";
 
 export const runtime = "nodejs";
 
@@ -70,7 +72,7 @@ function buildDraftOrderNote(orderNote: unknown, adminNote: string) {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -79,8 +81,22 @@ export async function GET(
 
   try {
     const db = await getDb();
-    const doc = await db.collection("custom_discount_requests").findOne({ _id: oid });
+    const doc = await db.collection("custom_discount_requests").findOne({ _id: oid, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
     if (!doc) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+    const actorRole = String(req.headers.get("x-omsons-actor-role") ?? "").trim().toLowerCase();
+    if (actorRole === "dealer") {
+      const actorId = String(req.headers.get("x-omsons-actor-id") ?? "").trim();
+      const ownerId = String(doc.dealerId ?? doc.dealer_id ?? "").trim();
+      if (!actorId) return NextResponse.json({ success: false, message: "Missing Dealer identity" }, { status: 401 });
+      if (!ownerId || actorId !== ownerId) {
+        return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+      }
+    }
+    const linkedOrderId = safeText(doc.orderId || doc.order_id, 120);
+    if (linkedOrderId) {
+      const access = await resolveActiveOrder(linkedOrderId, doc.dealerId);
+      if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
+    }
     return NextResponse.json({ success: true, data: toDoc(doc) });
   } catch (e: any) {
     console.error("[GET /api/custom-discount-requests/[id]]", e);
@@ -153,8 +169,13 @@ export async function PATCH(
     }
 
     const db = await getDb();
-    const existing = await db.collection("custom_discount_requests").findOne({ _id: oid });
+    const existing = await db.collection("custom_discount_requests").findOne({ _id: oid, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
     if (!existing) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+    const existingOrderId = safeText(existing.orderId || existing.order_id, 120);
+    if (existingOrderId) {
+      const access = await resolveActiveOrder(existingOrderId, existing.dealerId);
+      if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 409 });
+    }
 
     if (!isToggleOnly && status === "rejected" && !existing.rejectionDraftId) {
       const draftResult = await db.collection("order_drafts").insertOne({
@@ -190,7 +211,7 @@ export async function PATCH(
     }
 
     const updated = await db.collection("custom_discount_requests").findOneAndUpdate(
-      { _id: oid },
+      { _id: oid, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } },
       { $set: set },
       { returnDocument: "after" }
     );

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { filterVisibleOrderIds, resolveActiveOrder } from "@/lib/activeOrderAccess";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -18,14 +19,23 @@ export async function GET(req: NextRequest) {
     const dealerId = req.nextUrl.searchParams.get("dealer_id");
     const orderId = req.nextUrl.searchParams.get("order_id");
     const orderIds = req.nextUrl.searchParams.get("order_ids");
+    if (!orderId && !orderIds) {
+      return NextResponse.json({ success: false, message: "order_id or order_ids required" }, { status: 400 });
+    }
+
+    const requestedIds = orderIds
+      ? orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200)
+      : orderId ? [orderId] : [];
+    const visibleIds = await filterVisibleOrderIds(requestedIds, dealerId);
+    if (requestedIds.length > 0 && visibleIds.size === 0) {
+      return NextResponse.json({ success: true, data: [] });
+    }
 
     const query: Record<string, any> = {};
     if (dealerId) query.dealerId = dealerId;
     if (orderId) query.orderId = orderId;
     if (orderIds) {
-      query.orderId = {
-        $in: orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200),
-      };
+      query.orderId = { $in: Array.from(visibleIds) };
     }
 
     const db = await getDb();
@@ -53,6 +63,8 @@ export async function POST(req: NextRequest) {
     if (!orderId || !dealerId || !note) {
       return NextResponse.json({ success: false, message: "orderId, dealerId, and note are required" }, { status: 400 });
     }
+    const access = await resolveActiveOrder(orderId, dealerId);
+    if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
 
     const now = new Date().toISOString();
     const db = await getDb();

@@ -1,4 +1,5 @@
 const { normalizeCatalogueNumber } = require("./productSearch.js");
+const { isActiveOrder } = require("./activeOrderPeriod.js");
 
 const UNCATEGORIZED = "Uncategorized";
 
@@ -404,6 +405,7 @@ function buildDealerPurchaseLines(input) {
   const statusFilter = safeText(input?.statusFilter || "all").toLowerCase() || "all";
   const selectedDealerId = firstNonEmpty(input?.dealerId, input?.dealer?.Dealer_Id);
   const filteredOrders = uniqueOrderHeaders(input?.orders || []).filter((order) => {
+    if (!isActiveOrder(order)) return false;
     if (!matchesStatusFilter(order, statusFilter)) return false;
     const orderDealerId = firstNonEmpty(order.order_dealer, order.orderdata_dealerid, order.Dealer_Id, order.dealerId);
     if (selectedDealerId && orderDealerId && orderDealerId !== selectedDealerId) return false;
