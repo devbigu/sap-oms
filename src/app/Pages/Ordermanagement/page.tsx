@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
@@ -838,25 +838,41 @@ export default function OrdersPage() {
     staleTime: 60 * 1000,
   })
 
-  const allData: OrderData[] = response?.data || []
+  const allData = useMemo<OrderData[]>(() => response?.data || [], [response?.data])
   const allOrderIdsKey = allData.map(o => o.order_id).filter(Boolean).join(',')
   const customDiscountProgressMap = buildCustomDiscountProgressMap(customDiscountRequests)
   const showCustomDiscountCol = !!session && session.role !== 'dealer'
 
   useEffect(() => {
     if (!allOrderIdsKey) { setSummaryOverrides({}); return }
-    fetch(`/api/order-summary-overrides?order_ids=${encodeURIComponent(allOrderIdsKey)}`)
-      .then(r => r.json())
-      .then(json => {
-        if (!json.success) return
+    const dealerGroups = new Map<string, string[]>()
+    allData.forEach((order) => {
+      const dealerId = String(order.order_dealer || (session?.role === 'dealer' ? session.id : '') || '').trim()
+      const orderId = String(order.order_id || '').trim()
+      if (!orderId) return
+      const key = dealerId || '__all__'
+      dealerGroups.set(key, [...(dealerGroups.get(key) ?? []), orderId])
+    })
+
+    Promise.all(Array.from(dealerGroups.entries()).map(([dealerId, orderIds]) => {
+      const params = new URLSearchParams({ order_ids: orderIds.join(',') })
+      if (dealerId !== '__all__') params.set('dealer_id', dealerId)
+      return fetch(`/api/order-summary-overrides?${params.toString()}`, { cache: 'no-store' })
+        .then(r => r.json())
+        .catch(() => ({ success: false, data: [] }))
+    }))
+      .then(results => {
         const next: Record<string, OrderSummaryOverride> = {}
-        ;(json.data ?? []).forEach((item: OrderSummaryOverride & { orderId?: string }) => {
-          rememberSummaryOverride(next, item)
+        results.forEach((json) => {
+          if (!json.success) return
+          ;(json.data ?? []).forEach((item: OrderSummaryOverride & { orderId?: string }) => {
+            rememberSummaryOverride(next, item)
+          })
         })
         setSummaryOverrides(next)
       })
       .catch(() => {})
-  }, [allOrderIdsKey])
+  }, [allData, allOrderIdsKey, session?.id, session?.role])
 
   const filteredAll = allData.filter(o => {
     const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id] ?? summaryOverrides[orderLookupKey(o.order_id)])
