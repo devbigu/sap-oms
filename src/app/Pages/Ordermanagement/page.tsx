@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import { getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
+import { formatAdditionalDiscountBadge, getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
@@ -225,6 +225,30 @@ function customDiscountBadge(progress: CustomDiscountProgress) {
 
 function formatOrderListMoney(amount: number, minimumFractionDigits = 0) {
   return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits, maximumFractionDigits: 2 })}`
+}
+
+function resolveAdditionalDiscountDisplay(amounts: {
+  additionalDiscountType?: string | null
+  customDiscountAmount?: number
+  slabDiscountAmount?: number
+  slabDiscountPercent?: number
+}) {
+  if (amounts.additionalDiscountType === 'custom' && safeNumber(amounts.customDiscountAmount) > 0) {
+    return {
+      label: 'Custom',
+      amountText: formatOrderListMoney(safeNumber(amounts.customDiscountAmount), 2),
+    }
+  }
+
+  if (amounts.additionalDiscountType === 'slab' && safeNumber(amounts.slabDiscountAmount) > 0) {
+    const slabPercent = safeNumber(amounts.slabDiscountPercent)
+    return {
+      label: slabPercent > 0 ? `Slab ${slabPercent}%` : 'Slab',
+      amountText: formatOrderListMoney(safeNumber(amounts.slabDiscountAmount), 2),
+    }
+  }
+
+  return null
 }
 
 function orderLookupKey(value: unknown) {
@@ -1447,7 +1471,8 @@ export default function OrdersPage() {
                     const hlId       = orderIdInput ? highlight(order.order_id ?? '', orderIdInput) : (order.order_id ?? '')
                     const hlDealer   = dealerInput  ? highlight(order.Dealer_Name || '—', dealerInput) : (order.Dealer_Name || '—')
                     const amounts    = withDisplayOrderAmounts(order, summaryOverrides[order.order_id] ?? summaryOverrides[orderLookupKey(order.order_id)])
-                    const discountRows = getCompactOrderDiscountRows(amounts)
+                    const discountBadge = formatAdditionalDiscountBadge(amounts)
+                    const additionalDiscountDisplay = resolveAdditionalDiscountDisplay(amounts)
                     const customDiscountSummary = customDiscountProgressMap[getCustomDiscountProgressKeyForOrder(order.order_id)]
                     const customBadge = customDiscountBadge(customDiscountSummary?.customDiscountStatus ?? null)
 
@@ -1471,18 +1496,19 @@ export default function OrdersPage() {
 
                         <td><span className="amount-pill">₹{amounts.grossAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></td>
                         <td className="mono-sm">
-                          <div style={{ display: 'grid', gap: 2 }}>
-                            {discountRows.map((row) => (
-                              <div key={row.key} className="qty-info" style={{
-                                color: row.key === 'total' ? '#111827' : row.key === 'none' ? '#6b7280' : '#4f46e5',
-                                fontWeight: row.key === 'total' ? 700 : 600,
-                              }}>
-                                {row.amount === undefined
-                                  ? row.label
-                                  : `${row.label} - ${formatOrderListMoney(row.amount, 2)}`}
+                          {formatOrderListMoney(amounts.discountAmount)}
+                          {additionalDiscountDisplay ? (
+                            <>
+                              <div className="qty-info" style={{ color: '#4f46e5', fontWeight: 600 }}>
+                                {additionalDiscountDisplay.label}
                               </div>
-                            ))}
-                          </div>
+                              <div className="qty-info" style={{ color: '#4f46e5' }}>
+                                {additionalDiscountDisplay.amountText}
+                              </div>
+                            </>
+                          ) : (
+                            discountBadge && <div className="qty-info" style={{ color: '#4f46e5' }}>{discountBadge}</div>
+                          )}
                         </td>
                         <td className="mono-sm">₹{amounts.netPayableAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
 

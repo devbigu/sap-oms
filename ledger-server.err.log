@@ -496,3 +496,272 @@ custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.c
   syscall: 'querySrv',
   hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
 }
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+dealer-status GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[ledger mongo connection] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[ledger mongo connection] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/ledger payments] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/ledger payments] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/ledger payments] Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+custom-discount-requests GET failed Error: querySrv ECONNREFUSED _mongodb._tcp.cluster0.6mxcopt.mongodb.net
+    at ignore-listed frames {
+  errno: undefined,
+  code: 'ECONNREFUSED',
+  syscall: 'querySrv',
+  hostname: '_mongodb._tcp.cluster0.6mxcopt.mongodb.net'
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error [ConnectTimeoutError]: Connect Timeout Error (attempted address: mirisoft.co.in:443, timeout: 10000ms)
+      at ignore-listed frames {
+    code: 'UND_ERR_CONNECT_TIMEOUT'
+  }
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error [ConnectTimeoutError]: Connect Timeout Error (attempted address: mirisoft.co.in:443, timeout: 10000ms)
+      at ignore-listed frames {
+    code: 'UND_ERR_CONNECT_TIMEOUT'
+  }
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error [ConnectTimeoutError]: Connect Timeout Error (attempted address: mirisoft.co.in:443, timeout: 10000ms)
+      at ignore-listed frames {
+    code: 'UND_ERR_CONNECT_TIMEOUT'
+  }
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] Error [PendingProductsError]: Dispatch data is currently unavailable, so pending quantities cannot be calculated reliably.
+    at ignore-listed frames {
+  status: 503
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error: read ECONNRESET
+      at ignore-listed frames {
+    errno: -4077,
+    code: 'ECONNRESET',
+    syscall: 'read'
+  }
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error: read ECONNRESET
+      at ignore-listed frames {
+    errno: -4077,
+    code: 'ECONNRESET',
+    syscall: 'read'
+  }
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error: read ECONNRESET
+      at ignore-listed frames {
+    errno: -4077,
+    code: 'ECONNRESET',
+    syscall: 'read'
+  }
+}
+[GET /api/pending-products] [TypeError: fetch failed] {
+  [cause]: Error: read ECONNRESET
+      at ignore-listed frames {
+    errno: -4077,
+    code: 'ECONNRESET',
+    syscall: 'read'
+  }
+}
