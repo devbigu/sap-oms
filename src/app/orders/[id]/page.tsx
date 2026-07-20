@@ -21,6 +21,8 @@ import {
   type OrderDispatchRecord,
   type DispatchStatus,
 } from "@/lib/orderDispatch";
+import { PenLine, Trash2 } from "lucide-react";
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type OrderData = {
@@ -769,7 +771,7 @@ function CancelOrderDialog({
           value={reason}
           onChange={(event) => setReason(event.target.value.slice(0, 1000))}
           disabled={saving}
-          className="mt-2 h-28 w-full resize-none rounded-xl border border-gray-200 p-3 text-sm outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+          className="mt-2 text-gray-900 h-28 w-full resize-none rounded-xl border border-gray-200 p-3 text-sm outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
         />
         {error && <p className="mt-2 text-sm font-medium text-red-600">{error}</p>}
         <div className="mt-5 flex justify-end gap-2">
@@ -829,18 +831,18 @@ function EditOrderDialog({
           <div className="mt-5 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-left text-[11px] uppercase tracking-wider text-gray-500">
-                <tr><th className="p-3">Cat No.</th><th className="p-3">Product</th><th className="p-3">Qty</th><th className="p-3">Pack</th><th className="p-3">Note</th><th className="p-3">Action</th></tr>
+                <tr><th className="p-3 text-gray-900">Cat No.</th><th className="p-3">Product</th><th className="p-3">Qty</th><th className="p-3">Pack</th><th className="p-3">Note</th><th className="p-3">Action</th></tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {draftItems.map((item) => {
                   const removed = !!(item as Record<string, unknown>)._removed;
                   return (
-                    <tr key={item.originalLineId} className={removed ? "opacity-45" : ""}>
-                      <td className="p-3"><input value={String(item.orderdata_cat_no ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_cat_no: event.target.value })} className="w-36 rounded-lg border border-gray-200 px-2 py-1.5 font-mono text-xs" /></td>
-                      <td className="p-3"><input value={String(item.product_name ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { product_name: event.target.value })} className="w-64 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
-                      <td className="p-3"><input type="number" min="1" value={String(item.orderdata_item_quantity ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_item_quantity: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
-                      <td className="p-3"><input type="number" min="1" value={String(item.packSize ?? item.pack_size ?? 1)} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { packSize: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
-                      <td className="p-3 text-xs text-gray-500">{item.fallbackProductNote || item.remark || "—"}</td>
+                    <tr key={item.originalLineId} className={removed ? "opacity-95" : ""}>
+                      <td className="p-3 text-gray-900"><input value={String(item.orderdata_cat_no ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_cat_no: event.target.value })} className="w-36 rounded-lg border border-gray-200 px-2 py-1.5 font-mono text-xs" /></td>
+                      <td className="p-3 text-gray-900"><input value={String(item.product_name ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { product_name: event.target.value })} className="w-64 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 text-gray-900"><input type="number" min="1" value={String(item.orderdata_item_quantity ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_item_quantity: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 text-gray-900"><input type="number" min="1" value={String(item.packSize ?? item.pack_size ?? 1)} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { packSize: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 text-xs text-gray-900">{item.fallbackProductNote || item.remark || "—"}</td>
                       <td className="p-3">
                         <button type="button" disabled={saving} onClick={() => updateItem(item.originalLineId, { _removed: !removed } as Partial<OrderData>)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700">
                           {removed ? "Restore" : "Remove"}
@@ -1562,11 +1564,11 @@ export default function ViewOrderDealerPage() {
               <>
                 <button onClick={() => setEditDialogOpen(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-[13px] font-semibold rounded-xl transition-colors">
-                  Edit Order
+                <PenLine /> Edit Order
                 </button>
                 <button onClick={() => setCancelDialogOpen(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-[13px] font-semibold rounded-xl transition-colors">
-                  Cancel Order
+                 <Trash2 /> Cancel Order
                 </button>
               </>
             )}

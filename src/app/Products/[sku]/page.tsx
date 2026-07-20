@@ -246,12 +246,16 @@ export default function ProductDetailsPage() {
     ? rowPacks[selectedVariantSKU] ?? ""
     : "";
   const selectedQuantity  = quantityAsNumber(selectedQuantityValue);
-  const displayPricePaise = variantPricePaise(selectedVariant);   // per unit (paise)
-  const selectedPackSize  = selectedVariant?.pack ?? 1;
-  const packPricePaise    = displayPricePaise !== null ? displayPricePaise * selectedPackSize : null;
-  const perUnitPaise      = displayPricePaise;                    // price IS already per unit
-  const lineTotalPaise    = displayPricePaise !== null
-    ? displayPricePaise * selectedQuantity * selectedPackSize : null;     // price × total units
+  const selectedPackSize = Math.max(1, selectedVariant?.pack ?? 1);
+  const packPricePaise = variantPricePaise(selectedVariant);
+  const perUnitPaise =
+    packPricePaise !== null
+      ? Math.round(packPricePaise / selectedPackSize)
+      : null;
+  const lineTotalPaise =
+    packPricePaise !== null
+      ? packPricePaise * selectedQuantity
+      : null;
 
   // Spec keys from all variants → variant table columns
   const specKeys = product?.variants?.length ? getSpecKeys(product.variants) : [];
@@ -259,14 +263,19 @@ export default function ProductDetailsPage() {
   // Per-row calculation for the variants table
   const rowCalc = (variantSku: string) => {
     const quantityValue = rowPacks[variantSku] ?? "";
-    const numPacks  = quantityAsNumber(quantityValue);
-    const vm        = product?.variants?.find(v => v.sku === variantSku);
-    const packSize  = vm?.pack ?? 1;
-    const unitPaise = variantPricePaise(vm ?? null) ?? 0;          // per unit
-    const packPaise = unitPaise * packSize;              // per pack
+    const numPacks = quantityAsNumber(quantityValue);
+    const variant = product?.variants?.find((item) => item.sku === variantSku);
+    const packSize = Math.max(1, variant?.pack ?? 1);
+    const packPaise = variantPricePaise(variant ?? null) ?? 0;
+    const unitPaise = packPaise > 0 ? Math.round(packPaise / packSize) : 0;
+
     return {
-      quantityValue, numPacks, packSize, unitPaise, packPaise,
-      totalPaise: unitPaise * numPacks * packSize,       // price × total units
+      quantityValue,
+      numPacks,
+      packSize,
+      unitPaise,
+      packPaise,
+      totalPaise: packPaise * numPacks,
       perUnit: unitPaise || null,
     };
   };
@@ -279,14 +288,14 @@ export default function ProductDetailsPage() {
   const canBuyNow = Boolean(
     selectedVariantSKU &&
     selectedVariant &&
-    displayPricePaise !== null &&
+    perUnitPaise !== null &&
     selectedQuantity > 0 &&
     selectedVariant.inStock
   );
   const canAddSelected = Boolean(
     selectedVariantSKU &&
     selectedVariant &&
-    displayPricePaise !== null &&
+    perUnitPaise !== null &&
     selectedQuantity > 0 &&
     selectedVariant.inStock
   );
@@ -328,11 +337,23 @@ export default function ProductDetailsPage() {
   };
 
   const handleAddSelected = () => {
-    if (!selectedVariantSKU || !product || !selectedVariant || displayPricePaise === null || selectedQuantity <= 0 || !selectedVariant.inStock) return;
+    if (
+      !selectedVariantSKU ||
+      !product ||
+      !selectedVariant ||
+      perUnitPaise === null ||
+      selectedQuantity <= 0 ||
+      !selectedVariant.inStock
+    ) {
+      return;
+    }
+
+    const pricePerUnit = perUnitPaise;
+
     addVariant(
       selectedVariantSKU,
       selectedVariant.name ?? product.name,
-      displayPricePaise,
+      pricePerUnit,
       selectedQuantity,
       selectedPackSize,
       getVariantImage(product, selectedVariant)
@@ -353,17 +374,19 @@ export default function ProductDetailsPage() {
       !selectedVariantSKU ||
       !selectedVariant ||
       !product ||
-      displayPricePaise === null ||
+      perUnitPaise === null ||
       selectedQuantity <= 0 ||
       !selectedVariant.inStock
     ) {
       return;
     }
 
+    const pricePerUnit = perUnitPaise;
+
     addToCart({
       id: selectedVariantSKU,
       name: selectedVariant.name ?? product.name,
-      price: displayPricePaise,
+      price: pricePerUnit,
       packSize: selectedPackSize,
       image: getVariantImage(product, selectedVariant),
       initialQty: selectedQuantity,
@@ -590,9 +613,9 @@ export default function ProductDetailsPage() {
                           Pack of {selectedPackSize}
                         </span>
                       )}
-                      {displayPricePaise !== null && (
+                      {perUnitPaise !== null && (
                         <span style={{ fontSize: 11.5, color: "#94a3b8" }}>
-                          = {fmt(displayPricePaise)} / unit
+                          = {fmt(perUnitPaise)} / unit
                         </span>
                       )}
                     </div>
@@ -809,4 +832,3 @@ export default function ProductDetailsPage() {
     </>
   );
 }
-
