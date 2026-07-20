@@ -233,7 +233,7 @@ test("Dealer cannot update dispatch", () => {
   ), false);
 });
 
-test("Dispatch All is Staff-only and still requires assignment and accepted order access", () => {
+test("Multi-item dispatch is Staff-only and still requires assignment and accepted order access", () => {
   const context = { dealerId: "225", assignedStaffId: "77", acceptOrder: "1", delStatus: "0" };
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, context), true);
   assert.equal(dispatch.canUserBulkDispatch({ role: "admin", id: "1" }, context), false);
@@ -241,6 +241,29 @@ test("Dispatch All is Staff-only and still requires assignment and accepted orde
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "90" }, context), false);
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, acceptOrder: "0" }), false);
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, delStatus: "1" }), false);
+});
+
+test("numeric and string acceptance values normalize consistently", () => {
+  assert.equal(dispatch.normalizeOrderAcceptance(1), "accepted");
+  assert.equal(dispatch.normalizeOrderAcceptance("1"), "accepted");
+  assert.equal(dispatch.normalizeOrderAcceptance(0), "unaccepted");
+  assert.equal(dispatch.normalizeOrderAcceptance("0"), "unaccepted");
+  assert.equal(dispatch.normalizeOrderAcceptance(undefined), "missing");
+});
+
+test("missing secondary status cannot erase confirmed PHP acceptance", () => {
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: [undefined, "1", ""] }), "1");
+});
+
+test("Mongo acceptance is used only when PHP acceptance is unavailable", () => {
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: [undefined, ""], mongoAccepted: "1" }), "1");
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: ["0"], mongoAccepted: "1" }), "0");
+});
+
+test("Mongo acceptance cannot override cancellation, rejection, or deletion", () => {
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: [], mongoAccepted: "1", terminalValues: ["cancelled"] }), "0");
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: [], mongoAccepted: "1", terminalValues: ["rejected"] }), "0");
+  assert.equal(dispatch.resolveOrderAcceptance({ phpValues: [], mongoAccepted: "1", deleted: "1" }), "0");
 });
 
 test("Missing acceptance field safely blocks staff access", () => {
@@ -402,6 +425,17 @@ test("Bulk dispatch plan preserves existing item identity and duplicate SKU occu
   );
 });
 
+test("selection keys keep duplicate catalogue lines independently selectable", () => {
+  assert.notEqual(
+    dispatch.buildBulkDispatchLineKey({ orderItemId: null, sku: "50/8", occurrence: 1 }),
+    dispatch.buildBulkDispatchLineKey({ orderItemId: null, sku: "50/8", occurrence: 2 })
+  );
+  assert.notEqual(
+    dispatch.buildBulkDispatchLineKey({ orderItemId: "601", sku: "50/8", occurrence: 1 }),
+    dispatch.buildBulkDispatchLineKey({ orderItemId: "602", sku: "50/8", occurrence: 1 })
+  );
+});
+
 test("Legacy readyquantity is imported once without double-counting", () => {
   const seed = dispatch.buildLegacyDispatchSeed({
     orderId: "3841",
@@ -469,25 +503,45 @@ test("UI and API rely on the shared normalized dispatch access helper", async ()
   assert.match(apiSource, /canUserEditDispatch/);
 });
 
-test("Order details page wires the Staff-only Dispatch All confirmation flow", async () => {
+test("Order details page wires the Staff-only selected-products dispatch flow", async () => {
   const source = await fs.readFile(orderDetailPath, "utf8");
   assert.match(source, /canUserBulkDispatch/);
   assert.match(source, /buildBulkDispatchPlan\(displayOrders\)/);
-  assert.match(source, /Dispatch All/);
-  assert.match(source, /All Products Dispatched/);
-  assert.match(source, /Dispatch All Products/);
+  assert.match(source, /Select All Dispatchable/);
+  assert.match(source, /Clear Selection/);
+  assert.match(source, /Dispatch Selected \(\{selectedDispatchLines\.length\}\)/);
+  assert.match(source, /Dispatch Selected Products/);
+  assert.match(source, /selectedDispatchLines\.map/);
+  assert.match(source, /String\(line\.remainingQuantity\)/);
   assert.match(source, /handleDispatchRecordsSaved\(records\)/);
   assert.doesNotMatch(source, /displayOrders\.forEach\(.*fetch/s);
 });
 
-test("Dispatch All API reuses normalized merge, bulk plan, idempotency, and guarded Mongo updates", async () => {
+test("selected-products API reuses normalized merge, bulk plan, idempotency, and guarded Mongo updates", async () => {
   const source = await fs.readFile(dispatchApiPath, "utf8");
-  assert.match(source, /action.*dispatch_all/s);
+  assert.match(source, /action.*dispatch_selected/s);
   assert.match(source, /actor\.role !== "staff"/);
-  assert.match(source, /mergeOrderItemsWithDispatchRecords\(payload\.items, docs\)/);
+  assert.match(source, /mergeOrderItemsWithDispatchRecords\(effectiveItems, docs\)/);
   assert.match(source, /buildBulkDispatchPlan\(mergedItems\)/);
   assert.match(source, /bulkUpdateId\(idempotencyKey, line\)/);
   assert.match(source, /"updates\.id": \{ \$ne: updateId \}/);
   assert.match(source, /\$expr:\s*\{\s*\$lte:/);
+  assert.match(source, /fetchStaffAssignedDealerIds\(actor\.id\)/);
+  assert.match(source, /const dispatchQuantity = Number\(input\.dispatchQuantity\)/);
   assert.match(source, /invalidatePendingProductsCache\(\)/);
+});
+
+test("Admin acceptance mirror runs only after the PHP acceptance request succeeds", async () => {
+  const source = await fs.readFile(orderListPath, "utf8");
+  const phpCall = source.indexOf("acceptstatus_requst");
+  const mirrorCall = source.indexOf("mirror_acceptance");
+  assert.ok(phpCall >= 0 && mirrorCall > phpCall);
+  assert.match(source, /status === 1 && session\.role === 'admin'/);
+});
+
+test("acceptance mirror reuses the existing order overlay collection", async () => {
+  const overlaySource = await fs.readFile(path.resolve("src/lib/orderOverlays.ts"), "utf8");
+  assert.match(overlaySource, /saveAcceptedState/);
+  assert.match(overlaySource, /getOrderOverlayCollection\(\)/);
+  assert.doesNotMatch(overlaySource, /order_acceptance/);
 });

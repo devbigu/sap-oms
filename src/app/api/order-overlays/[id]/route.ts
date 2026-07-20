@@ -4,6 +4,7 @@ import { resolveOrderAccess } from "@/lib/orderAccess";
 import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeServer";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
+import { parsePhpJsonResponse } from "@/lib/phpJson";
 import {
   buildOrderEditRevision,
   findOrderOverlay,
@@ -14,6 +15,7 @@ import {
   resolveOverlayAssignedStaffId,
   resolveOverlayDealerId,
   saveCancellation,
+  saveAcceptedState,
   saveEditRevision,
   toSafeOverlay,
   type OrderOverlayActor,
@@ -49,7 +51,7 @@ async function fetchPhpDetail(orderId: string) {
   if (!response.ok) {
     throw new OrderOverlayError(502, "php_unavailable", "Unable to fetch the original PHP order.");
   }
-  return response.json();
+  return parsePhpJsonResponse(response);
 }
 
 async function fetchDispatchRecords(orderId: string) {
@@ -105,6 +107,23 @@ async function loadEffectiveContext(orderIdInput: string, actor: OrderOverlayAct
   };
 }
 
+async function loadPublicEffectiveContext(orderIdInput: string) {
+  const orderId = normalizeOverlayOrderId(orderIdInput);
+  const phpDetail = await fetchPhpDetail(orderId);
+  const normalized = normalizeOrderItems(phpDetail, orderId);
+  const originalOrder = normalized.meta;
+  const overlay = await findOrderOverlay(orderId);
+  const dispatchRecords = await fetchDispatchRecords(orderId).catch(() => []);
+  const effective = resolveEffectiveOrder({
+    orderId,
+    originalOrder,
+    originalItems: normalized.items,
+    overlay,
+    dispatchRecords,
+  });
+  return { effective, overlay };
+}
+
 function errorResponse(error: unknown) {
   if (error instanceof OrderOverlayError) {
     return NextResponse.json({ success: false, code: error.code, message: error.message }, { status: error.status });
@@ -123,18 +142,15 @@ function errorResponse(error: unknown) {
   );
 }
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const actor = parseActor(req);
-    if (!actor) {
-      return NextResponse.json({ success: false, message: "Missing order overlay identity." }, { status: 401 });
-    }
     const { id } = await params;
-    const context = await loadEffectiveContext(id, actor);
+    const context = await loadPublicEffectiveContext(id);
     return NextResponse.json({
       success: true,
       data: {
         ...context.effective,
+        itemContract: "complete",
         overlay: toSafeOverlay(context.overlay),
       },
     });
@@ -150,13 +166,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!actor) {
       return NextResponse.json({ success: false, message: "Missing order overlay identity." }, { status: 401 });
     }
+    const { id } = await params;
+    const body = await req.json();
+    const action = safeText(body.action, 40);
+
+    if (action === "mirror_acceptance") {
+      if (actor.role !== "admin") {
+        return NextResponse.json({ success: false, message: "Only Admin can mirror accepted order state." }, { status: 403 });
+      }
+      if (String(body.acceptOrder ?? "").trim() !== "1") {
+        return NextResponse.json({ success: false, message: "Only a successful accepted state can be mirrored." }, { status: 400 });
+      }
+      const saved = await saveAcceptedState({
+        orderId: id,
+        dealerId: safeText(body.dealerId, 80),
+        assignedStaffId: safeText(body.assignedStaffId, 80) || null,
+        actor,
+      });
+      invalidatePendingProductsCache();
+      return NextResponse.json({ success: true, data: toSafeOverlay(saved) });
+    }
+
     if (actor.role !== "dealer") {
       return NextResponse.json({ success: false, message: "Only Dealers can change their order overlay." }, { status: 403 });
     }
 
-    const { id } = await params;
-    const body = await req.json();
-    const action = safeText(body.action, 40);
     const context = await loadEffectiveContext(id, actor);
 
     if (!context.effective.eligibility.canDealerChange) {

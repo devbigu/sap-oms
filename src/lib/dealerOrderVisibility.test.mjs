@@ -107,7 +107,8 @@ test("direct details, invoice, and reorder all retain Dealer ownership gates", a
     fs.readFile(path.resolve("src/app/dashboard/dealer/AddOrderForm/page.tsx"), "utf8"),
     fs.readFile(path.resolve("src/app/api/custom-discount-requests/[id]/route.ts"), "utf8"),
   ]);
-  assert.match(detailRoute, /scopeOrdersForActor/);
+  assert.match(detailRoute, /resolveOrderAccess/);
+  assert.match(detailRoute, /actor,[\s\S]*assignedDealerIds/);
   assert.match(detailPage, /buildDispatchHeaders\(currentUser\)/);
   assert.match(invoice, /actor\.actorId === ownerId/);
   assert.match(reorder, /"x-omsons-actor-role": "dealer"/);

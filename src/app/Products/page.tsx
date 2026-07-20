@@ -92,7 +92,6 @@ const PAGE_SIZE = 24;
 // ─────────────────────────────────────────────────────────────
 function ProductCard({ product }: { product: Product }) {
   const img = getProductImage(product);
-  console.log(img);
   const { regular, sale } = getLowestPrice(product);
   const displayPrice = sale ?? regular;
   const packSize = displayPrice !== null ? getFirstPackSize(product) : 1;
@@ -429,7 +428,7 @@ function ProductsContent() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-                    {section.products.map(p => <ProductCard key={p.sku} product={p} />)}
+                    {section.products.map(p => <ProductCard key={`${section.section}:${p.id}`} product={p} />)}
                   </div>
                 </section>
               ))}

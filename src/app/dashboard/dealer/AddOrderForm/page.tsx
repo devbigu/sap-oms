@@ -1529,7 +1529,7 @@ function AddOrderPageInner() {
     }).catch(() => { });
   };
 
-  const saveOrderSummaryOverride = async (orderId: string) => {
+  const saveOrderSummaryOverride = async (orderId: string, items: Array<Record<string, unknown>>) => {
     if (!orderId || !user?.Dealer_Id) return;
 
     const approvedDiscountPercent = hasApprovedCustomDiscount
@@ -1579,6 +1579,7 @@ function AddOrderPageInner() {
         slabDiscountAmount: payloadAmount(discountPayload.slabDiscountAmount),
         couponDiscountPercent: discountPayload.couponDiscountPercent,
         approvedDiscountPercent,
+        items,
         reason: readableReason,
       }),
     }).catch((err) => {
@@ -1634,6 +1635,8 @@ function AddOrderPageInner() {
       const rowDiscountAmount = rowSubtotal * (rowDiscountPercent / 100);
       return {
         productname: r.productname,
+        productName: r.displayName || r.productname,
+        catNo: r.variantCode || r.productname,
         // PHP calculates amount as producQuanity * price, so send pieces here.
         producQuanity: String(totalPieces),
         quantityPacks: String(quantityPacks),
@@ -1717,7 +1720,7 @@ function AddOrderPageInner() {
       const placedOrderId = extractOrderIdFromResponse(data) || await getLatestOrderIdForDealer();
       await Promise.allSettled([
         saveOrderNoteForHistory(placedOrderId),
-        saveOrderSummaryOverride(placedOrderId),
+        saveOrderSummaryOverride(placedOrderId, payload),
         linkCustomDiscountRequestsToOrder(customDiscountSources, placedOrderId),
         verifySubmittedProductNotes(placedOrderId),
       ]);

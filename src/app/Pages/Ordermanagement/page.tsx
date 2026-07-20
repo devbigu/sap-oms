@@ -1011,10 +1011,36 @@ export default function OrdersPage() {
         return
       }
       const res = await axios.post(`${BACKEND_URL}/acceptstatus_requst`, fd)
+      if (res.data?.success === false || res.data?.status === false) {
+        throw new Error(res.data?.msg || 'Acceptance update failed')
+      }
+      if (status === 1 && session.role === 'admin') {
+        const order = data.find((row) => String(row.order_id) === String(id))
+        const mirrorRes = await fetch(`/api/order-overlays/${encodeURIComponent(id)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-omsons-actor-role': session.role,
+            'x-omsons-actor-id': session.id,
+            'x-omsons-actor-name': session.name,
+          },
+          body: JSON.stringify({
+            action: 'mirror_acceptance',
+            acceptOrder: '1',
+            dealerId: order?.order_dealer,
+            assignedStaffId: order?.staffid,
+          }),
+        })
+        if (!mirrorRes.ok) {
+          setToast({ msg: 'Order accepted, but the acceptance fallback could not be synchronized.', type: 'err' })
+          queryClient.invalidateQueries({ queryKey: ['orders'] })
+          return
+        }
+      }
       setToast({ msg: res.data?.msg || 'Status updated.', type: 'ok' })
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     } catch { setToast({ msg: 'Action failed.', type: 'err' }) }
-  }, [queryClient, session])
+  }, [data, queryClient, session])
 
   const loadDispatchProducts = useCallback(async (orderId: string, preferredProductId?: string) => {
     setDispatchProductsLoading(true)

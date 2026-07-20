@@ -6,8 +6,14 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const staffOrderScopeUrl = pathToFileURL(path.resolve("src/lib/staffOrderScope.js")).href;
+const phpJsonSource = await fs.readFile(path.resolve("src/lib/phpJson.ts"), "utf8");
+const phpJsonOutput = ts.transpileModule(phpJsonSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const phpJsonUrl = `data:text/javascript;base64,${Buffer.from(phpJsonOutput).toString("base64")}`;
 const source = (await fs.readFile(path.resolve("src/lib/orderAccess.ts"), "utf8"))
-  .replace("@/lib/staffOrderScope.js", staffOrderScopeUrl);
+  .replace("@/lib/staffOrderScope.js", staffOrderScopeUrl)
+  .replace("@/lib/phpJson", phpJsonUrl);
 const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -18,7 +24,7 @@ async function withRows(rows, callback) {
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(String(url));
-    return { ok: true, status: 200, json: async () => ({ data: rows }) };
+    return new Response(JSON.stringify({ data: rows }), { status: 200 });
   };
   try { await callback(calls); } finally { globalThis.fetch = originalFetch; }
 }
@@ -51,7 +57,7 @@ test("direct access checks the current source on every request", async () => {
 
 test("upstream failure reports availability without a date message", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+  globalThis.fetch = async () => new Response("{}", { status: 503 });
   try {
     const result = await access.resolveOrderAccess("down");
     assert.equal(result.reason, "upstream_unavailable");
@@ -64,13 +70,10 @@ test("order detail fallback preserves Staff assignment access when order listing
   globalThis.fetch = async (url) => {
     const path = String(url);
     if (path.includes("orderpegination")) {
-      return { ok: false, status: 500, json: async () => ({}) };
+      return new Response("{}", { status: 500 });
     }
     if (path.includes("orderdatalist")) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           data: [
             {
               orderdata_orderid: "3860",
@@ -78,8 +81,7 @@ test("order detail fallback preserves Staff assignment access when order listing
               orderdata_datetime: "2026-07-18 23:38:37",
             },
           ],
-        }),
-      };
+        }), { status: 200 });
     }
     throw new Error(`Unexpected URL ${path}`);
   };
@@ -103,13 +105,10 @@ test("unsearched order header fallback preserves Admin access when searched list
   globalThis.fetch = async (url) => {
     const path = String(url);
     if (path.includes("orderpegination") && path.includes("search=3862")) {
-      return { ok: false, status: 500, json: async () => ({}) };
+      return new Response("{}", { status: 500 });
     }
     if (path.includes("orderpegination") && path.includes("search=")) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           data: [
             {
               order_id: "3862",
@@ -119,8 +118,7 @@ test("unsearched order header fallback preserves Admin access when searched list
               del_status: "0",
             },
           ],
-        }),
-      };
+        }), { status: 200 });
     }
     throw new Error(`Unexpected URL ${path}`);
   };
@@ -144,21 +142,17 @@ test("order detail fallback does not bypass legacy dealer scoped access", async 
   globalThis.fetch = async (url) => {
     const path = String(url);
     if (path.includes("orderhispegination")) {
-      return { ok: false, status: 500, json: async () => ({}) };
+      return new Response("{}", { status: 500 });
     }
     if (path.includes("orderdatalist")) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           data: [
             {
               orderdata_orderid: "3860",
               orderdata_dealerid: "89",
             },
           ],
-        }),
-      };
+        }), { status: 200 });
     }
     throw new Error(`Unexpected URL ${path}`);
   };
@@ -253,13 +247,10 @@ test("Missing order reports Order not found", async () => {
   });
 });
 
-test("Order Details verifies role access before loading complete detail data", async () => {
+test("Order Details loads the PHP detail source without an access gate", async () => {
   const page = await fs.readFile(path.resolve("src/app/orders/[id]/page.tsx"), "utf8");
-  const accessIndex = page.indexOf("/api/order-access/");
-  const detailIndex = page.indexOf("return fetch(url)", accessIndex);
-  assert.ok(accessIndex >= 0);
-  assert.ok(detailIndex > accessIndex);
-  assert.match(page, /buildDispatchHeaders\(currentUser\)/);
+  assert.doesNotMatch(page, /\/api\/order-access\//);
+  assert.match(page, /fetch\(url\)[\s\S]*normalizeOrderDetailResponse\(d, id\)/);
 });
 
 test("Order Details uses the raw order ID for detail fetching after successful access", async () => {
@@ -268,20 +259,16 @@ test("Order Details uses the raw order ID for detail fetching after successful a
   assert.doesNotMatch(page, /orderdatalist\?id=\$\{[^}]*formatted/i);
 });
 
-test("Order Details distinguishes not found, denied, and temporary verification states", async () => {
+test("Order Details keeps supplemental failures separate from order items", async () => {
   const page = await fs.readFile(path.resolve("src/app/orders/[id]/page.tsx"), "utf8");
-  assert.match(page, /Order unavailable/);
-  assert.match(page, /Order not found\./);
-  assert.match(page, /This order is outside your assigned order scope\./);
-  assert.match(page, /Order verification is temporarily unavailable\./);
+  assert.match(page, /Order changes could not be loaded; original order items are shown\./);
+  assert.match(page, /Discount metadata could not be loaded; stored order totals remain visible\./);
+  assert.match(page, /Dispatch data could not be verified\./);
 });
 
 test("Successful access loads complete product lines and preserves discount and overlay flows", async () => {
   const page = await fs.readFile(path.resolve("src/app/orders/[id]/page.tsx"), "utf8");
-  const accessIndex = page.indexOf("setOrderAccessVerified(true)");
-  const detailsIndex = page.indexOf("setOrders(raw as OrderData[])", accessIndex);
-  assert.ok(accessIndex >= 0);
-  assert.ok(detailsIndex > accessIndex);
+  assert.match(page, /normalizeOrderDetailResponse\(d, id\)/);
   assert.match(page, /getOrderDiscountSummaryRows\(discountBreakdown\)/);
   assert.match(page, /\/api\/order-overlays\/\$\{encodeURIComponent\(id\)\}/);
   assert.match(page, /displayOrders\.map/);

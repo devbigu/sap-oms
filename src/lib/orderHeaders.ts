@@ -1,4 +1,5 @@
 import { scanScopedOrders, type OrdersActor } from "@/lib/orderPagination";
+import { parsePhpJsonResponse } from "@/lib/phpJson";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const UPSTREAM_PAGE_SIZE = 200;
@@ -52,7 +53,7 @@ export async function loadOrderHeaders(input: {
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
       if (!response.ok) throw new Error(`${input.source} failed with ${response.status}`);
-      const payload = await response.json();
+      const payload = await parsePhpJsonResponse<Record<string, unknown>>(response);
       const rows: Record<string, unknown>[] = Array.isArray(payload?.data)
         ? payload.data.filter((row: unknown): row is Record<string, unknown> => !!row && typeof row === "object")
         : [];

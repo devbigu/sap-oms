@@ -27,6 +27,19 @@ async function loadOverlayModule() {
 
 const overlays = await loadOverlayModule();
 
+test("PHP overlay normalization keeps duplicate catalogue lines distinct by occurrence", () => {
+  const normalized = overlays.normalizeOrderItems({
+    data: {
+      items: Array.from({ length: 10 }, (_, index) => ({ productId: "DUP", productName: `Line ${index + 1}` })),
+    },
+  }, "7001");
+
+  assert.equal(normalized.items.length, 10);
+  assert.equal(new Set(normalized.items.map((item) => item.orderdata_id)).size, 10);
+  assert.equal(normalized.items[0].orderdata_id, "php:7001:dup:1");
+  assert.equal(normalized.items[9].orderdata_id, "php:7001:dup:10");
+});
+
 const baseOrder = {
   order_id: "5001",
   order_dealer: "D-1",

@@ -3,6 +3,7 @@ import {
   resolveOrderDealerId,
   splitScopeIds,
 } from "@/lib/staffOrderScope.js";
+import { parsePhpJsonResponse } from "@/lib/phpJson";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
@@ -136,7 +137,7 @@ function applyLegacyDealerAccess(order: Record<string, unknown> | null, dealerId
 async function fetchFallbackOrderFromDetails(id: string): Promise<Record<string, unknown> | null> {
   const response = await fetch(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(id)}`, { cache: "no-store" });
   if (!response.ok) return null;
-  return fallbackOrderFromDetailPayload(id, await response.json());
+  return fallbackOrderFromDetailPayload(id, await parsePhpJsonResponse(response));
 }
 
 async function fetchFallbackOrderFromHeaders(id: string, endpoint: string, legacyDealerId: string): Promise<Record<string, unknown> | null> {
@@ -145,7 +146,7 @@ async function fetchFallbackOrderFromHeaders(id: string, endpoint: string, legac
 
   const response = await fetch(`${BACKEND_URL}/${endpoint}?${params.toString()}`, { cache: "no-store" });
   if (!response.ok) return null;
-  const rows = rowsFrom(await response.json());
+  const rows = rowsFrom(await parsePhpJsonResponse(response));
   return rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null;
 }
 
@@ -170,7 +171,7 @@ export async function resolveOrderAccess(orderId: unknown, dealerIdOrOptions?: u
       if (!fallbackOrder) return unavailableResult();
       return options ? applyActorAccess(fallbackOrder, options) : applyLegacyDealerAccess(fallbackOrder, legacyDealerId);
     }
-    const rows = rowsFrom(await response.json());
+    const rows = rowsFrom(await parsePhpJsonResponse(response));
     const order = rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null;
     if (order) return applyActorAccess(order, options);
 

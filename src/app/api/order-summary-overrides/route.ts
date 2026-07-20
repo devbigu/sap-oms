@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { Document, Filter, WithId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getReadableAdditionalDiscountText } from "@/lib/orderAmounts";
-import { filterExistingOrderIds, resolveOrderAccess } from "@/lib/orderAccess";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -78,11 +78,9 @@ export async function GET(req: NextRequest) {
     const requestedIds = orderIds
       ? orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200)
       : orderId ? [orderId] : [];
-    const visibleIds = await filterExistingOrderIds(requestedIds, dealerId);
-    if (requestedIds.length > 0 && visibleIds.size === 0) return NextResponse.json({ success: true, data: [] });
     const query: Filter<Document> = {};
     if (dealerId) query.dealerId = dealerId;
-    const visibleIdList = orderId ? (visibleIds.has(orderId) ? [orderId] : []) : Array.from(visibleIds);
+    const visibleIdList = requestedIds;
     const visibleVariants = Array.from(new Set(visibleIdList.flatMap(orderIdVariants)));
     const visibleNumbers = Array.from(new Set(visibleIdList
       .map((id) => Number(normalizeOrderLookupKey(id)))
@@ -135,6 +133,9 @@ export async function POST(req: NextRequest) {
     const slabDiscountAmount = safeAmount(body.slabDiscountAmount ?? body.slab_discount_amount);
     const couponDiscountPercent = safeAmount(body.couponDiscountPercent ?? body.coupon_discount_percent) ?? 0;
     const approvedDiscountPercent = safeAmount(body.approvedDiscountPercent ?? body.approved_discount_percent);
+    const items = Array.isArray(body.items)
+      ? body.items.filter((item) => item && typeof item === "object").slice(0, 500)
+      : [];
 
     if (!orderId || !dealerId || grossAmount === undefined || discountAmount === undefined || netPayableAmount === undefined) {
       return NextResponse.json(
@@ -207,6 +208,7 @@ export async function POST(req: NextRequest) {
       slabDiscountAmount: normalizedSlabDiscountAmount,
       couponDiscountPercent,
       approvedDiscountPercent,
+      items,
       reason: safeText(body.reason, 200) || getReadableAdditionalDiscountText({
         additionalDiscountType: normalizedAdditionalType,
         slabDiscountPercent,

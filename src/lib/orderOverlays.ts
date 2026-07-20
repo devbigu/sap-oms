@@ -42,6 +42,17 @@ export type OrderOverlayCancellation = {
   cancelledAt: string;
 };
 
+export type OrderAcceptanceMirror = {
+  status: "accepted";
+  rawStatus: "1";
+  acceptedBy: {
+    id: string;
+    role: "admin";
+    name?: string;
+  };
+  acceptedAt: string;
+};
+
 export type OrderOverlayChange =
   | { type: "removed"; originalLineId: string; original: OrderOverlayItem; summary: string }
   | { type: "replaced"; originalLineId: string; effectiveLineId: string; original: OrderOverlayItem; current: OrderOverlayItem; summary: string }
@@ -74,6 +85,7 @@ export type OrderOverlayDocument = {
   assignedStaffId?: string | null;
   status: "active" | "cancelled";
   cancellation?: OrderOverlayCancellation;
+  acceptance?: OrderAcceptanceMirror;
   edits: OrderEditRevision[];
   latestRevision: number;
   originalOrderRef?: Record<string, unknown>;
@@ -171,9 +183,9 @@ export function resolveOverlayAssignedStaffId(order: Record<string, unknown> | n
   return firstNonEmpty(order?.assignedstaff, order?.staffid, item?.assignedstaff, item?.staffid) || null;
 }
 
-function stableLineId(item: Record<string, unknown>, orderId: string, index: number) {
-  return firstNonEmpty(item.orderdata_id, item.orderItemId, item.id, item.productId)
-    || `php:${orderId}:${normalizeSku(item.orderdata_cat_no ?? item.productId ?? item.catNo)}:${index + 1}`;
+function stableLineId(item: Record<string, unknown>, orderId: string, occurrence: number) {
+  return firstNonEmpty(item.orderdata_id, item.orderItemId, item.id)
+    || `php:${orderId}:${normalizeSku(item.orderdata_cat_no ?? item.productId ?? item.catNo)}:${occurrence}`;
 }
 
 function normalizeItem(item: Record<string, unknown>, orderId: string, index: number): OrderOverlayItem {
@@ -214,7 +226,16 @@ export function normalizeOrderItems(rawData: unknown, orderId: string): { meta: 
     rows = ((meta as { items?: unknown[] }).items ?? []).filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
   }
 
-  return { meta, items: rows.map((item, index) => normalizeItem(item, orderId, index)) };
+  const occurrences = new Map<string, number>();
+  return {
+    meta,
+    items: rows.map((item) => {
+      const sku = normalizeSku(item.orderdata_cat_no ?? item.productId ?? item.catNo);
+      const occurrence = (occurrences.get(sku) ?? 0) + 1;
+      occurrences.set(sku, occurrence);
+      return normalizeItem(item, orderId, occurrence);
+    }),
+  };
 }
 
 export function hasDispatchStarted(items: Array<Record<string, unknown>>, dispatchRecords: Array<Record<string, unknown>> = []) {
@@ -479,6 +500,51 @@ export async function saveCancellation(input: {
   );
 
   return collection.findOne({ orderId: input.orderId });
+}
+
+export async function saveAcceptedState(input: {
+  orderId: string;
+  dealerId?: string;
+  assignedStaffId?: string | null;
+  actor: OrderOverlayActor;
+}) {
+  if (input.actor.role !== "admin") {
+    throw new OrderOverlayError(403, "forbidden", "Only Admin can mirror an accepted order state.");
+  }
+  const orderId = normalizeOverlayOrderId(input.orderId);
+  const collection = await getOrderOverlayCollection();
+  const existing = await collection.findOne({ orderId });
+  if (existing?.status === "cancelled") {
+    throw new OrderOverlayError(409, "order_already_cancelled", "Cancelled orders cannot be marked accepted.");
+  }
+  const now = new Date().toISOString();
+  const acceptance: OrderAcceptanceMirror = {
+    status: "accepted",
+    rawStatus: "1",
+    acceptedBy: { id: input.actor.actorId, role: "admin", name: input.actor.name },
+    acceptedAt: now,
+  };
+  await collection.updateOne(
+    { orderId },
+    {
+      $set: {
+        orderId,
+        acceptance,
+        source: ORDER_OVERLAY_VERSION,
+        updatedAt: now,
+        ...(input.dealerId ? { dealerId: input.dealerId } : {}),
+        ...(input.assignedStaffId !== undefined ? { assignedStaffId: input.assignedStaffId } : {}),
+      },
+      $setOnInsert: {
+        status: "active",
+        edits: [],
+        latestRevision: 0,
+        createdAt: now,
+      },
+    },
+    { upsert: true }
+  );
+  return collection.findOne({ orderId });
 }
 
 export async function saveEditRevision(input: {

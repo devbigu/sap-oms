@@ -13,12 +13,22 @@ import {
   resolveOrderDiscountBreakdown,
 } from "@/lib/orderAmounts";
 import { mergeFallbackProductNotes } from "@/lib/orderProductNotes.mjs";
+import {
+  mergeOrderSummarySources,
+  normalizeOrderDetailResponse,
+  resolveEffectiveOrderDetailItems,
+} from "@/lib/orderDetailItems";
 import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
 import {
   buildBulkDispatchPlan,
+  buildBulkDispatchLineKey,
   mergeOrderItemsWithDispatchRecords,
   canUserBulkDispatch,
   canUserEditDispatch,
+  DISPATCH_MUTATION_STATUSES,
+  DISPATCH_STATUS_LABELS,
+  normalizeOrderAcceptance,
+  resolveOrderAcceptance,
   type DispatchUserSession,
   type OrderDispatchRecord,
   type DispatchStatus,
@@ -168,54 +178,6 @@ type OrderMeta = Record<string, unknown> & {
   items?: unknown[];
 };
 
-type OrderApiItem = Record<string, unknown> & {
-  productId?: unknown;
-  id?: unknown;
-  orderId?: unknown;
-  catNo?: unknown;
-  orderdata_cat_no?: unknown;
-  quantityPacks?: unknown;
-  quantity?: unknown;
-  orderdata_item_quantity?: unknown;
-  unitPrice?: unknown;
-  unit_price?: unknown;
-  orderdata_price?: unknown;
-  discountAmount?: unknown;
-  orderdata_discount?: unknown;
-  finalPrice?: unknown;
-  final_price?: unknown;
-  orderdata_afterDisPrice?: unknown;
-  status?: unknown;
-  orderdata_status?: unknown;
-  documentDate?: unknown;
-  orderdata_datetime?: unknown;
-  productName?: unknown;
-  product_name?: unknown;
-  productDescription?: unknown;
-  product_discription?: unknown;
-  unit?: unknown;
-  product_unit?: unknown;
-  packSize?: unknown;
-  pack_size?: unknown;
-  totalPieces?: unknown;
-  total_pieces?: unknown;
-  readyQuantity?: unknown;
-  readyquantity?: unknown;
-  remark?: unknown;
-  remarks?: unknown;
-  priority?: unknown;
-  isPriority?: unknown;
-  is_priority?: unknown;
-  totalDiscountPercent?: unknown;
-  discount?: unknown;
-  del_status?: unknown;
-  accept_order?: unknown;
-  staffid?: unknown;
-  assignedstaff?: unknown;
-  order_dealer?: unknown;
-  orderdata_dealerid?: unknown;
-};
-
 type DispatchRecordResponse = OrderDispatchRecord & {
   remainingQuantity?: number;
 };
@@ -241,6 +203,7 @@ type EffectiveOrderOverlayState = {
   cancellation?: { reason?: string; cancelledAt?: string; cancelledBy?: { id?: string; role?: string; name?: string } } | null;
   eligibility?: { canDealerChange?: boolean; reason?: string } | null;
   changeHistory?: Array<{ summary?: string; type?: string }>;
+  acceptance?: { status?: string; rawStatus?: string; acceptedAt?: string } | null;
 };
 
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -261,6 +224,21 @@ function logPhpExchange(label: string, details: PhpExchangeLog) {
   if (details.response !== undefined) console.info("received from PHP", details.response);
   if (details.error !== undefined) console.error("PHP request failed", details.error);
   console.groupEnd();
+}
+
+function parsePhpJsonText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    for (let index = trimmed.indexOf("{"); index >= 0; index = trimmed.indexOf("{", index + 1)) {
+      try {
+        return JSON.parse(trimmed.slice(index));
+      } catch {}
+    }
+    throw new SyntaxError("Unable to parse PHP JSON response");
+  }
 }
 
 function firstNonEmptyString(...values: unknown[]) {
@@ -297,7 +275,7 @@ async function fetchOrderDispatchAccessMeta(
 
   const payload = await response.json();
   const rows = Array.isArray(payload?.data) ? payload.data : [];
-  const matched = rows.find((entry: Record<string, unknown>) => String(entry?.order_id ?? "").trim() === String(orderId).trim()) ?? rows[0];
+  const matched = rows.find((entry: Record<string, unknown>) => orderLookupKey(entry?.order_id) === orderLookupKey(orderId));
   if (!matched) return null;
 
   return {
@@ -380,17 +358,6 @@ function buildDispatchHeaders(user: DispatchUserSession | null): HeadersInit {
   };
 }
 
-function orderAccessMessage(status: number, payload: Record<string, unknown> | null) {
-  if (typeof payload?.message === "string" && payload.message.trim()) return payload.message;
-  if (payload?.reason === "not_found" || status === 404) return "Order not found.";
-  if (payload?.reason === "forbidden" || status === 403) return "This order is outside your assigned order scope.";
-  if (payload?.reason === "upstream_unavailable" || status === 503 || status === 502) {
-    return "Order verification is temporarily unavailable.";
-  }
-  if (status === 401) return "Access denied.";
-  return "Unable to load this order right now.";
-}
-
 function buildDispatchRecordFallbackKey(record: Partial<OrderDispatchRecord>) {
   return [
     String(record.orderId ?? "").trim(),
@@ -465,14 +432,6 @@ function parsePackSizes(html: string): Record<string, number> {
 function num(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function asStringOrNumber(value: unknown): string | number | undefined {
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
 function closeTo(a: number, b: number): boolean {
@@ -670,6 +629,9 @@ function ItemCard({
   additionalDiscountType,
   onDispatch,
   dispatchLabel,
+  selectable,
+  selected,
+  onSelectedChange,
 }: {
   o: OrderData;
   idx: number;
@@ -677,6 +639,9 @@ function ItemCard({
   additionalDiscountType: "slab" | "custom" | null;
   onDispatch: () => void;
   dispatchLabel: string;
+  selectable: boolean;
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
 }) {
   const left    = pricing.left;
   const isDeleted = o.del_status === "1";
@@ -688,6 +653,15 @@ function ItemCard({
   return (
     <div className={`bg-white border border-gray-200 rounded-2xl p-5 flex flex-col gap-4 hover:border-gray-300 hover:shadow-md transition-all ${isDeleted ? "opacity-50" : ""}`}>
       <div className="flex items-start justify-between gap-3">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(event) => onSelectedChange(event.target.checked)}
+            aria-label={`Select ${o.product_name || o.orderdata_cat_no || "product"} for dispatch`}
+            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600"
+          />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[10px] font-bold text-gray-400 font-mono">#{String(idx + 1).padStart(2, "0")}</span>
@@ -900,10 +874,8 @@ export default function ViewOrderDealerPage() {
   const tableRef = useRef<HTMLTableElement>(null);
   const year     = new Date().getFullYear();
 
-  const [orders,    setOrders   ] = useState<OrderData[]>([]);
+  const [phpOrders, setPhpOrders] = useState<OrderData[]>([]);
   const [loading,   setLoading  ] = useState(true);
-  const [orderAccessBlocked, setOrderAccessBlocked] = useState(false);
-  const [orderUnavailableMessage, setOrderUnavailableMessage] = useState("Unable to load this order right now.");
   const [orderAccessVerified, setOrderAccessVerified] = useState(false);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
   const [localOrderNote, setLocalOrderNote] = useState("");
@@ -912,6 +884,10 @@ export default function ViewOrderDealerPage() {
   const [activeOrderHeader, setActiveOrderHeader] = useState<ActiveOrderHeader | null>(null);
   const [orderAccessState, setOrderAccessState] = useState<OrderDispatchAccessState>({ key: "", meta: null });
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
+  const [overlayTotals, setOverlayTotals] = useState<OrderSummaryOverride | null>(null);
+  const [overlayError, setOverlayError] = useState("");
+  const [summaryError, setSummaryError] = useState("");
+  const [productNotesError, setProductNotesError] = useState("");
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
   const [dispatchRecords, setDispatchRecords] = useState<DispatchRecordResponse[]>([]);
   const [dispatchRecordsLoaded, setDispatchRecordsLoaded] = useState(false);
@@ -923,9 +899,13 @@ export default function ViewOrderDealerPage() {
   const [dispatchAllIdempotencyKey, setDispatchAllIdempotencyKey] = useState("");
   const [dispatchAllSaving, setDispatchAllSaving] = useState(false);
   const [dispatchAllError, setDispatchAllError] = useState("");
+  const [selectedDispatchKeys, setSelectedDispatchKeys] = useState<Set<string>>(new Set());
+  const [dispatchSelectedQuantities, setDispatchSelectedQuantities] = useState<Record<string, string>>({});
+  const [dispatchSelectedStatus, setDispatchSelectedStatus] = useState<Exclude<DispatchStatus, "pending">>("dispatched");
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [overlayState, setOverlayState] = useState<EffectiveOrderOverlayState | null>(null);
+  const [overlayItems, setOverlayItems] = useState<OrderData[] | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelError, setCancelError] = useState("");
@@ -946,15 +926,15 @@ export default function ViewOrderDealerPage() {
   const currentUser = useMemo<DispatchUserSession | null>(() => resolveCurrentUser(), []);
   const orderAccessDealerId = useMemo(
     () => firstNonEmptyString(
-      orders[0]?.order_dealer,
-      orders[0]?.orderdata_dealerid,
+      phpOrders[0]?.order_dealer,
+      phpOrders[0]?.orderdata_dealerid,
       orderMeta?.order_dealer,
       orderMeta?.orderdata_dealerid,
       activeOrderHeader?.order_dealer,
       activeOrderHeader?.orderdata_dealerid,
       activeOrderHeader?.Dealer_Id
     ),
-    [activeOrderHeader, orderMeta, orders]
+    [activeOrderHeader, orderMeta, phpOrders]
   );
   const orderAccessKey = useMemo(
     () => (id && orderAccessDealerId ? `${id}:${orderAccessDealerId}` : ""),
@@ -965,117 +945,35 @@ export default function ViewOrderDealerPage() {
   useEffect(() => {
     if (!id) return;
     const url = `${BACKEND}/orderdatalist?id=${id}`;
-    fetch(`/api/order-access/${encodeURIComponent(id)}`, {
-      cache: "no-store",
-      headers: buildDispatchHeaders(currentUser),
-    })
-      .then(async accessResponse => {
-        if (!accessResponse.ok) {
-          const accessPayload = await accessResponse.json().catch(() => null);
-          setOrderAccessBlocked(true);
-          setOrderUnavailableMessage(orderAccessMessage(accessResponse.status, accessPayload));
-          setOrderAccessVerified(false);
-          setActiveOrderHeader(null);
-          setLoading(false);
-          return null;
-        }
-        const accessPayload = await accessResponse.json().catch(() => null);
-        setActiveOrderHeader(
-          accessPayload?.data && typeof accessPayload.data === "object"
-            ? accessPayload.data as ActiveOrderHeader
-            : null
-        );
-        setOrderAccessBlocked(false);
-        setOrderUnavailableMessage("Unable to load this order right now.");
-        setOrderAccessVerified(true);
-        return fetch(url);
-      })
-      .then(r => r ? r.json() : null)
+    fetch(url)
+      .then(r => r.text().then(parsePhpJsonText))
       .then(d => {
-        if (!d) return;
         logPhpExchange("orderdatalist", {
           method: "GET",
           url,
           request: { id },
           response: d,
         });
-        // Normalize different backend shapes:
-        // - legacy: d.data = [ { orderdata_... } , ... ]
-        // - new   : d.data = { ...orderFields, items: [ { productId, productName, quantityPacks, packSize, totalPieces, ... } ] }
         try {
-          const raw: unknown = d.data;
-          let items: OrderApiItem[] = [];
-          const rawMeta = Array.isArray(raw) ? asRecord(raw[0]) : asRecord(raw);
-
-          if (Array.isArray(raw)) {
-            if (raw.length === 0) {
-              items = [];
-            } else if (rawMeta.productId || rawMeta.productName || rawMeta.quantityPacks !== undefined) {
-              items = raw.map((entry) => asRecord(entry) as OrderApiItem);
-            } else if (Array.isArray(rawMeta.items)) {
-              items = rawMeta.items.map((entry) => asRecord(entry) as OrderApiItem);
-            } else {
-              setOrders(raw as OrderData[]);
-              setOrderMeta(rawMeta as OrderMeta);
-              setLoading(false);
-              return;
-            }
-          } else if (Array.isArray(rawMeta.items)) {
-            items = rawMeta.items.map((entry) => asRecord(entry) as OrderApiItem);
-          }
-
-          const mapped: OrderData[] = items.map((it, idx) => ({
-            orderdata_id: String(it.productId ?? it.id ?? `new-${idx}`),
-            orderdata_orderid: String(it.orderId ?? id),
-            orderdata_cat_no: String(it.productId ?? it.catNo ?? it.orderdata_cat_no ?? ""),
-            orderdata_item_quantity: String(it.quantityPacks ?? it.quantity ?? it.orderdata_item_quantity ?? 0),
-            orderdata_price: String(it.unitPrice ?? it.unit_price ?? it.orderdata_price ?? 0),
-            orderdata_discount: String(it.discountAmount ?? it.orderdata_discount ?? 0),
-            orderdata_afterDisPrice: String(it.finalPrice ?? it.final_price ?? it.orderdata_afterDisPrice ?? 0),
-            orderdata_status: String(it.status ?? it.orderdata_status ?? "0"),
-            orderdata_datetime: String(it.documentDate ?? it.orderdata_datetime ?? rawMeta.order_date ?? new Date().toISOString()),
-            product_name: String(it.productName ?? it.product_name ?? ""),
-            product_discription: String(it.productDescription ?? it.product_discription ?? ""),
-            product_unit: String(it.unit ?? it.product_unit ?? "Pcs"),
-            packSize: asStringOrNumber(it.packSize) ?? asStringOrNumber(it.pack_size),
-            totalPieces: asStringOrNumber(it.totalPieces) ?? asStringOrNumber(it.total_pieces),
-            readyquantity: String(it.readyQuantity ?? it.readyquantity ?? 0),
-            remark: typeof it.remark === "string" ? it.remark : typeof it.remarks === "string" ? it.remarks : undefined,
-            remarks: typeof it.remarks === "string" ? it.remarks : typeof it.remark === "string" ? it.remark : undefined,
-            priority: typeof it.priority === "string" || typeof it.priority === "boolean" ? it.priority : false,
-            isPriority: typeof it.isPriority === "string" || typeof it.isPriority === "boolean" ? it.isPriority : undefined,
-            is_priority: typeof it.is_priority === "string" || typeof it.is_priority === "boolean" ? it.is_priority : undefined,
-            discount: String(it.totalDiscountPercent ?? it.discount ?? 0),
-            order_discount: String(it.discountAmount ?? 0),
-            del_status: String(it.del_status ?? "0"),
-            accept_order: String(it.accept_order ?? rawMeta.accept_order ?? ""),
-            staffid: String(it.staffid ?? rawMeta.staffid ?? ""),
-            assignedstaff: String(it.assignedstaff ?? rawMeta.assignedstaff ?? ""),
-            orderdata_dealerid: String(it.orderdata_dealerid ?? rawMeta.orderdata_dealerid ?? ""),
-            Dealer_Name: typeof rawMeta.Dealer_Name === "string" ? rawMeta.Dealer_Name : undefined,
-            Dealer_Address: typeof rawMeta.Dealer_Address === "string" ? rawMeta.Dealer_Address : undefined,
-            Dealer_Number: typeof rawMeta.Dealer_Number === "string" ? rawMeta.Dealer_Number : undefined,
-            gst: typeof rawMeta.gst === "string" ? rawMeta.gst : undefined,
-            order_dealer: String(it.order_dealer ?? rawMeta.order_dealer ?? it.orderdata_dealerid ?? rawMeta.orderdata_dealerid ?? ""),
-          }));
-
-          setOrders(mapped);
-          setOrderMeta(rawMeta as OrderMeta);
+          const normalized = normalizeOrderDetailResponse(d, id);
+          setPhpOrders(normalized.items as OrderData[]);
+          setOrderMeta(normalized.meta as OrderMeta);
         } catch {
-          setOrders(Array.isArray(d.data) ? (d.data as OrderData[]) : []);
-          const meta = (Array.isArray(d.data) ? asRecord(d.data[0]) : asRecord(d.data)) as OrderMeta;
-          setOrderMeta(meta);
+          setPhpOrders([]);
+          setOrderMeta(null);
         }
+        setActiveOrderHeader(null);
+        setOrderAccessVerified(true);
         setLoading(false);
       })
       .catch(() => {
-        setOrderAccessBlocked(true);
-        setOrderUnavailableMessage("Unable to load this order right now.");
-        setOrderAccessVerified(false);
         setActiveOrderHeader(null);
+        setPhpOrders([]);
+        setOrderMeta(null);
+        setOrderAccessVerified(true);
         setLoading(false);
       });
-  }, [currentUser, id]);
+  }, [id]);
 
   useEffect(() => {
     if (!orderAccessVerified || !id || !orderAccessDealerId || !orderAccessKey || !currentUser) return;
@@ -1084,10 +982,19 @@ export default function ViewOrderDealerPage() {
 
     fetchOrderDispatchAccessMeta(id, orderAccessDealerId, currentUser)
       .then((meta) => {
-        if (!cancelled) setOrderAccessState({ key: orderAccessKey, meta });
+        if (!cancelled) setOrderAccessState((previous) => {
+          if (meta || previous.key !== orderAccessKey || normalizeOrderAcceptance(previous.meta?.accept_order) !== "accepted") {
+            return { key: orderAccessKey, meta };
+          }
+          return previous;
+        });
       })
       .catch(() => {
-        if (!cancelled) setOrderAccessState({ key: orderAccessKey, meta: null });
+        if (!cancelled) setOrderAccessState((previous) =>
+          previous.key === orderAccessKey && normalizeOrderAcceptance(previous.meta?.accept_order) === "accepted"
+            ? previous
+            : { key: orderAccessKey, meta: null }
+        );
       });
 
     return () => {
@@ -1096,29 +1003,32 @@ export default function ViewOrderDealerPage() {
   }, [currentUser, id, orderAccessDealerId, orderAccessKey, orderAccessVerified]);
 
   useEffect(() => {
-    if (!orderAccessVerified || !id || !currentUser) return;
+    if (!orderAccessVerified || !id) return;
 
     let cancelled = false;
     fetch(`/api/order-overlays/${encodeURIComponent(id)}`, {
       cache: "no-store",
       headers: buildDispatchHeaders(currentUser),
     })
-      .then((response) => response.ok ? response.json() : null)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
       .then((json) => {
         if (cancelled || !json?.success || !json.data) return;
+        setOverlayError("");
         const data = json.data as {
           effectiveItems?: OrderData[];
           effectiveTotals?: { grossAmount?: number; discountAmount?: number; netPayableAmount?: number };
+          itemContract?: "complete" | "partial";
+          overlay?: { acceptance?: EffectiveOrderOverlayState["acceptance"] } | null;
         } & EffectiveOrderOverlayState;
-        if (Array.isArray(data.effectiveItems) && data.effectiveItems.length > 0) {
-          setOrders(data.effectiveItems as OrderData[]);
-        }
-        if (data.effectiveTotals) {
-          setSummaryOverride({
+        setOverlayItems(Array.isArray(data.effectiveItems) ? data.effectiveItems : null);
+        if (data.isEdited && data.effectiveTotals) {
+          setOverlayTotals({
             grossAmount: data.effectiveTotals.grossAmount,
             discountAmount: data.effectiveTotals.discountAmount,
             netPayableAmount: data.effectiveTotals.netPayableAmount,
           });
+        } else {
+          setOverlayTotals(null);
         }
         setOverlayState({
           isCancelled: !!data.isCancelled,
@@ -1127,9 +1037,12 @@ export default function ViewOrderDealerPage() {
           cancellation: data.cancellation,
           eligibility: data.eligibility,
           changeHistory: data.changeHistory,
+          acceptance: data.overlay?.acceptance ?? null,
         });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setOverlayError("Order changes could not be loaded; original order items are shown.");
+      });
 
     return () => {
       cancelled = true;
@@ -1153,11 +1066,12 @@ export default function ViewOrderDealerPage() {
       .then((json) => {
         if (json.success && Array.isArray(json.data)) {
           setFallbackProductNotes(json.data);
+          setProductNotesError("");
         } else {
-          setFallbackProductNotes([]);
+          setProductNotesError("Product Notes could not be loaded.");
         }
       })
-      .catch(() => setFallbackProductNotes([]));
+      .catch(() => setProductNotesError("Product Notes could not be loaded."));
   }, [id, orderAccessVerified]);
 
   useEffect(() => {
@@ -1165,7 +1079,7 @@ export default function ViewOrderDealerPage() {
     const params = new URLSearchParams({ order_id: id });
     if (orderAccessDealerId) params.set("dealer_id", orderAccessDealerId);
     fetch(`/api/order-summary-overrides?${params.toString()}`, { cache: "no-store" })
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(json => {
         if (json.success && Array.isArray(json.data)) {
           const normalizedId = orderLookupKey(id);
@@ -1173,9 +1087,10 @@ export default function ViewOrderDealerPage() {
             orderLookupKey(item.orderId ?? item.order_id) === normalizedId
           );
           setSummaryOverride(matched ?? json.data[0] ?? null);
+          setSummaryError("");
         }
       })
-      .catch(() => {});
+      .catch(() => setSummaryError("Discount metadata could not be loaded; stored order totals remain visible."));
   }, [id, orderAccessDealerId, orderAccessVerified]);
 
   useEffect(() => {
@@ -1224,9 +1139,18 @@ export default function ViewOrderDealerPage() {
   }, []);
 
   const displayOrders = useMemo(() => {
-    const withProductNotes = mergeFallbackProductNotes(orders, fallbackProductNotes) as OrderData[];
+    const summaryItems = Array.isArray(summaryOverride?.items)
+      ? normalizeOrderDetailResponse({ data: { ...(summaryOverride ?? {}), items: summaryOverride.items } }, id).items as OrderData[]
+      : [];
+    const sourceItems = phpOrders.length > 0 ? phpOrders : summaryItems;
+    const hasEffectiveOverlay = !!overlayState?.isEdited || (overlayItems?.length ?? 0) > 0;
+    const effectiveItems = resolveEffectiveOrderDetailItems(sourceItems, !hasEffectiveOverlay || overlayItems === null ? null : {
+      effectiveItems: overlayItems,
+      itemContract: "complete",
+    }) as OrderData[];
+    const withProductNotes = mergeFallbackProductNotes(effectiveItems, fallbackProductNotes) as OrderData[];
     return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
-  }, [dispatchRecords, fallbackProductNotes, orders]);
+  }, [dispatchRecords, fallbackProductNotes, id, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);
 
   const handleDispatchRecordsSaved = (records: OrderDispatchRecord[]) => {
     setDispatchRecords((previous) => {
@@ -1262,9 +1186,13 @@ export default function ViewOrderDealerPage() {
   };
 
   const firstOrder = displayOrders[0];
+  const resolvedSummary = useMemo(
+    () => mergeOrderSummarySources(summaryOverride, overlayTotals) as OrderSummaryOverride,
+    [overlayTotals, summaryOverride]
+  );
   const displayOrderMeta = useMemo(
-    () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...(summaryOverride ?? {}) }) as OrderMeta,
-    [activeOrderHeader, orderMeta, summaryOverride]
+    () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...resolvedSummary }) as OrderMeta,
+    [activeOrderHeader, orderMeta, resolvedSummary]
   );
   const assignedStaffId = firstNonEmptyString(
     orderAccessMeta?.assignedstaff,
@@ -1274,12 +1202,12 @@ export default function ViewOrderDealerPage() {
     displayOrderMeta?.assignedstaff,
     displayOrderMeta?.staffid
   );
-  const acceptOrder = firstNonEmptyString(
-    orderAccessMeta?.accept_order,
-    firstOrder?.accept_order,
-    displayOrderMeta?.accept_order,
-    "0"
-  );
+  const acceptOrder = resolveOrderAcceptance({
+    phpValues: [orderAccessMeta?.accept_order, firstOrder?.accept_order, displayOrderMeta?.accept_order],
+    mongoAccepted: overlayState?.acceptance?.rawStatus,
+    deleted: orderAccessMeta?.del_status ?? firstOrder?.del_status ?? displayOrderMeta?.del_status,
+    terminalValues: [orderAccessMeta?.order_status, displayOrderMeta?.order_status, displayOrderMeta?.status, displayOrderMeta?.mtstatus, overlayState?.isCancelled ? "cancelled" : ""],
+  });
   const orderDeleted = firstNonEmptyString(
     orderAccessMeta?.del_status,
     firstOrder?.del_status,
@@ -1308,7 +1236,15 @@ export default function ViewOrderDealerPage() {
   }) && !overlayState?.isCancelled && dispatchRecordsLoaded && dispatchRecordsOrderId === id && !dispatchRecordsError;
   const dispatchAllPlan = useMemo(() => buildBulkDispatchPlan(displayOrders), [displayOrders]);
   const showDispatchAllControl = canUseDispatchAll;
-  const dispatchAllHasLines = dispatchAllPlan.lines.length > 0;
+  const dispatchableByKey = useMemo(
+    () => new Map(dispatchAllPlan.lines.map((line) => [buildBulkDispatchLineKey(line), line])),
+    [dispatchAllPlan]
+  );
+  const selectedDispatchLines = useMemo(
+    () => dispatchAllPlan.lines.filter((line) => selectedDispatchKeys.has(buildBulkDispatchLineKey(line))),
+    [dispatchAllPlan, selectedDispatchKeys]
+  );
+  const dispatchAllHasLines = selectedDispatchLines.length > 0;
   const baseRowPricings = useMemo(
     () => displayOrders.map((o) => getRowPricing(o, packLookup, displayOrderMeta)),
     [displayOrders, packLookup, displayOrderMeta]
@@ -1323,12 +1259,12 @@ export default function ViewOrderDealerPage() {
       final: acc.final + pricing.final,
     };
   }, { qty: 0, pieces: 0, gross: 0, discount: 0, final: 0 });
-  const overrideAmounts = summaryOverride
+  const overrideAmounts = Object.keys(resolvedSummary).length > 0
     ? resolveOrderAmounts({
         grossAmount: calculatedTotals.gross,
         discountAmount: calculatedTotals.discount,
         netPayableAmount: calculatedTotals.final,
-      }, summaryOverride)
+      }, resolvedSummary)
     : null;
   const totals = overrideAmounts
     ? {
@@ -1347,7 +1283,7 @@ export default function ViewOrderDealerPage() {
   const discountSummaryRows = getOrderDiscountSummaryRows(discountBreakdown);
   const additionalDiscountBadge = formatAdditionalDiscountBadge(discountBreakdown);
   const rowPricings = (() => {
-    if (!summaryOverride) return baseRowPricings;
+    if (Object.keys(resolvedSummary).length === 0) return baseRowPricings;
     if (closeTo(calculatedTotals.discount, totals.discount)) return baseRowPricings;
     return rebalanceRowDiscounts(baseRowPricings, totals.discount);
   })();
@@ -1429,8 +1365,13 @@ export default function ViewOrderDealerPage() {
   };
 
   const openDispatchAllDialog = () => {
+    if (selectedDispatchLines.length === 0) return;
     setDispatchAllRemark("");
     setDispatchAllError("");
+    setDispatchSelectedStatus("dispatched");
+    setDispatchSelectedQuantities(Object.fromEntries(
+      selectedDispatchLines.map((line) => [buildBulkDispatchLineKey(line), String(line.remainingQuantity)])
+    ));
     setDispatchAllIdempotencyKey(`${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`);
     setDispatchAllDialogOpen(true);
   };
@@ -1438,15 +1379,29 @@ export default function ViewOrderDealerPage() {
   const submitDispatchAll = async () => {
     const remark = dispatchAllRemark.trim();
     if (!canUseDispatchAll) {
-      setDispatchAllError(dispatchRecordsError || "Dispatch All is not available for this order.");
+      setDispatchAllError(dispatchRecordsError || "Multi-item dispatch is not available for this order.");
       return;
     }
-    if (dispatchAllPlan.lines.length === 0) {
-      setDispatchAllError("All products are already dispatched or no valid dispatchable lines remain.");
+    if (selectedDispatchLines.length === 0) {
+      setDispatchAllError("Select at least one dispatchable product.");
       return;
     }
     if (!remark) {
       setDispatchAllError("Operational Remark is required.");
+      return;
+    }
+    const requestedItems = selectedDispatchLines.map((line) => {
+      const key = buildBulkDispatchLineKey(line);
+      return { ...line, key, dispatchQuantity: Number(dispatchSelectedQuantities[key]), status: dispatchSelectedStatus };
+    });
+    const invalidLine = requestedItems.find((line) =>
+      !Number.isFinite(line.dispatchQuantity)
+      || !Number.isInteger(line.dispatchQuantity)
+      || line.dispatchQuantity <= 0
+      || line.dispatchQuantity > line.remainingQuantity
+    );
+    if (invalidLine) {
+      setDispatchAllError(`Enter a whole dispatch quantity between 1 and ${invalidLine.remainingQuantity} for ${invalidLine.productName || invalidLine.sku}.`);
       return;
     }
 
@@ -1461,12 +1416,15 @@ export default function ViewOrderDealerPage() {
           ...buildDispatchHeaders(currentUser),
         },
         body: JSON.stringify({
-          action: "dispatch_all",
+          action: "dispatch_selected",
           orderId: id,
-          dealerId: dealerIdForDispatch,
-          assignedStaffId,
-          acceptOrder,
-          delStatus: orderDeleted,
+          items: requestedItems.map((line) => ({
+            orderItemId: line.orderItemId,
+            sku: line.sku,
+            occurrence: line.occurrence,
+            dispatchQuantity: line.dispatchQuantity,
+            status: line.status,
+          })),
           remark,
           idempotencyKey: dispatchAllIdempotencyKey,
         }),
@@ -1479,18 +1437,29 @@ export default function ViewOrderDealerPage() {
       }
 
       if (!response.ok || !json?.success) {
-        setDispatchAllError(json?.message || "Failed to dispatch all products.");
+        const failures = Array.isArray(json?.data?.failures) ? json.data.failures : [];
+        if (failures.length > 0) {
+          const failedKeys = new Set<string>(failures.map((failure: { orderItemId?: string | null; sku?: string; occurrence?: number }) =>
+            buildBulkDispatchLineKey({ orderItemId: failure.orderItemId, sku: failure.sku, occurrence: failure.occurrence })
+          ));
+          setSelectedDispatchKeys(failedKeys);
+        }
+        const failedLabels = failures.map((failure: { sku?: string; orderItemId?: string | null }) =>
+          failure.sku || failure.orderItemId || "Unknown product"
+        );
+        setDispatchAllError(`${json?.message || "Failed to dispatch selected products."}${failedLabels.length ? ` Failed: ${failedLabels.join(", ")}.` : ""}`);
         return;
       }
 
+      setSelectedDispatchKeys(new Set());
       setDispatchAllDialogOpen(false);
-      setInvoiceToast({ type: "success", text: "All dispatchable products dispatched." });
+      setInvoiceToast({ type: "success", text: `${records.length} selected product${records.length === 1 ? "" : "s"} dispatched.` });
       window.setTimeout(() => setInvoiceToast(null), 3000);
       window.dispatchEvent(new CustomEvent("orderDispatchUpdated", {
         detail: { orderId: id, bulk: true },
       }));
     } catch {
-      setDispatchAllError("Failed to dispatch all products.");
+      setDispatchAllError("Failed to dispatch selected products.");
     } finally {
       setDispatchAllSaving(false);
     }
@@ -1568,10 +1537,10 @@ export default function ViewOrderDealerPage() {
       }
       const latestEdit = Array.isArray(json.data?.edits) ? json.data.edits[json.data.edits.length - 1] : null;
       if (Array.isArray(latestEdit?.effectiveItems)) {
-        setOrders(latestEdit.effectiveItems as OrderData[]);
+        setOverlayItems(latestEdit.effectiveItems as OrderData[]);
       }
       if (latestEdit?.totals) {
-        setSummaryOverride({
+        setOverlayTotals({
           grossAmount: latestEdit.totals.grossAmount,
           discountAmount: latestEdit.totals.discountAmount,
           netPayableAmount: latestEdit.totals.netPayableAmount,
@@ -1613,18 +1582,6 @@ export default function ViewOrderDealerPage() {
   const visibleDealerFields = dealerFields.filter(f => f.value);
   const orderNote = extractOrderNote(displayOrders, localOrderNote);
   const dealerCanChangeOrder = currentUser?.role === "dealer" && overlayState?.eligibility?.canDealerChange && !overlayState?.isCancelled;
-
-  if (orderAccessBlocked) {
-    return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white border border-gray-200 rounded-lg p-6 text-center">
-          <h1 className="text-lg font-semibold text-gray-900">Order unavailable</h1>
-          <p className="mt-2 text-sm text-gray-600">{orderUnavailableMessage}</p>
-          <button onClick={() => router.back()} className="mt-5 px-4 py-2 text-sm font-medium border border-gray-300 rounded-md hover:bg-gray-50">Go back</button>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <>
@@ -1676,18 +1633,26 @@ export default function ViewOrderDealerPage() {
           <div className="flex items-center gap-3">
             <ViewToggle mode={viewMode} onChange={setViewMode} />
             {showDispatchAllControl && (
-              <button
-                type="button"
-                onClick={dispatchAllHasLines ? openDispatchAllDialog : undefined}
-                disabled={!dispatchAllHasLines || dispatchAllSaving}
-                className={`flex items-center gap-2 px-4 py-2 text-[13px] font-semibold rounded-xl border transition-colors ${
-                  dispatchAllHasLines
-                    ? "bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600"
-                    : "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
-                } disabled:opacity-80`}
-              >
-                {dispatchAllHasLines ? "Dispatch All" : "All Products Dispatched"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setSelectedDispatchKeys(new Set(dispatchableByKey.keys()))}
+                  disabled={dispatchableByKey.size === 0 || dispatchAllSaving}
+                  className="px-3 py-2 text-[12px] font-semibold text-indigo-700 border border-indigo-200 rounded-xl hover:bg-indigo-50 disabled:opacity-40">
+                  Select All Dispatchable
+                </button>
+                <button type="button" onClick={() => setSelectedDispatchKeys(new Set())}
+                  disabled={selectedDispatchKeys.size === 0 || dispatchAllSaving}
+                  className="px-3 py-2 text-[12px] font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-40">
+                  Clear Selection
+                </button>
+                <button
+                  type="button"
+                  onClick={openDispatchAllDialog}
+                  disabled={!dispatchAllHasLines || dispatchAllSaving}
+                  className="flex items-center gap-2 px-4 py-2 text-[13px] font-semibold rounded-xl border bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Dispatch Selected ({selectedDispatchLines.length})
+                </button>
+              </div>
             )}
             {dealerCanChangeOrder && (
               <>
@@ -1724,6 +1689,11 @@ export default function ViewOrderDealerPage() {
         </div>
 
         <div className="px-8 py-6 max-w-[1600px] mx-auto space-y-5">
+          {[overlayError, summaryError, productNotesError, dispatchRecordsError].filter(Boolean).map((message) => (
+            <div key={message} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
+              {message}
+            </div>
+          ))}
 
           {/* ── Dealer Info Card ── */}
           {visibleDealerFields.length > 0 && (
@@ -1781,7 +1751,7 @@ export default function ViewOrderDealerPage() {
           )}
 
           {/* ── Totals ── */}
-          {!loading && displayOrders.length > 0 && (
+          {!loading && (displayOrders.length > 0 || Object.keys(resolvedSummary).length > 0) && (
             <div className="space-y-3">
               {additionalDiscountBadge && (
                 <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[12px] font-semibold text-emerald-700">
@@ -1828,11 +1798,19 @@ export default function ViewOrderDealerPage() {
           {!loading && displayOrders.length > 0 && viewMode === "cards" && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {displayOrders.map((o, idx) => {
+                const selectionKey = buildBulkDispatchLineKey(o);
                 return (
                   <ItemCard key={o.orderdata_id} o={o} idx={idx}
                     pricing={rowPricings[idx] ?? getRowPricing(o, packLookup, displayOrderMeta)}
                     additionalDiscountType={discountBreakdown.additionalDiscountType}
                     dispatchLabel={canEditDispatchDetails ? "Update Dispatch" : "View Dispatch"}
+                    selectable={showDispatchAllControl && dispatchableByKey.has(selectionKey)}
+                    selected={selectedDispatchKeys.has(selectionKey)}
+                    onSelectedChange={(checked) => setSelectedDispatchKeys((previous) => {
+                      const next = new Set(previous);
+                      if (checked) next.add(selectionKey); else next.delete(selectionKey);
+                      return next;
+                    })}
                     onDispatch={() => setActiveDispatchItemId(o.orderdata_id)} />
                 );
               })}
@@ -1846,6 +1824,7 @@ export default function ViewOrderDealerPage() {
                 <table ref={tableRef} className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-gray-100">
+                      {showDispatchAllControl && <th className="px-4 py-3.5 bg-gray-50/80"><span className="sr-only">Select</span></th>}
                       {["#","Order No","Cat No.","Product","Description","Qty","Pack Size","Pieces","Dispatched","Left","Unit","Price","Disc %","Amount","Discount","Final","Status","Date",""].map(h => (
                         <th key={h} className="px-4 py-3.5 text-left text-[10px] font-bold uppercase tracking-widest text-gray-400 whitespace-nowrap bg-gray-50/80">{h}</th>
                       ))}
@@ -1856,9 +1835,27 @@ export default function ViewOrderDealerPage() {
                       const pricing = rowPricings[idx] ?? getRowPricing(o, packLookup, displayOrderMeta);
                       const left = pricing.left;
                       const isDeleted = o.del_status === "1";
+                      const selectionKey = buildBulkDispatchLineKey(o);
+                      const selectable = showDispatchAllControl && dispatchableByKey.has(selectionKey);
                       const isPriority = hasPriorityTag(o.priority, o.isPriority, o.is_priority, o.remark, o.remarks);
                       return (
                         <tr key={o.orderdata_id} className={`group hover:bg-gray-50/80 transition-colors ${isDeleted ? "opacity-40" : ""}`}>
+                          {showDispatchAllControl && (
+                            <td className="px-4 py-3.5">
+                              <input
+                                type="checkbox"
+                                checked={selectedDispatchKeys.has(selectionKey)}
+                                disabled={!selectable}
+                                onChange={(event) => setSelectedDispatchKeys((previous) => {
+                                  const next = new Set(previous);
+                                  if (event.target.checked) next.add(selectionKey); else next.delete(selectionKey);
+                                  return next;
+                                })}
+                                aria-label={`Select ${o.product_name || o.orderdata_cat_no || "product"} for dispatch`}
+                                className="h-4 w-4 rounded border-slate-300 text-indigo-600 disabled:opacity-30"
+                              />
+                            </td>
+                          )}
                           <td className="px-4 py-3.5 text-[11px] text-gray-400 font-mono font-semibold">{String(idx + 1).padStart(2, "0")}</td>
                           <td className="px-4 py-3.5 whitespace-nowrap">
                             <span className="font-mono text-[11px] font-bold text-indigo-600">OM/{year}/{o.orderdata_orderid}</span>
@@ -1970,10 +1967,10 @@ export default function ViewOrderDealerPage() {
           >
             <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Dispatch All</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Multi-item Dispatch</p>
                 <h2 className="mt-1 text-[20px] font-bold text-slate-900">OM/{year}/{id}</h2>
                 <p className="mt-1 text-[13px] text-slate-500">
-                  {dispatchAllPlan.lines.length} product line{dispatchAllPlan.lines.length === 1 ? "" : "s"} | {dispatchAllPlan.totalQuantity} total remaining quantity
+                  {selectedDispatchLines.length} selected product line{selectedDispatchLines.length === 1 ? "" : "s"}
                 </p>
               </div>
               <button
@@ -1981,7 +1978,7 @@ export default function ViewOrderDealerPage() {
                 onClick={() => !dispatchAllSaving && setDispatchAllDialogOpen(false)}
                 disabled={dispatchAllSaving}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50"
-                aria-label="Close dispatch all confirmation"
+                aria-label="Close selected products dispatch"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
                   <path d="M18 6 6 18M6 6l12 12" />
@@ -1990,56 +1987,53 @@ export default function ViewOrderDealerPage() {
             </div>
 
             <div className="max-h-[calc(90vh-96px)] overflow-y-auto p-6">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Lines</p>
-                  <p className="mt-1 font-mono text-[16px] font-bold text-slate-900">{dispatchAllPlan.lines.length}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Quantity</p>
-                  <p className="mt-1 font-mono text-[16px] font-bold text-indigo-700">{dispatchAllPlan.totalQuantity}</p>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Skipped</p>
-                  <p className="mt-1 font-mono text-[16px] font-bold text-amber-700">{dispatchAllPlan.skipped.length}</p>
-                </div>
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-slate-200">
+              <div className="rounded-2xl border border-slate-200">
                 <div className="border-b border-slate-200 px-4 py-3">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Will Dispatch</p>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Selected Products</p>
                 </div>
-                <div className="max-h-64 overflow-auto divide-y divide-slate-100">
-                  {dispatchAllPlan.lines.map((line) => (
-                    <div key={`${line.orderItemId ?? line.normalizedSku}:${line.occurrence}`} className="grid grid-cols-[1fr_auto] gap-4 px-4 py-3">
+                <div className="max-h-80 overflow-auto divide-y divide-slate-100">
+                  {selectedDispatchLines.map((line) => {
+                    const lineKey = buildBulkDispatchLineKey(line);
+                    return (
+                    <div key={lineKey} className="grid grid-cols-1 gap-3 px-4 py-3 md:grid-cols-[1fr_repeat(5,minmax(72px,auto))] md:items-end">
                       <div>
                         <p className="text-[13px] font-semibold text-slate-900">{line.productName || line.sku || "Product line"}</p>
                         <p className="mt-1 font-mono text-[12px] text-amber-700">Catalogue Number: {line.sku || "-"}</p>
                       </div>
-                      <p className="font-mono text-[14px] font-bold text-indigo-700">{line.remainingQuantity}</p>
+                      <div><p className="text-[10px] font-bold uppercase text-slate-400">Ordered</p><p className="font-mono text-[13px] font-bold">{line.orderedQuantity}</p></div>
+                      <div><p className="text-[10px] font-bold uppercase text-slate-400">Dispatched</p><p className="font-mono text-[13px] font-bold">{line.dispatchedQuantity}</p></div>
+                      <div><p className="text-[10px] font-bold uppercase text-slate-400">Remaining</p><p className="font-mono text-[13px] font-bold text-indigo-700">{line.remainingQuantity}</p></div>
+                      <div><p className="mb-1 text-[10px] font-bold uppercase text-slate-400">Current status</p><StatusPill code={line.currentStatus} /></div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500">
+                        Dispatch qty
+                        <input
+                          type="number"
+                          min={1}
+                          max={line.remainingQuantity}
+                          step={1}
+                          value={dispatchSelectedQuantities[lineKey] ?? ""}
+                          onChange={(event) => {
+                            setDispatchSelectedQuantities((previous) => ({ ...previous, [lineKey]: event.target.value }));
+                            setDispatchAllError("");
+                          }}
+                          disabled={dispatchAllSaving}
+                          className="mt-1 w-24 rounded-xl border border-slate-200 px-3 py-2 font-mono text-[13px] text-slate-900 outline-none focus:border-indigo-300"
+                        />
+                      </label>
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
 
-              {dispatchAllPlan.skipped.length > 0 && (
-                <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50">
-                  <div className="border-b border-amber-200 px-4 py-3">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-700">Skipped Products</p>
-                  </div>
-                  <div className="max-h-48 overflow-auto divide-y divide-amber-100">
-                    {dispatchAllPlan.skipped.map((line) => (
-                      <div key={`${line.orderItemId ?? line.sku}:${line.occurrence}:${line.reason}`} className="grid grid-cols-[1fr_auto] gap-4 px-4 py-3">
-                        <div>
-                          <p className="text-[13px] font-semibold text-amber-950">{line.productName || line.sku || "Product line"}</p>
-                          <p className="mt-1 font-mono text-[12px] text-amber-700">Catalogue Number: {line.sku || "-"}</p>
-                        </div>
-                        <p className="text-[12px] font-semibold text-amber-700">{line.reason}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <div className="mt-5">
+                <label htmlFor="dispatch-selected-status" className="mb-1.5 block text-[12px] font-semibold text-slate-700">Dispatch Status</label>
+                <select id="dispatch-selected-status" value={dispatchSelectedStatus}
+                  onChange={(event) => setDispatchSelectedStatus(event.target.value as Exclude<DispatchStatus, "pending">)}
+                  disabled={dispatchAllSaving}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-[13px] text-slate-900 outline-none focus:border-indigo-300">
+                  {DISPATCH_MUTATION_STATUSES.map((status) => <option key={status} value={status}>{DISPATCH_STATUS_LABELS[status]}</option>)}
+                </select>
+              </div>
 
               <div className="mt-5">
                 <div className="mb-1.5 flex items-center justify-between">
@@ -2081,10 +2075,10 @@ export default function ViewOrderDealerPage() {
                 <button
                   type="button"
                   onClick={submitDispatchAll}
-                  disabled={dispatchAllSaving || dispatchAllPlan.lines.length === 0}
+                  disabled={dispatchAllSaving || selectedDispatchLines.length === 0}
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-[13px] font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {dispatchAllSaving ? "Dispatching..." : "Dispatch All Products"}
+                  {dispatchAllSaving ? "Dispatching..." : "Dispatch Selected Products"}
                 </button>
               </div>
             </div>

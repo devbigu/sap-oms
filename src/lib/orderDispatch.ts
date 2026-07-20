@@ -82,6 +82,36 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
 
 export const BULK_DISPATCH_STATUS: DispatchStatus = "dispatched";
 
+export type NormalizedAcceptance = "accepted" | "unaccepted" | "missing";
+
+export function normalizeOrderAcceptance(value: unknown): NormalizedAcceptance {
+  if (value === null || value === undefined) return "missing";
+  const text = String(value).trim().toLowerCase();
+  if (!text) return "missing";
+  if (text === "1" || text === "accepted" || text === "approved" || text === "true") return "accepted";
+  if (text === "0" || text === "unaccepted" || text === "pending" || text === "false") return "unaccepted";
+  return "missing";
+}
+
+export function hasTerminalOrderStatus(...values: unknown[]): boolean {
+  return values.some((value) => /(?:cancel|reject|declin|deleted)/i.test(String(value ?? "").trim()));
+}
+
+export function resolveOrderAcceptance(input: {
+  phpValues: unknown[];
+  mongoAccepted?: unknown;
+  terminalValues?: unknown[];
+  deleted?: unknown;
+}): "1" | "0" | "" {
+  if (isDeletedOrderForDispatch(input.deleted) || hasTerminalOrderStatus(...(input.terminalValues ?? []))) return "0";
+  for (const value of input.phpValues) {
+    const normalized = normalizeOrderAcceptance(value);
+    if (normalized === "accepted") return "1";
+    if (normalized === "unaccepted") return "0";
+  }
+  return normalizeOrderAcceptance(input.mongoAccepted) === "accepted" ? "1" : "";
+}
+
 function normalizeDispatchFlag(value: unknown, truthy = "1"): boolean {
   return String(value ?? "").trim() === truthy;
 }
@@ -152,7 +182,7 @@ export function canUserViewDispatch(user: DispatchUserSession | null, context: {
 }
 
 export function isAcceptedOrderForDispatch(value: unknown): boolean {
-  return normalizeDispatchFlag(value, "1");
+  return normalizeOrderAcceptance(value) === "accepted";
 }
 
 export function isDeletedOrderForDispatch(value: unknown): boolean {
@@ -264,7 +294,10 @@ export type BulkDispatchLine = {
   normalizedSku: string;
   occurrence: number;
   productName: string;
+  orderedQuantity: number;
+  dispatchedQuantity: number;
   remainingQuantity: number;
+  currentStatus: DispatchStatus;
 };
 
 export type BulkDispatchSkippedLine = {
@@ -318,7 +351,10 @@ export function buildBulkDispatchPlan<T extends DispatchSourceItem & Partial<Mer
     lines.push({
       ...line,
       normalizedSku,
+      orderedQuantity: safeDispatchInteger(item.orderedQuantity ?? item.orderdata_item_quantity),
+      dispatchedQuantity: safeDispatchInteger(item.dispatchedQuantity ?? item.readyquantity),
       remainingQuantity,
+      currentStatus: dispatchStatus,
     });
   }
 
@@ -327,6 +363,19 @@ export function buildBulkDispatchPlan<T extends DispatchSourceItem & Partial<Mer
     skipped,
     totalQuantity: lines.reduce((sum, line) => sum + line.remainingQuantity, 0),
   };
+}
+
+export function buildBulkDispatchLineKey(line: {
+  orderItemId?: string | null;
+  normalizedSku?: string;
+  sku?: string;
+  occurrence?: number;
+}): string {
+  const orderItemId = normalizeDispatchOrderItemId(line.orderItemId);
+  if (orderItemId) return `item:${orderItemId}`;
+  const normalizedSku = normalizeSku(line.normalizedSku ?? line.sku);
+  if (!normalizedSku) return "";
+  return `sku:${normalizedSku}:${Math.max(1, safeDispatchInteger(line.occurrence) || 1)}`;
 }
 
 export function buildLegacyDispatchSeed(input: {
