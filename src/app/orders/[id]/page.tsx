@@ -378,6 +378,17 @@ function buildDispatchHeaders(user: DispatchUserSession | null): HeadersInit {
   };
 }
 
+function orderAccessMessage(status: number, payload: Record<string, unknown> | null) {
+  if (typeof payload?.message === "string" && payload.message.trim()) return payload.message;
+  if (payload?.reason === "not_found" || status === 404) return "Order not found.";
+  if (payload?.reason === "forbidden" || status === 403) return "This order is outside your assigned order scope.";
+  if (payload?.reason === "upstream_unavailable" || status === 503 || status === 502) {
+    return "Order verification is temporarily unavailable.";
+  }
+  if (status === 401) return "Access denied.";
+  return "Unable to load this order right now.";
+}
+
 function buildDispatchRecordFallbackKey(record: Partial<OrderDispatchRecord>) {
   return [
     String(record.orderId ?? "").trim(),
@@ -952,11 +963,7 @@ export default function ViewOrderDealerPage() {
         if (!accessResponse.ok) {
           const accessPayload = await accessResponse.json().catch(() => null);
           setOrderAccessBlocked(true);
-          setOrderUnavailableMessage(
-            typeof accessPayload?.message === "string" && accessPayload.message.trim()
-              ? accessPayload.message
-              : "Unable to load this order right now."
-          );
+          setOrderUnavailableMessage(orderAccessMessage(accessResponse.status, accessPayload));
           setOrderAccessVerified(false);
           setActiveOrderHeader(null);
           setLoading(false);

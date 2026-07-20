@@ -1,3 +1,9 @@
+import {
+  getDealerAssignedStaffIds,
+  resolveOrderDealerId,
+  splitScopeIds,
+} from "@/lib/staffOrderScope.js";
+
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 
 type OrderAccessReason = "available" | "not_found" | "forbidden" | "upstream_unavailable";
@@ -61,13 +67,42 @@ function isAccessOptions(value: unknown): value is OrderAccessOptions {
   return !!value && typeof value === "object" && "actor" in value;
 }
 
-function upstreamScope(options: OrderAccessOptions | null, legacyDealerId: string) {
-  if (!options) return { endpoint: legacyDealerId ? "orderhispegination" : "orderpegination", actorId: legacyDealerId };
-  if (options.actor.role === "dealer") {
-    return { endpoint: "orderhispegination", actorId: safeText(options.dealerId) || options.actor.actorId };
+function forbiddenResult(): OrderAccess {
+  const reason = "forbidden";
+  return { visible: false, order: null, reason, message: messageForReason(reason) };
+}
+
+function canStaffAccessOrder(order: Record<string, unknown>, options: OrderAccessOptions) {
+  const dealerId = resolveOrderDealerId(order);
+  if (!dealerId) return false;
+
+  const assignedDealerIds = new Set(splitScopeIds(options.assignedDealerIds));
+  if (assignedDealerIds.has(dealerId)) return true;
+
+  return getDealerAssignedStaffIds(order).includes(safeText(options.actor.actorId));
+}
+
+function applyActorAccess(order: Record<string, unknown> | null, options: OrderAccessOptions | null): OrderAccess {
+  if (!order) return result(null);
+  if (!options) return result(order);
+
+  if (options.actor.role === "admin" || options.actor.role === "accountant") {
+    return result(order);
   }
-  if (options.actor.role === "staff") return { endpoint: "staffOrderrPagination", actorId: options.actor.actorId };
-  return { endpoint: "orderpegination", actorId: "" };
+
+  const dealerId = resolveOrderDealerId(order);
+  if (options.actor.role === "dealer") {
+    const allowedDealerIds = splitScopeIds([options.dealerId, options.actor.actorId]);
+    return dealerId && allowedDealerIds.includes(dealerId)
+      ? result(order)
+      : forbiddenResult();
+  }
+
+  if (options.actor.role === "staff") {
+    return canStaffAccessOrder(order, options) ? result(order) : forbiddenResult();
+  }
+
+  return forbiddenResult();
 }
 
 export async function resolveOrderAccess(orderId: unknown, dealerIdOrOptions?: unknown): Promise<OrderAccess> {
@@ -75,15 +110,16 @@ export async function resolveOrderAccess(orderId: unknown, dealerIdOrOptions?: u
   if (!id) return result(null);
   const options = isAccessOptions(dealerIdOrOptions) ? dealerIdOrOptions : null;
   const legacyDealerId = options ? "" : safeText(dealerIdOrOptions);
-  const { endpoint, actorId } = upstreamScope(options, legacyDealerId);
   const params = new URLSearchParams({ page: "1", limit: "50", search: id });
-  if (actorId) params.set("id", actorId);
+  if (!options && legacyDealerId) params.set("id", legacyDealerId);
+  const endpoint = !options && legacyDealerId ? "orderhispegination" : "orderpegination";
 
   try {
     const response = await fetch(`${BACKEND_URL}/${endpoint}?${params.toString()}`, { cache: "no-store" });
     if (!response.ok) return unavailableResult();
     const rows = rowsFrom(await response.json());
-    return result(rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null);
+    const order = rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null;
+    return applyActorAccess(order, options);
   } catch {
     return unavailableResult();
   }
