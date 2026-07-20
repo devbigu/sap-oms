@@ -163,6 +163,28 @@ function payloadAmount(amount: number): string {
   return String(Math.round((amount + Number.EPSILON) * 100) / 100);
 }
 
+const ORDER_DETAILS_FALLBACK_STORAGE_KEY = "omsons.orderDetailsFallback.v1";
+
+function saveLocalOrderDetailsFallback(orderId: string, fallback: Record<string, unknown>) {
+  if (typeof window === "undefined" || !orderId) return;
+  try {
+    const raw = localStorage.getItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const records = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    localStorage.setItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY, JSON.stringify({
+      ...records,
+      [orderId]: {
+        ...fallback,
+        orderId,
+        order_id: orderId,
+        savedAt: new Date().toISOString(),
+      },
+    }));
+  } catch {}
+}
+
 function roundRupees(amount: number): number {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   return Math.round((amount + Number.EPSILON) * 100) / 100;
@@ -1718,6 +1740,40 @@ function AddOrderPageInner() {
         response: data,
       });
       const placedOrderId = extractOrderIdFromResponse(data) || await getLatestOrderIdForDealer();
+      saveLocalOrderDetailsFallback(placedOrderId, {
+        dealerId: user.Dealer_Id,
+        dealerName: user.Dealer_Name,
+        order_dealer: user.Dealer_Id,
+        Dealer_Name: user.Dealer_Name,
+        grossAmount: payloadAmount(discountPayload.subtotal),
+        order_amount: payloadAmount(discountPayload.subtotal),
+        discountAmount: payloadAmount(discountPayload.discountAmount),
+        order_discount_amount: payloadAmount(discountPayload.discountAmount),
+        netPayableAmount: payloadAmount(discountPayload.finalPayableAmount),
+        order_net_amount: payloadAmount(discountPayload.finalPayableAmount),
+        discountPercent: discountPayload.discountPercent,
+        allocatedDiscountPercent: discountPayload.allocatedDiscountPercent,
+        baseDiscountPercent: discountPayload.baseDiscountPercent,
+        baseDiscountAmount: payloadAmount(discountPayload.baseDiscountAmount),
+        postBaseAmount: payloadAmount(discountPayload.postBaseAmount),
+        additionalDiscountType: discountPayload.additionalDiscountType,
+        additionalDiscountAmount: payloadAmount(discountPayload.additionalDiscountAmount),
+        customDiscountAmount: payloadAmount(discountPayload.customDiscountAmount),
+        slabDiscountPercent: discountPayload.slabDiscountPercent,
+        slabDiscountAmount: payloadAmount(discountPayload.slabDiscountAmount),
+        couponDiscountPercent: discountPayload.couponDiscountPercent,
+        accept_order: "0",
+        del_status: "0",
+        staffid: user.assignedstaff,
+        assignedstaff: user.assignedstaff,
+        items: payload.map((item) => ({
+          ...item,
+          productId: item.catNo,
+          productName: item.productName,
+          discountAmount: item.discount,
+          finalPrice: item.afterDiscountPrice,
+        })),
+      });
       await Promise.allSettled([
         saveOrderNoteForHistory(placedOrderId),
         saveOrderSummaryOverride(placedOrderId, payload),

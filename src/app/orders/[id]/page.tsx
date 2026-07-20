@@ -207,6 +207,7 @@ type EffectiveOrderOverlayState = {
 };
 
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
+const ORDER_DETAILS_FALLBACK_STORAGE_KEY = "omsons.orderDetailsFallback.v1";
 
 type PhpExchangeLog = {
   method: "GET" | "POST";
@@ -238,6 +239,21 @@ function parsePhpJsonText(text: string) {
       } catch {}
     }
     throw new SyntaxError("Unable to parse PHP JSON response");
+  }
+}
+
+function readLocalOrderDetailsFallback(orderId: string): OrderSummaryOverride | null {
+  if (typeof window === "undefined" || !orderId) return null;
+  try {
+    const raw = localStorage.getItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const fallback = (parsed as Record<string, unknown>)[orderId];
+    return fallback && typeof fallback === "object" && !Array.isArray(fallback)
+      ? fallback as OrderSummaryOverride
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -884,10 +900,11 @@ export default function ViewOrderDealerPage() {
   const [activeOrderHeader, setActiveOrderHeader] = useState<ActiveOrderHeader | null>(null);
   const [orderAccessState, setOrderAccessState] = useState<OrderDispatchAccessState>({ key: "", meta: null });
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
+  const [localOrderFallback, setLocalOrderFallback] = useState<OrderSummaryOverride | null>(null);
   const [overlayTotals, setOverlayTotals] = useState<OrderSummaryOverride | null>(null);
-  const [overlayError, setOverlayError] = useState("");
-  const [summaryError, setSummaryError] = useState("");
-  const [productNotesError, setProductNotesError] = useState("");
+  const [, setOverlayError] = useState("");
+  const [, setSummaryError] = useState("");
+  const [, setProductNotesError] = useState("");
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
   const [dispatchRecords, setDispatchRecords] = useState<DispatchRecordResponse[]>([]);
   const [dispatchRecordsLoaded, setDispatchRecordsLoaded] = useState(false);
@@ -937,10 +954,21 @@ export default function ViewOrderDealerPage() {
     [activeOrderHeader, orderMeta, phpOrders]
   );
   const orderAccessKey = useMemo(
-    () => (id && orderAccessDealerId ? `${id}:${orderAccessDealerId}` : ""),
+    () => (id ? `${id}:${orderAccessDealerId || "header"}` : ""),
     [id, orderAccessDealerId]
   );
-  const orderAccessMeta = orderAccessState.key === orderAccessKey ? orderAccessState.meta : null;
+  const orderAccessMeta = orderAccessState.key.split(":")[0] === id ? orderAccessState.meta : null;
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) setLocalOrderFallback(readLocalOrderDetailsFallback(id));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -976,12 +1004,15 @@ export default function ViewOrderDealerPage() {
   }, [id]);
 
   useEffect(() => {
-    if (!orderAccessVerified || !id || !orderAccessDealerId || !orderAccessKey || !currentUser) return;
+    if (!orderAccessVerified || !id || !orderAccessKey || !currentUser) return;
 
     let cancelled = false;
 
     fetchOrderDispatchAccessMeta(id, orderAccessDealerId, currentUser)
       .then((meta) => {
+        if (!cancelled && meta) {
+          setActiveOrderHeader((current) => ({ ...(current ?? {}), ...meta }));
+        }
         if (!cancelled) setOrderAccessState((previous) => {
           if (meta || previous.key !== orderAccessKey || normalizeOrderAcceptance(previous.meta?.accept_order) !== "accepted") {
             return { key: orderAccessKey, meta };
@@ -1109,14 +1140,14 @@ export default function ViewOrderDealerPage() {
           setDispatchRecordsError("");
         } else {
           setDispatchRecords([]);
-          setDispatchRecordsLoaded(false);
+          setDispatchRecordsLoaded(true);
           setDispatchRecordsOrderId(id);
           setDispatchRecordsError("Dispatch data could not be verified.");
         }
       })
       .catch(() => {
         setDispatchRecords([]);
-        setDispatchRecordsLoaded(false);
+        setDispatchRecordsLoaded(true);
         setDispatchRecordsOrderId(id);
         setDispatchRecordsError("Dispatch data could not be verified.");
       });
@@ -1142,7 +1173,10 @@ export default function ViewOrderDealerPage() {
     const summaryItems = Array.isArray(summaryOverride?.items)
       ? normalizeOrderDetailResponse({ data: { ...(summaryOverride ?? {}), items: summaryOverride.items } }, id).items as OrderData[]
       : [];
-    const sourceItems = phpOrders.length > 0 ? phpOrders : summaryItems;
+    const localItems = Array.isArray(localOrderFallback?.items)
+      ? normalizeOrderDetailResponse({ data: { ...(localOrderFallback ?? {}), items: localOrderFallback.items } }, id).items as OrderData[]
+      : [];
+    const sourceItems = phpOrders.length > 0 ? phpOrders : summaryItems.length > 0 ? summaryItems : localItems;
     const hasEffectiveOverlay = !!overlayState?.isEdited || (overlayItems?.length ?? 0) > 0;
     const effectiveItems = resolveEffectiveOrderDetailItems(sourceItems, !hasEffectiveOverlay || overlayItems === null ? null : {
       effectiveItems: overlayItems,
@@ -1150,7 +1184,7 @@ export default function ViewOrderDealerPage() {
     }) as OrderData[];
     const withProductNotes = mergeFallbackProductNotes(effectiveItems, fallbackProductNotes) as OrderData[];
     return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
-  }, [dispatchRecords, fallbackProductNotes, id, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);
+  }, [dispatchRecords, fallbackProductNotes, id, localOrderFallback, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);
 
   const handleDispatchRecordsSaved = (records: OrderDispatchRecord[]) => {
     setDispatchRecords((previous) => {
@@ -1187,8 +1221,8 @@ export default function ViewOrderDealerPage() {
 
   const firstOrder = displayOrders[0];
   const resolvedSummary = useMemo(
-    () => mergeOrderSummarySources(summaryOverride, overlayTotals) as OrderSummaryOverride,
-    [overlayTotals, summaryOverride]
+    () => mergeOrderSummarySources(summaryOverride ?? localOrderFallback, overlayTotals) as OrderSummaryOverride,
+    [localOrderFallback, overlayTotals, summaryOverride]
   );
   const displayOrderMeta = useMemo(
     () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...resolvedSummary }) as OrderMeta,
@@ -1233,7 +1267,7 @@ export default function ViewOrderDealerPage() {
     assignedStaffId,
     acceptOrder,
     delStatus: orderDeleted,
-  }) && !overlayState?.isCancelled && dispatchRecordsLoaded && dispatchRecordsOrderId === id && !dispatchRecordsError;
+  }) && !overlayState?.isCancelled && dispatchRecordsLoaded && dispatchRecordsOrderId === id;
   const dispatchAllPlan = useMemo(() => buildBulkDispatchPlan(displayOrders), [displayOrders]);
   const showDispatchAllControl = canUseDispatchAll;
   const dispatchableByKey = useMemo(
@@ -1689,12 +1723,6 @@ export default function ViewOrderDealerPage() {
         </div>
 
         <div className="px-8 py-6 max-w-[1600px] mx-auto space-y-5">
-          {[overlayError, summaryError, productNotesError, dispatchRecordsError].filter(Boolean).map((message) => (
-            <div key={message} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
-              {message}
-            </div>
-          ))}
-
           {/* ── Dealer Info Card ── */}
           {visibleDealerFields.length > 0 && (
             <div className="bg-white border border-gray-200 rounded-2xl p-5">
