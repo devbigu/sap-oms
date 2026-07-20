@@ -230,6 +230,15 @@ type OrderDispatchAccessState = {
   meta: OrderDispatchAccessMeta | null;
 };
 
+type EffectiveOrderOverlayState = {
+  isCancelled: boolean;
+  isEdited: boolean;
+  latestRevision: number;
+  cancellation?: { reason?: string; cancelledAt?: string; cancelledBy?: { id?: string; role?: string; name?: string } } | null;
+  eligibility?: { canDealerChange?: boolean; reason?: string } | null;
+  changeHistory?: Array<{ summary?: string; type?: string }>;
+};
+
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
 
 type PhpExchangeLog = {
@@ -276,7 +285,7 @@ async function fetchOrderDispatchAccessMeta(
   const targetDealer = actor.role === "staff" && dealerId
     ? `&target_dealer=${encodeURIComponent(dealerId)}`
     : "";
-  const url = `/api/active-orders?source=${source}&role=${encodeURIComponent(actor.role)}&page=1&limit=20&search=${encodeURIComponent(orderId)}${actor.id ? `&id=${encodeURIComponent(actor.id)}` : ""}${targetDealer}`;
+  const url = `/api/orders-data?source=${source}&role=${encodeURIComponent(actor.role)}&page=1&limit=20&search=${encodeURIComponent(orderId)}${actor.id ? `&id=${encodeURIComponent(actor.id)}` : ""}${targetDealer}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`orderhispegination failed with ${response.status}`);
@@ -736,6 +745,138 @@ function DealerField({ label, value }: { label: string; value?: string }) {
   );
 }
 
+function CancelOrderDialog({
+  orderId,
+  saving,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  orderId: string;
+  saving: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl">
+        <h2 className="text-base font-bold text-gray-900">Cancel this order?</h2>
+        <p className="mt-2 text-sm leading-6 text-gray-600">This action will remove order OM/{new Date().getFullYear()}/{orderId} from the active fulfilment workflow. The original order record will be preserved.</p>
+        <label className="mt-5 block text-[11px] font-bold uppercase tracking-wider text-gray-500">Cancellation reason</label>
+        <textarea
+          value={reason}
+          onChange={(event) => setReason(event.target.value.slice(0, 1000))}
+          disabled={saving}
+          className="mt-2 h-28 w-full resize-none rounded-xl border border-gray-200 p-3 text-sm outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+        />
+        {error && <p className="mt-2 text-sm font-medium text-red-600">{error}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">Keep Order</button>
+          <button type="button" onClick={() => onConfirm(reason)} disabled={saving} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+            {saving ? "Cancelling..." : "Cancel Order"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditOrderDialog({
+  items,
+  latestRevision,
+  saving,
+  error,
+  onClose,
+  onSave,
+}: {
+  items: OrderData[];
+  latestRevision: number;
+  saving: boolean;
+  error: string;
+  onClose: () => void;
+  onSave: (payload: { expectedRevision: number; items: Array<Record<string, unknown>> }) => void;
+}) {
+  const [draftItems, setDraftItems] = useState(() => items.map((item) => ({ ...item, originalLineId: item.orderdata_id })));
+  const [reviewing, setReviewing] = useState(false);
+  const visibleItems = draftItems.filter((item) => !(item as Record<string, unknown>)._removed);
+  const changeSummaries = draftItems.flatMap((item) => {
+    const original = items.find((entry) => entry.orderdata_id === item.originalLineId);
+    if (!original) return [];
+    if ((item as Record<string, unknown>)._removed) return [`Removed: ${original.product_name || original.orderdata_cat_no}`];
+    const changes: string[] = [];
+    if (String(original.orderdata_cat_no) !== String(item.orderdata_cat_no)) changes.push(`Replaced ${original.orderdata_cat_no} with ${item.orderdata_cat_no}`);
+    if (String(original.orderdata_item_quantity) !== String(item.orderdata_item_quantity)) changes.push(`Quantity ${original.orderdata_item_quantity} to ${item.orderdata_item_quantity} for ${item.product_name || item.orderdata_cat_no}`);
+    return changes;
+  });
+
+  const updateItem = (lineId: string, patch: Partial<OrderData>) => {
+    setDraftItems((current) => current.map((item) => item.originalLineId === lineId ? { ...item, ...patch } : item));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4" onClick={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="w-full max-w-5xl rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Edit Order Items</h2>
+            <p className="mt-1 text-sm text-gray-600">Remove items, replace catalogue details, or correct quantities before acceptance.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-600">Close</button>
+        </div>
+        {!reviewing ? (
+          <div className="mt-5 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-[11px] uppercase tracking-wider text-gray-500">
+                <tr><th className="p-3">Cat No.</th><th className="p-3">Product</th><th className="p-3">Qty</th><th className="p-3">Pack</th><th className="p-3">Note</th><th className="p-3">Action</th></tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {draftItems.map((item) => {
+                  const removed = !!(item as Record<string, unknown>)._removed;
+                  return (
+                    <tr key={item.originalLineId} className={removed ? "opacity-45" : ""}>
+                      <td className="p-3"><input value={String(item.orderdata_cat_no ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_cat_no: event.target.value })} className="w-36 rounded-lg border border-gray-200 px-2 py-1.5 font-mono text-xs" /></td>
+                      <td className="p-3"><input value={String(item.product_name ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { product_name: event.target.value })} className="w-64 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3"><input type="number" min="1" value={String(item.orderdata_item_quantity ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_item_quantity: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3"><input type="number" min="1" value={String(item.packSize ?? item.pack_size ?? 1)} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { packSize: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 text-xs text-gray-500">{item.fallbackProductNote || item.remark || "—"}</td>
+                      <td className="p-3">
+                        <button type="button" disabled={saving} onClick={() => updateItem(item.originalLineId, { _removed: !removed } as Partial<OrderData>)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700">
+                          {removed ? "Restore" : "Remove"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Review Changes</p>
+            {changeSummaries.length === 0 ? <p className="mt-2 text-sm text-amber-800">No changes detected.</p> : (
+              <ul className="mt-2 space-y-1 text-sm text-amber-900">{changeSummaries.map((summary, index) => <li key={index}>{summary}</li>)}</ul>
+            )}
+          </div>
+        )}
+        {visibleItems.length === 0 && <p className="mt-3 text-sm font-medium text-red-600">An edited order cannot be saved with no items. Use Cancel Order instead.</p>}
+        {error && <p className="mt-3 text-sm font-medium text-red-600">{error}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          {reviewing && <button type="button" onClick={() => setReviewing(false)} disabled={saving} className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700">Back</button>}
+          {!reviewing ? (
+            <button type="button" onClick={() => setReviewing(true)} disabled={saving || visibleItems.length === 0} className="rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Review Changes</button>
+          ) : (
+            <button type="button" disabled={saving || visibleItems.length === 0 || changeSummaries.length === 0} onClick={() => onSave({ expectedRevision: latestRevision, items: visibleItems })} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              {saving ? "Saving..." : "Save Edit"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function ViewOrderDealerPage() {
   const params   = useParams();
@@ -746,9 +887,9 @@ export default function ViewOrderDealerPage() {
 
   const [orders,    setOrders   ] = useState<OrderData[]>([]);
   const [loading,   setLoading  ] = useState(true);
-  const [orderPeriodBlocked, setOrderPeriodBlocked] = useState(false);
-  const [orderUnavailableMessage, setOrderUnavailableMessage] = useState("This order is outside the active order period.");
-  const [orderPeriodVerified, setOrderPeriodVerified] = useState(false);
+  const [orderAccessBlocked, setOrderAccessBlocked] = useState(false);
+  const [orderUnavailableMessage, setOrderUnavailableMessage] = useState("Unable to load this order right now.");
+  const [orderAccessVerified, setOrderAccessVerified] = useState(false);
   const [viewMode,  setViewMode ] = useState<ViewMode>("table");
   const [localOrderNote, setLocalOrderNote] = useState("");
   const [packLookup, setPackLookup] = useState<Record<string, number>>({});
@@ -761,6 +902,13 @@ export default function ViewOrderDealerPage() {
   const [activeDispatchItemId, setActiveDispatchItemId] = useState<string | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [overlayState, setOverlayState] = useState<EffectiveOrderOverlayState | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelSaving, setCancelSaving] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
   const dealer = useMemo<DealerInfo | null>(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -794,20 +942,20 @@ export default function ViewOrderDealerPage() {
   useEffect(() => {
     if (!id) return;
     const url = `${BACKEND}/orderdatalist?id=${id}`;
-    fetch(`/api/active-order/${encodeURIComponent(id)}`, {
+    fetch(`/api/order-access/${encodeURIComponent(id)}`, {
       cache: "no-store",
       headers: buildDispatchHeaders(currentUser),
     })
       .then(async accessResponse => {
         if (!accessResponse.ok) {
           const accessPayload = await accessResponse.json().catch(() => null);
-          setOrderPeriodBlocked(true);
+          setOrderAccessBlocked(true);
           setOrderUnavailableMessage(
             typeof accessPayload?.message === "string" && accessPayload.message.trim()
               ? accessPayload.message
               : "Unable to load this order right now."
           );
-          setOrderPeriodVerified(false);
+          setOrderAccessVerified(false);
           setActiveOrderHeader(null);
           setLoading(false);
           return null;
@@ -818,9 +966,9 @@ export default function ViewOrderDealerPage() {
             ? accessPayload.data as ActiveOrderHeader
             : null
         );
-        setOrderPeriodBlocked(false);
-        setOrderUnavailableMessage("This order is outside the active order period.");
-        setOrderPeriodVerified(true);
+        setOrderAccessBlocked(false);
+        setOrderUnavailableMessage("Unable to load this order right now.");
+        setOrderAccessVerified(true);
         return fetch(url);
       })
       .then(r => r ? r.json() : null)
@@ -902,16 +1050,16 @@ export default function ViewOrderDealerPage() {
         setLoading(false);
       })
       .catch(() => {
-        setOrderPeriodBlocked(true);
+        setOrderAccessBlocked(true);
         setOrderUnavailableMessage("Unable to load this order right now.");
-        setOrderPeriodVerified(false);
+        setOrderAccessVerified(false);
         setActiveOrderHeader(null);
         setLoading(false);
       });
   }, [currentUser, id]);
 
   useEffect(() => {
-    if (!orderPeriodVerified || !id || !orderAccessDealerId || !orderAccessKey || !currentUser) return;
+    if (!orderAccessVerified || !id || !orderAccessDealerId || !orderAccessKey || !currentUser) return;
 
     let cancelled = false;
 
@@ -926,20 +1074,61 @@ export default function ViewOrderDealerPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentUser, id, orderAccessDealerId, orderAccessKey, orderPeriodVerified]);
+  }, [currentUser, id, orderAccessDealerId, orderAccessKey, orderAccessVerified]);
 
   useEffect(() => {
-    if (!orderPeriodVerified || !id) return;
+    if (!orderAccessVerified || !id || !currentUser) return;
+
+    let cancelled = false;
+    fetch(`/api/order-overlays/${encodeURIComponent(id)}`, {
+      cache: "no-store",
+      headers: buildDispatchHeaders(currentUser),
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((json) => {
+        if (cancelled || !json?.success || !json.data) return;
+        const data = json.data as {
+          effectiveItems?: OrderData[];
+          effectiveTotals?: { grossAmount?: number; discountAmount?: number; netPayableAmount?: number };
+        } & EffectiveOrderOverlayState;
+        if (Array.isArray(data.effectiveItems) && data.effectiveItems.length > 0) {
+          setOrders(data.effectiveItems as OrderData[]);
+        }
+        if (data.effectiveTotals) {
+          setSummaryOverride({
+            grossAmount: data.effectiveTotals.grossAmount,
+            discountAmount: data.effectiveTotals.discountAmount,
+            netPayableAmount: data.effectiveTotals.netPayableAmount,
+          });
+        }
+        setOverlayState({
+          isCancelled: !!data.isCancelled,
+          isEdited: !!data.isEdited,
+          latestRevision: Number(data.latestRevision ?? 0),
+          cancellation: data.cancellation,
+          eligibility: data.eligibility,
+          changeHistory: data.changeHistory,
+        });
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, id, orderAccessVerified]);
+
+  useEffect(() => {
+    if (!orderAccessVerified || !id) return;
     fetch(`/api/order-notes?order_id=${encodeURIComponent(id)}`)
       .then(r => r.json())
       .then(json => {
         if (json.success && json.data?.[0]?.note) setLocalOrderNote(json.data[0].note);
       })
       .catch(() => {});
-  }, [id, orderPeriodVerified]);
+  }, [id, orderAccessVerified]);
 
   useEffect(() => {
-    if (!orderPeriodVerified || !id) return;
+    if (!orderAccessVerified || !id) return;
     fetch(`/api/order-product-notes?orderId=${encodeURIComponent(id)}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((json) => {
@@ -950,10 +1139,10 @@ export default function ViewOrderDealerPage() {
         }
       })
       .catch(() => setFallbackProductNotes([]));
-  }, [id, orderPeriodVerified]);
+  }, [id, orderAccessVerified]);
 
   useEffect(() => {
-    if (!orderPeriodVerified || !id) return;
+    if (!orderAccessVerified || !id) return;
     const params = new URLSearchParams({ order_id: id });
     if (orderAccessDealerId) params.set("dealer_id", orderAccessDealerId);
     fetch(`/api/order-summary-overrides?${params.toString()}`, { cache: "no-store" })
@@ -968,10 +1157,10 @@ export default function ViewOrderDealerPage() {
         }
       })
       .catch(() => {});
-  }, [id, orderAccessDealerId, orderPeriodVerified]);
+  }, [id, orderAccessDealerId, orderAccessVerified]);
 
   useEffect(() => {
-    if (!orderPeriodVerified || !id || !currentUser?.id) return;
+    if (!orderAccessVerified || !id || !currentUser?.id) return;
 
     fetch(`/api/order-dispatch?orderId=${encodeURIComponent(id)}`, {
       cache: "no-store",
@@ -986,7 +1175,7 @@ export default function ViewOrderDealerPage() {
         }
       })
       .catch(() => setDispatchRecords([]));
-  }, [currentUser, id, orderPeriodVerified]);
+  }, [currentUser, id, orderAccessVerified]);
 
   // Load product pack sizes (catNo → packSize) from local product data
   useEffect(() => {
@@ -1171,6 +1360,11 @@ export default function ViewOrderDealerPage() {
   });
 
   const handleDownloadInvoice = async () => {
+    if (overlayState?.isCancelled) {
+      setInvoiceToast({ type: "error", text: "Cancelled orders cannot generate an active invoice." });
+      window.setTimeout(() => setInvoiceToast(null), 3000);
+      return;
+    }
     if (displayOrders.length === 0 || invoiceLoading) return;
     setInvoiceLoading(true);
     const result = await downloadOrderInvoice(buildInvoiceOrder() as OrderInvoiceData, {
@@ -1183,6 +1377,102 @@ export default function ViewOrderDealerPage() {
       text: result.success ? "PDF downloaded" : result.error || "Download failed",
     });
     window.setTimeout(() => setInvoiceToast(null), 3000);
+  };
+
+  const submitCancellation = async (reason: string) => {
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      setCancelError("Cancellation reason is required.");
+      return;
+    }
+    if (!currentUser || currentUser.role !== "dealer") {
+      setCancelError("Only the Dealer who owns this order can cancel it.");
+      return;
+    }
+    setCancelSaving(true);
+    setCancelError("");
+    try {
+      const response = await fetch(`/api/order-overlays/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildDispatchHeaders(currentUser),
+        },
+        body: JSON.stringify({
+          action: "cancel",
+          reason: trimmedReason,
+          formattedOrderNumber: `OM/${year}/${id}`,
+        }),
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.success) {
+        setCancelError(json?.message || "Unable to cancel this order.");
+        return;
+      }
+      setOverlayState((current) => ({
+        ...(current ?? { isEdited: false, latestRevision: 0 }),
+        isCancelled: true,
+        cancellation: json.data?.cancellation,
+        eligibility: { canDealerChange: false, reason: "order_already_cancelled" },
+      }));
+      setCancelDialogOpen(false);
+      setInvoiceToast({ type: "success", text: "Order cancelled. The PHP order was preserved." });
+      window.setTimeout(() => setInvoiceToast(null), 3000);
+    } finally {
+      setCancelSaving(false);
+    }
+  };
+
+  const submitEdit = async (payload: { expectedRevision: number; items: Array<Record<string, unknown>> }) => {
+    if (!currentUser || currentUser.role !== "dealer") {
+      setEditError("Only the Dealer who owns this order can edit it.");
+      return;
+    }
+    setEditSaving(true);
+    setEditError("");
+    try {
+      const response = await fetch(`/api/order-overlays/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildDispatchHeaders(currentUser),
+        },
+        body: JSON.stringify({
+          action: "edit",
+          expectedRevision: payload.expectedRevision,
+          idempotencyKey: `${id}:${payload.expectedRevision}:${Date.now()}`,
+          items: payload.items,
+        }),
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.success) {
+        setEditError(json?.message || "Unable to save this edit.");
+        return;
+      }
+      const latestEdit = Array.isArray(json.data?.edits) ? json.data.edits[json.data.edits.length - 1] : null;
+      if (Array.isArray(latestEdit?.effectiveItems)) {
+        setOrders(latestEdit.effectiveItems as OrderData[]);
+      }
+      if (latestEdit?.totals) {
+        setSummaryOverride({
+          grossAmount: latestEdit.totals.grossAmount,
+          discountAmount: latestEdit.totals.discountAmount,
+          netPayableAmount: latestEdit.totals.netPayableAmount,
+        });
+      }
+      setOverlayState((current) => ({
+        ...(current ?? { isCancelled: false }),
+        isEdited: true,
+        latestRevision: Number(json.data?.latestRevision ?? payload.expectedRevision + 1),
+        changeHistory: latestEdit?.changes ?? current?.changeHistory ?? [],
+        eligibility: current?.eligibility ?? { canDealerChange: true, reason: "eligible" },
+      }));
+      setEditDialogOpen(false);
+      setInvoiceToast({ type: "success", text: "Order edit saved. The PHP order was preserved." });
+      window.setTimeout(() => setInvoiceToast(null), 3000);
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   // Dealer fields to show — in display order, only truthy ones render
@@ -1205,8 +1495,9 @@ export default function ViewOrderDealerPage() {
 
   const visibleDealerFields = dealerFields.filter(f => f.value);
   const orderNote = extractOrderNote(displayOrders, localOrderNote);
+  const dealerCanChangeOrder = currentUser?.role === "dealer" && overlayState?.eligibility?.canDealerChange && !overlayState?.isCancelled;
 
-  if (orderPeriodBlocked) {
+  if (orderAccessBlocked) {
     return (
       <main className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white border border-gray-200 rounded-lg p-6 text-center">
@@ -1249,6 +1540,16 @@ export default function ViewOrderDealerPage() {
                     OM/{year}/{firstOrder.orderdata_orderid}
                   </span>
                 )}
+                {overlayState?.isCancelled && (
+                  <span className="font-mono text-[12px] font-semibold text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg">
+                    Cancelled
+                  </span>
+                )}
+                {overlayState?.isEdited && !overlayState.isCancelled && (
+                  <span className="font-mono text-[12px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                    Edited
+                  </span>
+                )}
               </div>
               {dealer?.Dealer_Name && (
                 <p className="text-[13px] text-gray-500 mt-0.5">{dealer.Dealer_Name}</p>
@@ -1257,6 +1558,18 @@ export default function ViewOrderDealerPage() {
           </div>
           <div className="flex items-center gap-3">
             <ViewToggle mode={viewMode} onChange={setViewMode} />
+            {dealerCanChangeOrder && (
+              <>
+                <button onClick={() => setEditDialogOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-[13px] font-semibold rounded-xl transition-colors">
+                  Edit Order
+                </button>
+                <button onClick={() => setCancelDialogOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-[13px] font-semibold rounded-xl transition-colors">
+                  Cancel Order
+                </button>
+              </>
+            )}
             <button onClick={handleDownloadInvoice} disabled={invoiceLoading || loading || displayOrders.length === 0}
               className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 text-[13px] font-semibold rounded-xl border border-gray-200 transition-colors">
               {invoiceLoading ? (
@@ -1311,6 +1624,28 @@ export default function ViewOrderDealerPage() {
                 <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Order Note</p>
               </div>
               <p className="whitespace-pre-wrap text-[13px] leading-6 text-gray-700">{orderNote}</p>
+            </div>
+          )}
+
+          {overlayState?.isCancelled && (
+            <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
+              <p className="text-[11px] font-bold text-red-500 uppercase tracking-widest">Cancellation</p>
+              <p className="mt-2 text-[13px] leading-6 text-red-800">{overlayState.cancellation?.reason || "This order was cancelled."}</p>
+              <p className="mt-2 text-[12px] text-red-600">
+                Cancelled by {overlayState.cancellation?.cancelledBy?.name || overlayState.cancellation?.cancelledBy?.id || "Dealer"}
+                {overlayState.cancellation?.cancelledAt ? ` on ${moment(overlayState.cancellation.cancelledAt).format("DD MMM YYYY, hh:mm A")}` : ""}
+              </p>
+            </div>
+          )}
+
+          {overlayState?.isEdited && overlayState.changeHistory && overlayState.changeHistory.length > 0 && (
+            <div className="bg-white border border-amber-200 rounded-2xl p-5">
+              <p className="text-[11px] font-bold text-amber-600 uppercase tracking-widest">Order Changes</p>
+              <div className="mt-3 space-y-2">
+                {overlayState.changeHistory.map((change, index) => (
+                  <p key={index} className="text-[13px] leading-6 text-gray-700">{change.summary || change.type}</p>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1493,6 +1828,25 @@ export default function ViewOrderDealerPage() {
         onClose={() => setActiveDispatchItemId(null)}
         onRecordSaved={handleDispatchRecordSaved}
       />
+      {cancelDialogOpen && (
+        <CancelOrderDialog
+          orderId={id}
+          saving={cancelSaving}
+          error={cancelError}
+          onClose={() => setCancelDialogOpen(false)}
+          onConfirm={submitCancellation}
+        />
+      )}
+      {editDialogOpen && (
+        <EditOrderDialog
+          items={displayOrders}
+          latestRevision={overlayState?.latestRevision ?? 0}
+          saving={editSaving}
+          error={editError}
+          onClose={() => setEditDialogOpen(false)}
+          onSave={submitEdit}
+        />
+      )}
     </>
   );
 }

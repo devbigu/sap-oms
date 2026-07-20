@@ -12,7 +12,6 @@ import Footer from "@/components/Footer";
 import Link from "next/link";
 import axios from "axios";
 import { OrderAmountSource, withDisplayOrderAmounts } from "@/lib/orderAmounts";
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from "@/lib/activeOrderPeriod.js";
 import { useAuthSession } from "@/hooks/useAuthSession";
 // import { getRecentlyViewed, pushRecentlyViewed, type RecentlyViewedItem } from "@/components/Header";
 
@@ -116,9 +115,9 @@ type CatalogRouteResolver = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function fetchOrders(id: string): Promise<ApiResponse> {
-  const r = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=10&search=&id=${encodeURIComponent(id)}`);
+  const r = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=10&search=&id=${encodeURIComponent(id)}`);
   if (!r.ok) throw new Error("Failed to fetch orders");
-  return filterActiveOrderResponse(await r.json());
+  return r.json();
 }
 
 function firstImage(item: { images?: string[]; Images?: string[] } | null | undefined): string {
@@ -376,7 +375,7 @@ export default function Page() {
 
   // Fetch real orders
   const { data: ordersData, isLoading: ordersLoading, isError: ordersError } = useQuery({
-    queryKey: ["orders-home", ACTIVE_ORDER_PERIOD_VERSION, "dealer", dealerId],
+    queryKey: ["orders-home", "dealer", dealerId],
     queryFn: () => fetchOrders(dealerId),
     placeholderData: keepPreviousData,
     staleTime: 30_000,

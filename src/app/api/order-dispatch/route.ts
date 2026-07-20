@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { resolveActiveOrder } from "@/lib/activeOrderAccess";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 import { MongoServerError } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
-import { invalidateActiveOrderSnapshots } from "@/lib/activeOrderSnapshot";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
+import { findOrderOverlay } from "@/lib/orderOverlays";
 import {
   buildDispatchIdentity,
   buildLegacyDispatchSeed,
@@ -413,7 +413,7 @@ export async function GET(req: NextRequest) {
       if (!doc) {
         return NextResponse.json({ success: false, message: "Dispatch record not found" }, { status: 404 });
       }
-      const access = await resolveActiveOrder(doc.orderId, doc.dealerId);
+      const access = await resolveOrderAccess(doc.orderId, doc.dealerId);
       if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
       if (!authorizeView(actor, { dealerId: doc.dealerId, assignedStaffId: doc.assignedStaffId ?? undefined })) {
         return NextResponse.json({ success: false, message: "Unauthorized dispatch access" }, { status: 403 });
@@ -425,7 +425,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, message: "A raw orderId is required" }, { status: 400 });
     }
 
-    const activeAccess = await resolveActiveOrder(orderId);
+    const activeAccess = await resolveOrderAccess(orderId);
     if (!activeAccess.visible) return NextResponse.json({ success: false, message: activeAccess.reason }, { status: 404 });
 
     const payload = await fetchPhpOrderPayload(orderId);
@@ -484,7 +484,11 @@ export async function POST(req: NextRequest) {
     if (!orderId || isExpectedOrderNumber(orderId)) {
       return NextResponse.json({ success: false, message: "A raw orderId is required" }, { status: 400 });
     }
-    const activeAccess = await resolveActiveOrder(orderId, requestedDealerId);
+    const overlay = await findOrderOverlay(orderId).catch(() => null);
+    if (overlay?.status === "cancelled") {
+      return NextResponse.json({ success: false, message: "Cancelled orders cannot be dispatched" }, { status: 409 });
+    }
+    const activeAccess = await resolveOrderAccess(orderId, requestedDealerId);
     if (!activeAccess.visible) return NextResponse.json({ success: false, message: activeAccess.reason }, { status: 409 });
     if (!orderItemId && !normalizeSku(sku)) {
       return NextResponse.json({ success: false, message: "orderItemId or a valid SKU is required" }, { status: 400 });
@@ -642,9 +646,6 @@ export async function POST(req: NextRequest) {
     }
 
     invalidatePendingProductsCache();
-    await invalidateActiveOrderSnapshots("order dispatch updated").catch((error) => {
-      console.warn("[POST /api/order-dispatch] active-order invalidation failed", error);
-    });
     return NextResponse.json({ success: true, data: toResponseRecord(updated) });
   } catch (error) {
     console.error("[POST /api/order-dispatch]", error);

@@ -1,7 +1,7 @@
-import { getOriginalOrderDate } from "@/lib/activeOrderPeriod.js";
+import { getOriginalOrderDate } from "@/lib/orderDate.js";
 import { filterOrdersForActor, resolveOrderDealerId } from "@/lib/staffOrderScope.js";
 
-export type ActiveOrdersActor = {
+export type OrdersActor = {
   role: "admin" | "accountant" | "staff" | "dealer";
   actorId: string;
 };
@@ -12,7 +12,7 @@ export type UpstreamOrderPage<T> = {
   total?: number;
 };
 
-export type ActiveOrderFilters = {
+export type OrderFilters = {
   search?: string;
   accepted?: string;
   orderStatus?: string;
@@ -43,8 +43,8 @@ function orderDedupeKey(order: Record<string, unknown>) {
   return `${resolveOrderDealerId(order)}:${orderId}`;
 }
 
-export async function scanScopedActiveOrders<T extends Record<string, unknown>>(input: {
-  actor: ActiveOrdersActor;
+export async function scanScopedOrders<T extends Record<string, unknown>>(input: {
+  actor: OrdersActor;
   assignedDealerIds?: Array<string | number>;
   upstreamActorIds: string[];
   upstreamPageSize: number;
@@ -107,18 +107,10 @@ export async function scanScopedActiveOrders<T extends Record<string, unknown>>(
     if (!exhausted) truncated = true;
   }
 
-  return {
-    rows,
-    pageCalls,
-    truncated,
-    totalIsExact: !truncated,
-  };
+  return { rows, pageCalls, truncated, totalIsExact: !truncated };
 }
 
-export function applyActiveOrderFilters<T extends Record<string, unknown>>(
-  rows: T[],
-  filters: ActiveOrderFilters = {},
-) {
+export function applyOrderFilters<T extends Record<string, unknown>>(rows: T[], filters: OrderFilters = {}) {
   const query = text(filters.search).toLowerCase();
   const orderId = text(filters.orderId).toLowerCase();
   const targetDealerId = text(filters.targetDealerId);
@@ -141,20 +133,15 @@ export function applyActiveOrderFilters<T extends Record<string, unknown>>(
   });
 }
 
-export function buildActiveOrdersPage<T extends Record<string, unknown>>(input: {
+export function buildOrdersPage<T extends Record<string, unknown>>(input: {
   rows: T[];
   page: number;
   pageSize: number;
-  filters?: ActiveOrderFilters;
+  filters?: OrderFilters;
 }) {
-  const filteredRows = applyActiveOrderFilters(input.rows, input.filters);
+  const filteredRows = applyOrderFilters(input.rows, input.filters);
   const total = filteredRows.length;
   const totalPages = total === 0 ? 0 : Math.ceil(total / input.pageSize);
   const start = (input.page - 1) * input.pageSize;
-
-  return {
-    items: filteredRows.slice(start, start + input.pageSize),
-    total,
-    totalPages,
-  };
+  return { items: filteredRows.slice(start, start + input.pageSize), total, totalPages };
 }

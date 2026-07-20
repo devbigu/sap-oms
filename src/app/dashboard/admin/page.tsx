@@ -23,7 +23,6 @@ import {
 import { fetchDealerStatusOverrides, normalizeDealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview";
 import { clearAuthStorage } from "@/lib/roleAccess";
-import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const year = new Date().getFullYear();
@@ -68,6 +67,7 @@ type DealerPaginationResponse = {
   data: DealerSummary[];
   total?: number;
   last_page?: number;
+  lastPage?: number;
 };
 
 type StaffSummary = {
@@ -167,6 +167,50 @@ async function fetchJson<T>(url: string): Promise<T> {
   return parseJsonResponse<T>(res);
 }
 
+async function fetchAllDistributors(): Promise<DealerPaginationResponse> {
+  const data: DealerSummary[] = [];
+  const seenDealerIds = new Set<string>();
+  let reportedTotal = 0;
+  let reportedLastPage = 0;
+
+  for (let page = 1; page <= 500; page += 1) {
+    const response = await fetchJson<DealerPaginationResponse>(
+      `${BACKEND_URL}/dealerpegination?page=${page}&limit=100&search=`,
+    );
+    const rows = Array.isArray(response.data) ? response.data : [];
+    let newRows = 0;
+
+    for (const dealer of rows) {
+      const dealerId = String(dealer.Dealer_Id ?? "").trim();
+      if (!dealerId || seenDealerIds.has(dealerId)) continue;
+      seenDealerIds.add(dealerId);
+      data.push(dealer);
+      newRows += 1;
+    }
+
+    reportedTotal = Math.max(reportedTotal, Number(response.total) || 0);
+    reportedLastPage = Math.max(
+      reportedLastPage,
+      Number(response.last_page ?? response.lastPage) || 0,
+    );
+
+    if (
+      rows.length === 0 ||
+      newRows === 0 ||
+      (reportedTotal > 0 && data.length >= reportedTotal) ||
+      (reportedLastPage > 0 && page >= reportedLastPage)
+    ) {
+      break;
+    }
+  }
+
+  return {
+    data,
+    total: Math.max(reportedTotal, data.length),
+    last_page: reportedLastPage || undefined,
+  };
+}
+
 async function parseJsonResponse<T>(res: Response): Promise<T> {
   const text = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -222,8 +266,8 @@ function AdminDashboardInner() {
     async function fetchData() {
       try {
         const [activeOrdersRes, activePendingRes, dealerRes, staffRes] = await Promise.all([
-          fetch(`/api/active-orders?source=orderpegination&role=admin&page=1&limit=1000&search=`),
-          fetch(`/api/active-orders?source=orderpeginationnew&role=admin&page=1&limit=1&search=`),
+          fetch(`/api/orders-data?source=orderpegination&role=admin&page=1&limit=1000&search=`),
+          fetch(`/api/orders-data?source=orderpeginationnew&role=admin&page=1&limit=1&search=`),
           fetch(`${BACKEND_URL}/getMonthlyreporttopdealer`),
           fetch(`${BACKEND_URL}/dealercount`),
         ]);
@@ -233,7 +277,7 @@ function AdminDashboardInner() {
         const dealerJson = await parseJsonResponse<any>(dealerRes);
         const staffJson = await parseJsonResponse<any>(staffRes);
 
-        const activeOrders = filterActiveOrders<any>(activeOrdersJson.data || []);
+        const activeOrders = (activeOrdersJson.data || []) as Array<Record<string, unknown>>;
         setData(activeOrders
           .map((order) => ({ order_id: String(order.order_id || ""), total: String(order.order_net_amount ?? order.order_discount ?? order.order_amount ?? 0) }))
           .sort((left, right) => Number(right.total) - Number(left.total))
@@ -263,15 +307,14 @@ function AdminDashboardInner() {
     discountApprovalsQ,
     ledgerQ,
     dealersQ,
-    distributorsCountQ,
     staffQ,
   ] = useQueries({
     queries: [
       {
         queryKey: ["adminSidebarSummary", "outstandingOrders"],
         queryFn: async () => {
-          const result = await fetchJson<{ data: PendingOrderRecord[] }>(`/api/active-orders?source=orderpeginationnew&role=admin&page=1&limit=1000&search=`);
-          return { ...result, data: filterActiveOrders(result.data) };
+          const result = await fetchJson<{ data: PendingOrderRecord[]; total?: number }>(`/api/orders-data?source=orderpeginationnew&role=admin&page=1&limit=1000&search=`);
+          return result;
         },
       },
       {
@@ -284,11 +327,7 @@ function AdminDashboardInner() {
       },
       {
         queryKey: ["adminSidebarSummary", "dealers"],
-        queryFn: () => fetchJson<{ data: DealerSummary[]; total?: number }>(`${BACKEND_URL}/dealerpegination?page=1&limit=1000&search=`),
-      },
-      {
-        queryKey: ["adminSidebarSummary", "distributorCount"],
-        queryFn: () => fetchJson<{ data: DealerSummary[]; total?: number }>(`${BACKEND_URL}/dealerpegination?page=1&limit=1&search=`),
+        queryFn: fetchAllDistributors,
       },
       {
         queryKey: ["adminSidebarSummary", "staff"],
@@ -303,14 +342,13 @@ function AdminDashboardInner() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const summaryLoading = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].some(q => q.isLoading);
-  const summaryError = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, distributorsCountQ, staffQ].find(q => q.isError);
+  const summaryLoading = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, staffQ].some(q => q.isLoading);
+  const summaryError = [outstandingOrdersQ, discountApprovalsQ, ledgerQ, dealersQ, staffQ].find(q => q.isError);
   const retrySummary = () => {
     outstandingOrdersQ.refetch();
     discountApprovalsQ.refetch();
     ledgerQ.refetch();
     dealersQ.refetch();
-    distributorsCountQ.refetch();
     staffQ.refetch();
   };
 
@@ -334,6 +372,7 @@ function AdminDashboardInner() {
   }, [distributorSearchInput]);
 
   const outstandingOrders = (outstandingOrdersQ.data?.data ?? []).filter((o) => o.order_status === "0" || o.accept_order === "0");
+  const totalPendingOrders = outstandingOrdersQ.data?.total ?? outstandingOrders.length;
   const pendingApprovals = (discountApprovalsQ.data?.data ?? []).filter(r => r.status === "pending").length;
   const statusMap = useMemo(() => new Map(
     (statusOverrides ?? []).map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
@@ -354,7 +393,7 @@ function AdminDashboardInner() {
   const highExposureDealers = [...dealerRows]
     .sort((a, b) => (Number(b.currentlimit) || 0) - (Number(a.currentlimit) || 0))
     .slice(0, 5);
-  const totalDistributors = distributorsCountQ.data?.total ?? dealerRows.length;
+  const totalDistributors = dealersQ.data?.total ?? dealerRows.length;
   const distributorRows = useMemo(() => (distributorResponse?.data ?? []).map((dealer) => ({
     ...dealer,
     status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
@@ -660,8 +699,8 @@ function AdminDashboardInner() {
             <div className="summary-grid">
               <div className="stat-card">
                 <div className="stat-lbl">Pending Orders</div>
-                <div className="font-sans font-bold">{summaryLoading ? "—" : outstandingOrders.length}</div>
-                <div className="stat-badge badge-amber pulse-amber">{outstandingOrders.length} pending</div>
+                <div className="font-sans font-bold">{summaryLoading ? "—" : totalPendingOrders}</div>
+                <div className="stat-badge badge-amber pulse-amber">{totalPendingOrders} pending</div>
                 <Link href="/Pages/Ordermanagement/outstandingorders" className="quick-action-btn">+ Review orders</Link>
               </div>
               <div className="stat-card">

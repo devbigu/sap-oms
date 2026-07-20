@@ -1,7 +1,6 @@
 import { Db } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
-import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import {
   OrderAmountSource,
   resolveOrderAmounts,
@@ -9,7 +8,7 @@ import {
 } from "@/lib/orderAmounts";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
-const CACHE_ID = `collective_ledger_snapshot:${ACTIVE_ORDER_PERIOD_VERSION}`;
+const CACHE_ID = "collective_ledger_snapshot:all-orders-v1";
 const CACHE_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = Number(process.env.LEDGER_FETCH_TIMEOUT_MS ?? 30_000);
 const MAX_PAGES = 10;
@@ -184,7 +183,7 @@ async function fetchLiveSnapshot(): Promise<LedgerSnapshot> {
   try {
     const [dealers, activeOrders] = await Promise.all([
       fetchPaginated("dealerpegination", controller.signal),
-      loadActiveOrderHeaders({
+      loadOrderHeaders({
         source: "orderpegination",
         actor: { role: "admin", actorId: "" },
       }),
@@ -206,7 +205,7 @@ async function readCachedSnapshot(db: Db): Promise<LedgerSnapshot | null> {
   return {
     updatedAt: String(doc.updatedAt || new Date(0).toISOString()),
     dealers: Array.isArray(doc.dealers) ? doc.dealers : [],
-    orders: filterActiveOrders(Array.isArray(doc.orders) ? doc.orders : []),
+    orders: Array.isArray(doc.orders) ? doc.orders : [],
   };
 }
 
@@ -378,7 +377,7 @@ export function uniqueLedgerOrders(orders: ExternalOrder[]) {
 
 export function ordersForDealer(orders: ExternalOrder[], dealerId: string) {
   return uniqueLedgerOrders(
-    filterActiveOrders(orders).filter((order) => orderMatchesDealer(order, dealerId) && isLedgerOrder(order))
+    orders.filter((order) => orderMatchesDealer(order, dealerId) && isLedgerOrder(order))
   );
 }
 
@@ -399,7 +398,7 @@ export function summarizeOrders(orders: ExternalOrder[]): AccountBookSummary {
   let supposedToGoPaise = 0;
   let awaitingPaise = 0;
 
-  for (const order of filterActiveOrders(orders)) {
+  for (const order of orders) {
     const state = classifyOrder(order);
     if (state === "Cancelled") continue;
 

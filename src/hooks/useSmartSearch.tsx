@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 const BASE_URL = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -99,7 +98,7 @@ async function fetchWithSearch(
     const isOrderEndpoint = /Orderstspegination|orderhispegination|orderpegination/i.test(endpoint);
     const source = endpoint.replace(/^\//, "");
     const url = isOrderEndpoint
-      ? `/api/active-orders?source=${encodeURIComponent(source)}&role=${encodeURIComponent(role || "admin")}&limit=25&${params.toString()}`
+      ? `/api/orders-data?source=${encodeURIComponent(source)}&role=${encodeURIComponent(role || "admin")}&limit=25&${params.toString()}`
       : `${BASE_URL}${endpoint}?${params.toString()}`;
     const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
@@ -115,7 +114,7 @@ async function fetchWithSearch(
       data?.products ||
       (Array.isArray(data) ? data : [])
     );
-    return /order/i.test(endpoint) ? filterActiveOrders(rows) : rows;
+    return rows;
   } catch {
     return [];
   }

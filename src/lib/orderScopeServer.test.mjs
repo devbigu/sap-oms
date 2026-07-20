@@ -39,9 +39,9 @@ test("numeric and string actor IDs normalize to stable strings", () => {
   });
 });
 
-test("active-orders adapter requires an explicit role instead of endpoint inference", async () => {
-  const source = await fs.readFile(path.resolve("src/app/api/active-orders/route.ts"), "utf8");
-  assert.match(source, /parseOrderActor\(\{ role: requestedRole, actorId \}\)/);
+test("orders-data adapter requires an explicit role instead of endpoint inference", async () => {
+  const source = await fs.readFile(path.resolve("src/app/api/orders-data/route.ts"), "utf8");
+  assert.match(source, /parseOrderActor\(\{[\s\S]*role: String\(req\.nextUrl\.searchParams\.get\("role"\)/);
   assert.doesNotMatch(source, /fallbackRole/);
 });
 

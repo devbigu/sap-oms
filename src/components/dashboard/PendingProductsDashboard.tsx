@@ -10,7 +10,6 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ACTIVE_ORDER_PERIOD_VERSION } from "@/lib/activeOrderPeriod.js";
 
 type Role = "admin" | "staff" | "dealer";
 
@@ -297,7 +296,6 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
   const listQuery = useQuery<ApiResponse<PendingProductsListPayload>>({
     queryKey: [
       "pending-products",
-      ACTIVE_ORDER_PERIOD_VERSION,
       role,
       actor?.id ?? "",
       search,
@@ -336,7 +334,6 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
   const detailQuery = useQuery<ApiResponse<PendingProductsDetailPayload>>({
     queryKey: [
       "pending-products-detail",
-      ACTIVE_ORDER_PERIOD_VERSION,
       role,
       actor?.id ?? "",
       detailProductKey,

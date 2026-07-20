@@ -335,9 +335,9 @@ test("No request is made to PHP addremark in the new dispatch API", async () => 
   assert.doesNotMatch(source, /addremark/);
 });
 
-test("Order details fetch header access fields through the role-scoped active-orders adapter", async () => {
+test("Order details fetch header access fields through the role-scoped orders-data adapter", async () => {
   const source = await fs.readFile(orderDetailPath, "utf8");
-  assert.match(source, /active-orders\?source=\$\{source\}&role=\$\{encodeURIComponent\(actor\.role\)\}/);
+  assert.match(source, /orders-data\?source=\$\{source\}&role=\$\{encodeURIComponent\(actor\.role\)\}/);
   assert.match(source, /actor\.role === "dealer" \|\| actor\.role === "staff" \? "orderhispegination"/);
 });
 

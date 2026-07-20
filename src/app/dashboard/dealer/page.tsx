@@ -12,7 +12,6 @@ import { CiSearch } from "react-icons/ci";
 import { useCartStore } from "@/Store/store";
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview";
 import { clearAuthStorage } from "@/lib/roleAccess";
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import { buildDealerOrderView } from "@/lib/dealerOrderView";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -169,7 +168,7 @@ function DealerDashboardInner() {
         if (!dealerId) { setLoading(false); return; }
 
         const activeResponse = await fetchJson<{ data: OrderHistoryItem[] }>(
-          `/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealerId)}`
+          `/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealerId)}`
         );
         const orderView = buildDealerOrderView(activeResponse.data, dealerId);
         setMonthlyOrders(orderView.monthly);
@@ -324,8 +323,8 @@ function DealerDashboardInner() {
         enabled: !!dealer.Dealer_Id,
       },
       {
-        queryKey: ["dealerSidebarSummary", "orders", ACTIVE_ORDER_PERIOD_VERSION, "dealer", dealer.Dealer_Id],
-        queryFn: () => fetchJson<{ data: OrderHistoryItem[] }>(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealer.Dealer_Id)}`),
+        queryKey: ["dealerSidebarSummary", "orders", "dealer", dealer.Dealer_Id],
+        queryFn: () => fetchJson<{ data: OrderHistoryItem[] }>(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealer.Dealer_Id)}`),
         enabled: !!dealer.Dealer_Id,
       },
     ],
@@ -347,7 +346,7 @@ function DealerDashboardInner() {
       return rowSum + qty * pack * price;
     }, 0);
   }, 0);
-  const orderView = buildDealerOrderView(filterActiveOrders(ordersQ.data?.data ?? []), dealer.Dealer_Id);
+  const orderView = buildDealerOrderView(ordersQ.data?.data ?? [], dealer.Dealer_Id);
   const orderRows = orderView.orders as OrderHistoryItem[];
   const pendingOrders = orderView.pendingCount;
   const shippedOrders = orderView.completedCount;

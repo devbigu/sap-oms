@@ -4,11 +4,11 @@ import test from "node:test";
 import dashboardSearch from "./dashboardSearch.js";
 import { filterOrdersForActor } from "./staffOrderScope.js";
 import {
-  ACTIVE_ORDER_FIXTURES,
+  ORDER_FIXTURES,
   DEALER_A,
   DEALER_B,
   STAFF_1,
-} from "./activeOrderFixtures.mjs";
+} from "./orderVisibilityFixtures.mjs";
 
 const {
   buildDashboardSearchResponse,
@@ -424,9 +424,9 @@ test("Order display formatting keeps repository route shape", () => {
   assert.equal(buildOrderDisplayNumber("3841", "2027-02-14"), "OM/2027/3841");
 });
 
-test("dashboard order search applies active-period and actor scope before product-line matching", () => {
+test("dashboard order search applies actor scope across all dates before product-line matching", () => {
   const itemSearch = Object.fromEntries(
-    ACTIVE_ORDER_FIXTURES.map((order) => [
+    ORDER_FIXTURES.map((order) => [
       String(order.order_id),
       { searchText: "cutoff-fixture-flask", matchedByItemText: true, matchedLabel: "Fixture Flask" },
     ]),
@@ -436,7 +436,7 @@ test("dashboard order search applies active-period and actor scope before produc
       role,
       actorId,
       assignedDealerIds,
-      orders: ACTIVE_ORDER_FIXTURES,
+      orders: ORDER_FIXTURES,
     });
     return buildDashboardSearchResponse({
       role,
@@ -451,17 +451,17 @@ test("dashboard order search applies active-period and actor scope before produc
   const dealerAIds = buildFor("dealer", DEALER_A);
   const dealerBIds = buildFor("dealer", DEALER_B);
 
-  assert.equal(adminIds.includes("12001"), false);
-  assert.deepEqual(staffIds, ["13001", "14001", "15001"]);
-  assert.deepEqual(dealerAIds, ["13001", "14001", "15001"]);
+  assert.equal(adminIds.includes("12001"), true);
+  assert.deepEqual(staffIds, ["12001", "13001", "14001", "15001"]);
+  assert.deepEqual(dealerAIds, ["12001", "13001", "14001", "15001"]);
   assert.deepEqual(dealerBIds, ["14002", "15002"]);
   assert.equal(staffIds.some((id) => dealerBIds.includes(id)), false);
 });
 
 test("role-specific cached search inputs cannot expose a previous actor's orders", () => {
   const cachedInputs = new Map();
-  cachedInputs.set("dealer:101", filterOrdersForActor({ role: "dealer", actorId: DEALER_A, orders: ACTIVE_ORDER_FIXTURES }));
-  cachedInputs.set("dealer:202", filterOrdersForActor({ role: "dealer", actorId: DEALER_B, orders: ACTIVE_ORDER_FIXTURES }));
+  cachedInputs.set("dealer:101", filterOrdersForActor({ role: "dealer", actorId: DEALER_A, orders: ORDER_FIXTURES }));
+  cachedInputs.set("dealer:202", filterOrdersForActor({ role: "dealer", actorId: DEALER_B, orders: ORDER_FIXTURES }));
 
   const idsFor = (key) => buildDashboardSearchResponse({
     role: "dealer",

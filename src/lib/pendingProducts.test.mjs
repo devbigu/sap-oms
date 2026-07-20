@@ -26,7 +26,6 @@ async function transpileTypeScriptModule(filePath, replacements = []) {
 async function loadPendingProductsModule() {
   const orderProductNotesUrl = pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs")).href;
   const productSearchUrl = pathToFileURL(path.resolve("src/lib/productSearch.js")).href;
-  const activeOrderPeriodUrl = pathToFileURL(path.resolve("src/lib/activeOrderPeriod.js")).href;
 
   const orderDispatchPath = path.resolve("src/lib/orderDispatch.ts");
   const orderDispatchUrl = await transpileTypeScriptModule(orderDispatchPath, [
@@ -37,7 +36,6 @@ async function loadPendingProductsModule() {
   const pendingProductsUrl = await transpileTypeScriptModule(pendingProductsPath, [
     [/from\s+["']\.\/orderDispatch["']/g, `from "${orderDispatchUrl}"`],
     [/from\s+["']\.\/productSearch\.js["']/g, `from "${productSearchUrl}"`],
-    [/from\s+["']\.\/activeOrderPeriod\.js["']/g, `from "${activeOrderPeriodUrl}"`],
   ]);
 
   return import(pendingProductsUrl);
@@ -425,7 +423,7 @@ test("default sort places the highest pending quantity first", () => {
   assert.deepEqual(sorted.map((entry) => entry.catalogueNumber), ["50/8", "50/9"]);
 });
 
-test("staff cutoff fixture produces exact pending totals after assignment scope is applied", () => {
+test("staff mixed-date fixture produces exact pending totals after assignment scope is applied", () => {
   const orders = [
     { order_id: "13001", order_date: "2026-07-13", order_dealer: "101", Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
     { order_id: "14001", order_date: "2026-07-14", order_dealer: 101, Dealer_Name: "Dealer A", accept_order: "1", del_status: "0" },
@@ -466,7 +464,7 @@ test("staff cutoff fixture produces exact pending totals after assignment scope 
   const flask = aggregates.find((entry) => entry.catalogueNumber === "F-1");
   const testTube = aggregates.find((entry) => entry.catalogueNumber === "T-1");
 
-  assert.deepEqual(scopedOrders.map((order) => String(order.order_id)), ["13001", "14001"]);
+  assert.deepEqual(scopedOrders.map((order) => String(order.order_id)), ["13001", "14001", "12001"]);
   assert.ok(flask);
   assert.deepEqual(
     {
@@ -475,20 +473,20 @@ test("staff cutoff fixture produces exact pending totals after assignment scope 
       pending: flask.pendingQuantity,
       orders: flask.pendingOrders,
     },
-    { ordered: 18, dispatched: 7, pending: 11, orders: 2 },
+    { ordered: 68, dispatched: 7, pending: 61, orders: 3 },
   );
   assert.equal(testTube.pendingQuantity, 20);
   assert.equal(aggregates.some((entry) => entry.catalogueNumber === "B-1"), false);
   assert.deepEqual(pendingProducts.buildPendingProductsSummaryFromLines(lines), {
     productsPending: 2,
-    totalPendingUnits: 31,
-    ordersWithPendingItems: 2,
+    totalPendingUnits: 81,
+    ordersWithPendingItems: 3,
     dealersAffected: 1,
   });
 
   const drilldown = pendingProducts.buildPendingProductDrilldown(lines, flask.productKey);
-  assert.equal(drilldown.aggregate.pendingQuantity, 11);
-  assert.deepEqual(drilldown.orders.map((order) => order.orderId).sort(), ["13001", "14001"]);
+  assert.equal(drilldown.aggregate.pendingQuantity, 61);
+  assert.deepEqual(drilldown.orders.map((order) => order.orderId).sort(), ["12001", "13001", "14001"]);
   assert.equal(drilldown.orders.some((order) => order.dealerName === "Dealer B"), false);
 });
 
@@ -503,7 +501,7 @@ test("dealer pending-product results and independently cached role views remain 
     cache.set(actorId, pendingProducts.filterPendingOrdersByRoleScope({ role: "dealer", actorId, orders: mixedOrders }));
   }
 
-  assert.deepEqual(cache.get("101").map((order) => order.order_id), ["A-NEW"]);
+  assert.deepEqual(cache.get("101").map((order) => order.order_id), ["A-NEW", "A-OLD"]);
   assert.deepEqual(cache.get("202").map((order) => order.order_id), ["B-NEW"]);
   assert.equal(cache.get("101").some((order) => order.Dealer_Name === "Dealer B"), false);
   assert.equal(cache.get("202").some((order) => order.Dealer_Name === "Dealer A"), false);

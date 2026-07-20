@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { normalizeDealerStatus, type DealerStatus } from "@/lib/dealerStatus";
-import { invalidateActiveOrderSnapshots } from "@/lib/activeOrderSnapshot";
 
 type DealerStatusDbDocument = {
   dealerId: string;
@@ -79,11 +78,6 @@ export async function POST(request: NextRequest) {
       : `${PHP_BASE}/PlaceOrderarray?id=${encodeURIComponent(dealerId)}&staffid=${encodeURIComponent(staffId)}`;
 
     const response = await forwardToPhp(endpoint, forwarded);
-    if (response.ok) {
-      await invalidateActiveOrderSnapshots(isExcelUpload ? "order import completed" : "new order created").catch((error) => {
-        console.warn("[dealer-order] active-order invalidation failed", error);
-      });
-    }
     return response;
   } catch (error) {
     console.error("dealer-order POST failed", error);

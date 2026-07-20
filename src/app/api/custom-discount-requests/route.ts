@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
-import { ACTIVE_ORDER_CUTOFF_DATE, filterActiveOrderSnapshots } from "@/lib/activeOrderPeriod.js";
-import { resolveActiveOrder } from "@/lib/activeOrderAccess";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 import {
   buildDraftApprovalState,
   buildOrderApprovalSnapshot,
@@ -47,7 +46,7 @@ export async function GET(req: NextRequest) {
     const limitParam = Number(req.nextUrl.searchParams.get("limit") || 100);
     const limit = Number.isFinite(limitParam) ? Math.min(500, Math.max(1, limitParam)) : 100;
 
-    const query: Record<string, unknown> = { createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } };
+    const query: Record<string, unknown> = {};
     if (dealerId) query.dealerId = dealerId;
     if (staffId || assignedStaffId) {
       const normalizedStaffId = staffId || assignedStaffId || "";
@@ -75,11 +74,10 @@ export async function GET(req: NextRequest) {
       .limit(limit)
       .toArray();
 
-    const activeSnapshots = filterActiveOrderSnapshots(docs);
-    const visibleDocs = (await Promise.all(activeSnapshots.map(async (doc) => {
+    const visibleDocs = (await Promise.all(docs.map(async (doc) => {
       const linkedOrderId = safeText(doc.orderId || doc.order_id, 120);
       if (!linkedOrderId) return doc;
-      const access = await resolveActiveOrder(linkedOrderId, doc.dealerId).catch(() => ({ visible: false }));
+      const access = await resolveOrderAccess(linkedOrderId, doc.dealerId).catch(() => ({ visible: false }));
       return access.visible ? doc : null;
     }))).filter((doc): doc is NonNullable<typeof doc> => doc !== null);
     return NextResponse.json({ success: true, data: visibleDocs.map(toDoc) });

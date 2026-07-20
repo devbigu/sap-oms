@@ -422,7 +422,7 @@ test("Selected dealer filtering excludes orders returned for another dealer", ()
   assert.equal(report.summary.totalPurchasedQuantity, 2);
 });
 
-test("All-time reports exclude orders with missing dates", () => {
+test("All-time reports include orders with missing dates", () => {
   const report = buildDealerCategoryReport({
     dealer: { Dealer_Id: "D-1", Dealer_Name: "Desk Scientific" },
     orders: [
@@ -435,8 +435,8 @@ test("All-time reports exclude orders with missing dates", () => {
     statusFilter: "all",
   });
 
-  assert.equal(report.summary.totalOrders, 0);
-  assert.equal(report.products.length, 0);
+  assert.equal(report.summary.totalOrders, 1);
+  assert.equal(report.products.length, 1);
 });
 
 test("Accepted filter excludes awaiting orders", () => {

@@ -22,7 +22,7 @@ function order(order_id, order_date, order_dealer, extra = {}) {
 export const ORDER_A_OLD = order("12001", "2026-07-12 23:59:59", DEALER_A, {
   search_marker: "old-flask-marker",
 });
-export const ORDER_B_CUTOFF = order(13001, "2026-07-13 00:00:00", DEALER_A, {
+export const ORDER_B_REFERENCE = order(13001, "2026-07-13 00:00:00", DEALER_A, {
   search_marker: "assigned-flask-marker",
 });
 export const ORDER_C_LATER = order("14001", "2026-07-14 09:30:00", DEALER_A);
@@ -36,9 +36,9 @@ export const ORDER_F_DEALER_B = order(15002, "2026-07-15", DEALER_B, {
   search_marker: "dealer-b-marker",
 });
 
-export const ACTIVE_ORDER_FIXTURES = [
+export const ORDER_FIXTURES = [
   ORDER_A_OLD,
-  ORDER_B_CUTOFF,
+  ORDER_B_REFERENCE,
   ORDER_C_LATER,
   ORDER_D_UNASSIGNED,
   ORDER_E_DEALER_A,

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { filterActiveOrders } from "@/lib/activeOrderPeriod.js";
 import {
   QueryClient,
   QueryClientProvider,
@@ -269,15 +268,15 @@ function AccountantDashboardInner() {
         const [cDealRes, statsRes, pendingRes, ordersRes] = await Promise.all([
           fetch(`${BACKEND_URL}/getMonthlyreporttopdealer`),
           fetch(`${BACKEND_URL}/dealercount`),
-          fetch(`/api/active-orders?source=orderpeginationnew&role=accountant&page=1&limit=10&search=`),
-          fetch(`/api/active-orders?source=orderpegination&role=accountant&page=1&limit=10&search=`),
+          fetch(`/api/orders-data?source=orderpeginationnew&role=accountant&page=1&limit=10&search=`),
+          fetch(`/api/orders-data?source=orderpegination&role=accountant&page=1&limit=10&search=`),
         ]);
 
         const [cDeal, statsJson, pendingJson, ordersJson] = await Promise.all([
           cDealRes.json(), statsRes.json(), pendingRes.json(), ordersRes.json(),
         ]);
 
-        const activeRecent = filterActiveOrders<Order>(ordersJson.data || []).slice(0, 10);
+        const activeRecent = ((ordersJson.data || []) as Order[]).slice(0, 10);
         setChartOrders(activeRecent
           .map((order) => ({ order_id: order.order_id, total: String(order.order_net_amount ?? order.order_discount ?? order.order_amount ?? 0) }))
           .sort((left, right) => Number(right.total) - Number(left.total)));
@@ -286,7 +285,7 @@ function AccountantDashboardInner() {
         const sd = Array.isArray(statsJson.data) ? statsJson.data[0] : statsJson.data;
         setStats(sd || { dealerCount:0, staffCount:0, orderCount:0, PorderCount:0 });
 
-        const activePending = filterActiveOrders<PendingOrder>(pendingJson.data || []).slice(0, 10);
+        const activePending = ((pendingJson.data || []) as PendingOrder[]).slice(0, 10);
         setPendingOrders(activePending);
         setRecentOrders(activeRecent);
         setStats((current) => ({
@@ -339,8 +338,8 @@ function AccountantDashboardInner() {
       {
         queryKey: ["accountantSidebarSummary", "pendingVerification"],
         queryFn: async () => {
-          const result = await fetchJson<{ data: PendingOrder[] }>(`/api/active-orders?source=orderpeginationnew&role=accountant&page=1&limit=1000&search=`);
-          return { ...result, data: filterActiveOrders(result.data) };
+          const result = await fetchJson<{ data: PendingOrder[] }>(`/api/orders-data?source=orderpeginationnew&role=accountant&page=1&limit=1000&search=`);
+          return result;
         },
       },
       {

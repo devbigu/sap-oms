@@ -19,7 +19,6 @@ import {
 import { formatRupee, resolveCurrentMonthTotal } from "@/lib/companySales"
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview"
 import { clearAuthStorage } from "@/lib/roleAccess"
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js"
 import { STAFF_ORDER_SCOPE_VERSION } from "@/lib/staffOrderScope.js"
 import {
   applyDealerStatusOverrides,
@@ -218,10 +217,10 @@ function ExecutiveDashboard() {
   ] = useQueries({
     queries: [
       {
-        queryKey:  ["staffOrders", ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, user?.staff_id],
-        queryFn:   () => fetchJson<{ data: OrderItem[] }>(`/api/active-orders?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(user!.staff_id)}`),
+        queryKey:  ["staffOrders", STAFF_ORDER_SCOPE_VERSION, user?.staff_id],
+        queryFn:   () => fetchJson<{ data: OrderItem[] }>(`/api/orders-data?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(user!.staff_id)}`),
         enabled,
-        select:    (d: { data: OrderItem[] }) => filterActiveOrders(d.data ?? []).map((order) => ({
+        select:    (d: { data: OrderItem[] }) => (d.data ?? []).map((order) => ({
           ...order,
           total: String(order.total ?? order.order_amount ?? 0),
         })),
@@ -254,7 +253,7 @@ function ExecutiveDashboard() {
         queryKey:  ["topOrders"],
         queryFn:   async () => ({ top: [] as TopOrder[] }),
         enabled,
-        select:    (d: { top: TopOrder[] }) => filterActiveOrders(d.top ?? []),
+        select:    (d: { top: TopOrder[] }) => d.top ?? [],
         staleTime: 5 * 60_000,
       },
       {

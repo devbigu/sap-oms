@@ -30,20 +30,20 @@ const orders = [
   { order_id: "B-COMPLETE", order_dealer: 202, order_date: "2026-07-16", accept_order: "1", mtstatus: "Completed", order_amount: 2000 },
 ];
 
-test("Dealer A list, totals, pending rows, recent rows, and metrics use only Dealer A active orders", () => {
+test("Dealer A list, totals, pending rows, recent rows, and metrics use all Dealer A orders", () => {
   const view = dealerView.buildDealerOrderView(orders, "101");
-  assert.deepEqual(view.orders.map((order) => order.order_id), ["A-PENDING", "A-COMPLETE"]);
-  assert.equal(view.totalCount, 2);
-  assert.equal(view.pendingCount, 1);
-  assert.deepEqual(view.pendingOrders.map((order) => order.order_id), ["A-PENDING"]);
-  assert.deepEqual(view.recentOrders.map((order) => order.order_id), ["A-COMPLETE", "A-PENDING"]);
-  assert.equal(view.totalValue, 350);
+  assert.deepEqual(view.orders.map((order) => order.order_id), ["A-PENDING", "A-COMPLETE", "A-OLD"]);
+  assert.equal(view.totalCount, 3);
+  assert.equal(view.pendingCount, 2);
+  assert.deepEqual(view.pendingOrders.map((order) => order.order_id), ["A-PENDING", "A-OLD"]);
+  assert.deepEqual(view.recentOrders.map((order) => order.order_id), ["A-COMPLETE", "A-PENDING", "A-OLD"]);
+  assert.equal(view.totalValue, 1250);
   assert.equal(view.acceptedCount, 1);
   assert.equal(view.completedCount, 1);
   assert.equal(view.pendingCount, view.pendingOrders.length);
 });
 
-test("Dealer B receives only Dealer B post-cutoff orders", () => {
+test("Dealer B receives only Dealer B orders", () => {
   const view = dealerView.buildDealerOrderView(orders, 202);
   assert.deepEqual(view.orders.map((order) => order.order_id), ["B-PENDING", "B-COMPLETE"]);
   assert.equal(view.pendingCount, 1);
@@ -55,14 +55,14 @@ test("missing Dealer identity returns no global data", () => {
   assert.deepEqual(dealerView.buildDealerOrderView(orders, null).recentOrders, []);
 });
 
-test("Admin remains global post-cutoff and Staff remains assigned-dealer post-cutoff", () => {
+test("Admin remains global and Staff remains assigned-dealer scoped across all dates", () => {
   assert.deepEqual(
     filterOrdersForActor({ role: "admin", actorId: "1", orders }).map((order) => order.order_id),
-    ["A-PENDING", "A-COMPLETE", "B-PENDING", "B-COMPLETE"],
+    ["A-PENDING", "A-COMPLETE", "A-OLD", "B-PENDING", "B-COMPLETE"],
   );
   assert.deepEqual(
     filterOrdersForActor({ role: "staff", actorId: "29", assignedDealerIds: [101], orders }).map((order) => order.order_id),
-    ["A-PENDING", "A-COMPLETE"],
+    ["A-PENDING", "A-COMPLETE", "A-OLD"],
   );
 });
 
@@ -76,9 +76,9 @@ test("Dealer callers use explicit identity and cache isolation without a hard-co
   const combined = sources.join("\n");
   assert.doesNotMatch(combined, /return "225"|\?\? "225"/);
   assert.match(combined, /role=dealer/);
-  assert.match(sources[1], /ACTIVE_ORDER_PERIOD_VERSION, actorRole, actorId/);
-  assert.match(sources[2], /ACTIVE_ORDER_PERIOD_VERSION, "dealer", dealer\.Dealer_Id/);
-  assert.match(sources[3], /ACTIVE_ORDER_PERIOD_VERSION[\s\S]*actor\?\.id/);
+  assert.match(sources[1], /\["orders", actorRole, actorId/);
+  assert.match(sources[2], /\["dealerSidebarSummary", "orders", "dealer", dealer\.Dealer_Id/);
+  assert.match(sources[3], /actor\?\.role[\s\S]*actor\?\.id/);
 });
 
 test("shared Pending Orders page permits Dealer scope and keys count/list requests by Dealer identity", async () => {
@@ -96,12 +96,12 @@ test("Dealer dashboard search scopes headers before fetching item details and is
   assert.ok(ownershipFilter >= 0);
   assert.ok(detailBuild > ownershipFilter);
   assert.match(source, /role: actor\.role[\s\S]*actorId: actor\.actorId[\s\S]*assignedDealerIds/);
-  assert.match(source, /ACTIVE_ORDER_PERIOD_VERSION}:\$\{actor\.role}:\$\{actor\.actorId/);
+  assert.match(source, /all-orders-v1:\$\{actor\.role}:\$\{actor\.actorId/);
 });
 
 test("direct details, invoice, and reorder all retain Dealer ownership gates", async () => {
   const [detailRoute, detailPage, invoice, reorder, reorderRoute] = await Promise.all([
-    fs.readFile(path.resolve("src/app/api/active-order/[id]/route.ts"), "utf8"),
+    fs.readFile(path.resolve("src/app/api/order-access/[id]/route.ts"), "utf8"),
     fs.readFile(path.resolve("src/app/orders/[id]/page.tsx"), "utf8"),
     fs.readFile(path.resolve("src/lib/invoicegenerator.tsx"), "utf8"),
     fs.readFile(path.resolve("src/app/dashboard/dealer/AddOrderForm/page.tsx"), "utf8"),

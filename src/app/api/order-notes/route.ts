@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { filterVisibleOrderIds, resolveActiveOrder } from "@/lib/activeOrderAccess";
+import { filterExistingOrderIds, resolveOrderAccess } from "@/lib/orderAccess";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     const requestedIds = orderIds
       ? orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200)
       : orderId ? [orderId] : [];
-    const visibleIds = await filterVisibleOrderIds(requestedIds, dealerId);
+    const visibleIds = await filterExistingOrderIds(requestedIds, dealerId);
     if (requestedIds.length > 0 && visibleIds.size === 0) {
       return NextResponse.json({ success: true, data: [] });
     }
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     if (!orderId || !dealerId || !note) {
       return NextResponse.json({ success: false, message: "orderId, dealerId, and note are required" }, { status: 400 });
     }
-    const access = await resolveActiveOrder(orderId, dealerId);
+    const access = await resolveOrderAccess(orderId, dealerId);
     if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
 
     const now = new Date().toISOString();

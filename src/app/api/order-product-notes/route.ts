@@ -7,7 +7,7 @@ import {
   normalizeProductNote,
   normalizeSku,
 } from "@/lib/orderProductNotes.mjs";
-import { filterVisibleOrderIds, resolveActiveOrder } from "@/lib/activeOrderAccess";
+import { filterExistingOrderIds, resolveOrderAccess } from "@/lib/orderAccess";
 
 export const runtime = "nodejs";
 
@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
     const requestedIds = orderIds
       ? orderIds.split(",").map((id) => safeText(id, 80)).filter(Boolean).slice(0, 200)
       : orderId ? [orderId] : [];
-    const visibleIds = await filterVisibleOrderIds(requestedIds);
+    const visibleIds = await filterExistingOrderIds(requestedIds);
     if (requestedIds.length > 0 && visibleIds.size === 0) {
       return NextResponse.json({ success: true, data: [] });
     }
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
     const docs = await collection.find(query).sort({ updatedAt: -1, createdAt: -1 }).limit(500).toArray();
 
     if (orderItemId && docs[0]?.orderId) {
-      const access = await resolveActiveOrder(docs[0].orderId, docs[0].dealerId);
+      const access = await resolveOrderAccess(docs[0].orderId, docs[0].dealerId);
       if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
     }
 
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
     if (!orderId) {
       return NextResponse.json({ success: false, message: "actual orderId is required" }, { status: 400 });
     }
-    const access = await resolveActiveOrder(orderId, dealerId);
+    const access = await resolveOrderAccess(orderId, dealerId);
     if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
     if (isExpectedOrderNumber(orderId)) {
       return NextResponse.json({ success: false, message: "expectedOrderNumber cannot be used as orderId" }, { status: 409 });

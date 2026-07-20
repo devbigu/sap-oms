@@ -1,12 +1,11 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
 import { formatAdditionalDiscountBadge, getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
   buildCustomDiscountProgressMap,
@@ -80,23 +79,23 @@ type CustomDiscountRequest = {
   order_number?: string | null
   lastReorderedOrderId?: string | null
 }
+type CancelledOrderOverlay = {
+  orderId: string
+  formattedOrderNumber?: string
+  dealerId: string
+  dealerName?: string
+  assignedStaffId?: string | null
+  cancellation?: {
+    reason?: string
+    cancelledAt?: string
+    cancelledBy?: { id?: string; role?: string; name?: string }
+  }
+  originalOrderRef?: Record<string, unknown>
+}
 
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
 const YEAR           = new Date().getFullYear()
-
-async function invalidateActiveOrderSnapshot(reason: string) {
-  try {
-    const response = await fetch('/api/active-orders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
-    })
-    if (!response.ok) console.warn('[active-orders] snapshot invalidation failed')
-  } catch (error) {
-    console.warn('[active-orders] snapshot invalidation failed', error)
-  }
-}
 
 const ROLE_CONFIG: Record<Role, {
   label: string; pillCls: string; caption: string
@@ -109,7 +108,7 @@ const ROLE_CONFIG: Record<Role, {
   admin: {
     label: 'Admin', pillCls: 'role-admin', caption: 'All dealer orders across the system',
     endpoint: (_id, page, search) =>
-      `/api/active-orders?source=orderpegination&role=admin&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}`,
+      `/api/orders-data?source=orderpegination&role=admin&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}`,
     showDealerCol: true, showActions: true,
     canDelete: (_s, row) => row.accept_order === '0' && row.del_status === '0',
     canAccept: (_s, row) => row.del_status === '0',
@@ -118,7 +117,7 @@ const ROLE_CONFIG: Record<Role, {
   dealer: {
     label: 'Dealer', pillCls: 'role-dealer', caption: 'Your order history',
     endpoint: (id, page, search) =>
-      `/api/active-orders?source=orderhispegination&role=dealer&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
+      `/api/orders-data?source=orderhispegination&role=dealer&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
     showDealerCol: false, showActions: true,
     canDelete: (_s, row) => row.accept_order === '0' && row.del_status === '0',
     canAccept: () => false,
@@ -127,7 +126,7 @@ const ROLE_CONFIG: Record<Role, {
   staff: {
     label: 'Staff', pillCls: 'role-staff', caption: 'Orders assigned to you',
     endpoint: (id, page, search) =>
-      `/api/active-orders?source=staffOrderrPagination&role=staff&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
+      `/api/orders-data?source=staffOrderrPagination&role=staff&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(id)}`,
     showDealerCol: true, showActions: true,
     canDelete: () => false,
     canAccept: (s, row) => s.roletype !== '2' && row.del_status === '0',
@@ -788,6 +787,7 @@ export default function OrdersPage() {
   const [dispatchSubmitting, setDispatchSubmitting] = useState(false)
   const [dispatchFormError, setDispatchFormError] = useState('')
   const [dispatchForm, setDispatchForm] = useState({ readyQuantity: '', status: '', remark: '' })
+  const [section, setSection] = useState<'active' | 'cancelled'>('active')
 
   useEffect(() => {
     const s = resolveSession()
@@ -802,7 +802,7 @@ export default function OrdersPage() {
   const serverSearch = dealerInput
 
   const { data: response, isLoading, isError } = useQuery<OrderResponse>({
-    queryKey: ['orders', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, session?.role, session?.id, page, serverSearch, orderIdInput, statusSearch, mtFilter, amountMin, amountMax, dateFrom, dateTo],
+    queryKey: ['orders', STAFF_ORDER_SCOPE_VERSION, session?.role, session?.id, page, serverSearch, orderIdInput, statusSearch, mtFilter, amountMin, amountMax, dateFrom, dateTo],
     queryFn: async () => {
       if (!session || !cfg) throw new Error('No session')
       const params = new URLSearchParams()
@@ -815,11 +815,25 @@ export default function OrdersPage() {
       if (dateTo) params.set('date_to', dateTo)
       const suffix = params.toString()
       const res = await axios.get(`${cfg.endpoint(session.id, page, serverSearch)}${suffix ? `&${suffix}` : ''}`)
-      return filterActiveOrderResponse(res.data)
+      return res.data
     },
     enabled: !!session,
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
+  })
+
+  const { data: cancelledResponse, isLoading: cancelledLoading, isError: cancelledError } = useQuery<{ data: CancelledOrderOverlay[]; total?: number; count?: number; totalPages?: number; last_page?: number }>({
+    queryKey: ['cancelled-orders', session?.role, session?.id, page, serverSearch],
+    queryFn: async () => {
+      if (!session) throw new Error('No session')
+      const res = await fetch(`/api/order-overlays/cancelled?role=${encodeURIComponent(session.role)}&id=${encodeURIComponent(session.id)}&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(serverSearch)}`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!res.ok || !json.success) throw new Error(json.message || 'Unable to load cancelled orders')
+      return json
+    },
+    enabled: !!session && section === 'cancelled',
+    placeholderData: keepPreviousData,
+    staleTime: 60 * 1000,
   })
 
   const { data: customDiscountRequests = [] } = useQuery<CustomDiscountRequest[]>({
@@ -838,17 +852,20 @@ export default function OrdersPage() {
     staleTime: 60 * 1000,
   })
 
-  const allData = useMemo<OrderData[]>(() => response?.data || [], [response?.data])
+  const cancelledData = cancelledResponse?.data ?? []
+  const allData: OrderData[] = section === 'active' ? (response?.data || []) : []
   const allOrderIdsKey = allData.map(o => o.order_id).filter(Boolean).join(',')
+  const allDealerIdsKey = allData.map(o => o.order_dealer || '').join(',')
   const customDiscountProgressMap = buildCustomDiscountProgressMap(customDiscountRequests)
   const showCustomDiscountCol = !!session && session.role !== 'dealer'
 
   useEffect(() => {
     if (!allOrderIdsKey) { setSummaryOverrides({}); return }
     const dealerGroups = new Map<string, string[]>()
-    allData.forEach((order) => {
-      const dealerId = String(order.order_dealer || (session?.role === 'dealer' ? session.id : '') || '').trim()
-      const orderId = String(order.order_id || '').trim()
+    const orderIds = allOrderIdsKey.split(',')
+    const dealerIds = allDealerIdsKey.split(',')
+    orderIds.forEach((orderId, index) => {
+      const dealerId = String(dealerIds[index] || (session?.role === 'dealer' ? session.id : '') || '').trim()
       if (!orderId) return
       const key = dealerId || '__all__'
       dealerGroups.set(key, [...(dealerGroups.get(key) ?? []), orderId])
@@ -872,7 +889,7 @@ export default function OrdersPage() {
         setSummaryOverrides(next)
       })
       .catch(() => {})
-  }, [allData, allOrderIdsKey, session?.id, session?.role])
+  }, [allOrderIdsKey, allDealerIdsKey, session?.id, session?.role])
 
   const filteredAll = allData.filter(o => {
     const amounts = withDisplayOrderAmounts(o, summaryOverrides[o.order_id] ?? summaryOverrides[orderLookupKey(o.order_id)])
@@ -895,8 +912,12 @@ export default function OrdersPage() {
     : shouldSlice ? allData.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
     : allData
 
-  const total      = hasClientFilters ? filteredAll.length : shouldSlice ? allData.length : (response?.total ?? response?.count ?? allData.length)
-  const totalPages = response?.last_page ?? Math.max(1, Math.ceil(total / ITEMS_PER_PAGE))
+  const total      = section === 'cancelled'
+    ? (cancelledResponse?.total ?? cancelledResponse?.count ?? cancelledData.length)
+    : hasClientFilters ? filteredAll.length : shouldSlice ? allData.length : (response?.total ?? response?.count ?? allData.length)
+  const totalPages = section === 'cancelled'
+    ? (cancelledResponse?.last_page ?? cancelledResponse?.totalPages ?? Math.max(1, Math.ceil(total / ITEMS_PER_PAGE)))
+    : response?.last_page ?? Math.max(1, Math.ceil(total / ITEMS_PER_PAGE))
   const startIndex = total === 0 ? 0 : (page - 1) * ITEMS_PER_PAGE + 1
   const endIndex   = total === 0 ? 0 : Math.min(page * ITEMS_PER_PAGE, total)
 
@@ -972,22 +993,28 @@ export default function OrdersPage() {
     if (reason) fd.append('reason', reason)
     try {
       const res = await axios.post(`${BACKEND_URL}/deletewithreason`, fd)
-      await invalidateActiveOrderSnapshot('order deleted')
       setToast({ msg: res.data?.msg || 'Deleted.', type: 'ok' })
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     } catch { setToast({ msg: 'Delete failed.', type: 'err' }) }
   }, [session, cfg, queryClient])
 
   const handleAccept = useCallback(async (id: string, status: 0 | 1) => {
+    if (!session) return
     const fd = new FormData()
     fd.append('id', id); fd.append('status', String(status))
     try {
+      const overlayRes = await fetch(`/api/order-overlays/${encodeURIComponent(id)}?role=${encodeURIComponent(session.role)}&actor_id=${encodeURIComponent(session.id)}`, { cache: 'no-store' })
+      const overlayJson = await overlayRes.json().catch(() => null)
+      if (overlayRes.ok && overlayJson?.data?.isCancelled) {
+        setToast({ msg: 'Cancelled orders cannot be accepted or declined.', type: 'err' })
+        queryClient.invalidateQueries({ queryKey: ['orders'] })
+        return
+      }
       const res = await axios.post(`${BACKEND_URL}/acceptstatus_requst`, fd)
-      await invalidateActiveOrderSnapshot(status === 1 ? 'order accepted' : 'order declined')
       setToast({ msg: res.data?.msg || 'Status updated.', type: 'ok' })
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     } catch { setToast({ msg: 'Action failed.', type: 'err' }) }
-  }, [queryClient])
+  }, [queryClient, session])
 
   const loadDispatchProducts = useCallback(async (orderId: string, preferredProductId?: string) => {
     setDispatchProductsLoading(true)
@@ -1330,6 +1357,22 @@ export default function OrdersPage() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">Orders</h1>
               <p className="text-sm text-slate-500 mt-1">{cfg.caption}</p>
+              <div className="mt-3 inline-flex rounded-lg border border-slate-200 bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => { setSection('active'); setPage(1) }}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md ${section === 'active' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  Active Orders
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setSection('cancelled'); setPage(1) }}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md ${section === 'cancelled' ? 'bg-red-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  Cancelled Orders
+                </button>
+              </div>
             </div>
             <button
               onClick={exportCSV}
@@ -1378,7 +1421,7 @@ export default function OrdersPage() {
           )}
 
           {/* Stats */}
-          {!isLoading && (
+          {section === 'active' && !isLoading && (
             <div className="stats-row">
               <div className="stat-pill"><span className="stat-dot" style={{ background: '#6366f1' }} />{hasClientFilters ? 'Filtered' : 'Total'}<span className="stat-num">{total.toLocaleString()}</span></div>
               <div className="stat-pill"><span className="stat-dot" style={{ background: '#1d4ed8' }} />Accepted<span className="stat-num">{data.filter(o => o.accept_order === '1').length}</span></div>
@@ -1387,16 +1430,67 @@ export default function OrdersPage() {
             </div>
           )}
 
-          {isError && (
+          {section === 'active' && isError && (
             <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600 flex items-center gap-2">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" /></svg>
               Failed to load orders. Please try again.
+            </div>
+          )}
+          {section === 'cancelled' && cancelledError && (
+            <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600 flex items-center gap-2">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 8v4m0 4h.01" /></svg>
+              Failed to load cancelled orders. Please try again.
             </div>
           )}
 
           {/* Table */}
           <div className="table-card">
             <div className="table-scroll">
+              {section === 'cancelled' ? (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Order ID</th>
+                      {cfg.showDealerCol && <th>Dealer</th>}
+                      <th>Cancelled Date</th>
+                      <th>Reason</th>
+                      <th>Cancelled By</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cancelledLoading && Array.from({ length: ITEMS_PER_PAGE }).map((_, i) => (
+                      <tr key={i}><td colSpan={cfg.showDealerCol ? 8 : 7}><div className="shimmer" style={{ width: 160 }} /></td></tr>
+                    ))}
+                    {!cancelledLoading && cancelledData.length === 0 && (
+                      <tr className="empty-row">
+                        <td colSpan={cfg.showDealerCol ? 8 : 7}>No cancelled orders found</td>
+                      </tr>
+                    )}
+                    {!cancelledLoading && cancelledData.map((order, i) => (
+                      <tr key={order.orderId}>
+                        <td className="mono-sm">{startIndex + i}</td>
+                        <td><span className="order-id-pill">{order.formattedOrderNumber || `OM/${YEAR}/${order.orderId}`}</span></td>
+                        {cfg.showDealerCol && (
+                          <td>
+                            <div className="dealer-name">{order.dealerName || (order.originalOrderRef?.Dealer_Name as string) || 'Dealer'}</div>
+                            <div className="dealer-sub">ID: {order.dealerId}</div>
+                          </td>
+                        )}
+                        <td className="mono-sm">{(order.cancellation?.cancelledAt || '').slice(0, 10) || '—'}</td>
+                        <td className="max-w-[360px] text-sm text-slate-700">{order.cancellation?.reason || '—'}</td>
+                        <td className="mono-sm">{order.cancellation?.cancelledBy?.name || order.cancellation?.cancelledBy?.id || 'Dealer'}</td>
+                        <td><span className="badge badge-rejected"><span className="badge-dot" style={{ background: '#ef4444' }} />Cancelled</span></td>
+                        <td>
+                          <button className="page-btn" onClick={() => router.push(`/orders/${order.orderId}`)}>View Order</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
               <table>
                 <thead>
                   <tr>
@@ -1583,6 +1677,7 @@ export default function OrdersPage() {
                   })}
                 </tbody>
               </table>
+              )}
             </div>
 
             {/* Pagination */}

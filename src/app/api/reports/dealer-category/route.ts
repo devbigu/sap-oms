@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import catalogueProducts from "../../../../../public/data/omsons_products_from_excel_with_images.json";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
 import { getPhpApiBaseUrl } from "@/lib/phpBackend";
+import { findOrderOverlay } from "@/lib/orderOverlays";
 
 export const runtime = "nodejs";
 
@@ -162,7 +163,7 @@ async function fetchDealerById(dealerId: string, staffScopedDealers: NormalizedD
 }
 
 async function fetchDealerOrders(dealerId: string) {
-  const loaded = await loadActiveOrderHeaders({
+  const loaded = await loadOrderHeaders({
     source: "orderhispegination",
     actor: { role: "dealer", actorId: dealerId },
   });
@@ -219,6 +220,13 @@ async function fetchOrderItems(orderId: string) {
   const json = await fetchJson<{ data?: unknown }>(
     `${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`
   );
+  const overlay = await findOrderOverlay(orderId).catch(() => null);
+  const latestEdit = overlay?.status !== "cancelled" && Array.isArray(overlay?.edits)
+    ? overlay.edits[overlay.edits.length - 1]
+    : null;
+  if (latestEdit?.effectiveItems?.length) {
+    return normalizeOrderItems(orderId, latestEdit.effectiveItems);
+  }
   return normalizeOrderItems(orderId, json.data);
 }
 
@@ -361,7 +369,7 @@ export async function GET(req: NextRequest) {
         orderDetailEndpoint: "orderdatalist",
         orderDetailMethod: "GET",
         orderDetailIdentifier: "id",
-        orderHeaderSource: "active-order snapshot",
+        orderHeaderSource: "current order headers",
         orderItemConcurrency: ORDER_ITEM_CONCURRENCY,
         inlineOrderItemOrderCount: uniqueOrders.length - ordersNeedingDetail.length,
         detailFetchedOrderCount: ordersNeedingDetail.length,

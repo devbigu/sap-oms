@@ -8,7 +8,6 @@ import { exportOrdersToSupabase, downloadPDFDirectly } from "@/lib/Exporttopdf";
 import { InvoiceModal } from "@/components/InvoiceModel";
 import { downloadOrderInvoice, uploadOrderInvoiceToSupabase, generateOrderInvoicePDF } from "@/lib/invoicegenerator";
 import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from "@/lib/orderAmounts";
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from "@/lib/activeOrderPeriod.js";
 import { useAuthSession } from "@/hooks/useAuthSession";
 import type { AppRole } from "@/lib/roleAccess";
 
@@ -48,7 +47,8 @@ type OrderSummaryOverride = {
   order_net_amount?: number | string;
 };
 
-const PAGE_SIZE = 10;
+const ORDER_PAGE_SIZE_OPTIONS = [10, 20, 30, 40] as const;
+const DEFAULT_PAGE_SIZE = 10;
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
 
 type PhpExchangeLog = {
@@ -108,13 +108,13 @@ function extractOrderNote(order: Order, overlayNote?: string) {
   return remarks.match(/Order note:\s*([^|]+)/i)?.[1]?.trim() || "";
 }
 
-async function fetchOrders(page: number, search: string, role: AppRole, actorId: string): Promise<ApiResponse> {
+async function fetchOrders(page: number, pageSize: number, search: string, role: AppRole, actorId: string): Promise<ApiResponse> {
   const source = role === "dealer"
     ? "orderhispegination"
     : role === "staff"
       ? "staffOrderrPagination"
       : "orderpegination";
-  const url = `/api/active-orders?source=${source}&role=${encodeURIComponent(role)}&page=${page}&limit=${PAGE_SIZE}&search=${encodeURIComponent(search)}${actorId ? `&id=${encodeURIComponent(actorId)}` : ""}`;
+  const url = `/api/orders-data?source=${source}&role=${encodeURIComponent(role)}&page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}${actorId ? `&id=${encodeURIComponent(actorId)}` : ""}`;
   const r = await fetch(url);
 
   if (!r.ok) {
@@ -122,7 +122,7 @@ async function fetchOrders(page: number, search: string, role: AppRole, actorId:
     logPhpExchange("orderhispegination", {
       method: "GET",
       url,
-      request: { page, search, role, actorId },
+      request: { page, pageSize, search, role, actorId },
       error: { status: r.status, statusText: r.statusText, response: errorBody },
     });
     throw new Error("Failed");
@@ -132,11 +132,11 @@ async function fetchOrders(page: number, search: string, role: AppRole, actorId:
   logPhpExchange("orderhispegination", {
     method: "GET",
     url,
-    request: { page, search, role, actorId },
+    request: { page, pageSize, search, role, actorId },
     response: rawData,
   });
 
-  return filterActiveOrderResponse(rawData);
+  return rawData;
 }
 
 // Status mapping from reference: 0=In process, 1=Packing, 2=Dispatch, 3=Not in stock, 4=Successful
@@ -413,6 +413,7 @@ export default function OrderHistoryPage() {
   const router = useRouter();
   const auth = useAuthSession();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [year] = useState(new Date().getFullYear());
@@ -435,8 +436,8 @@ export default function OrderHistoryPage() {
   const actorReady = actorRole === "admin" || actorRole === "accountant" || Boolean(actorId);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ["orders", ACTIVE_ORDER_PERIOD_VERSION, actorRole, actorId, page, query],
-    queryFn: () => fetchOrders(page, query, actorRole as AppRole, actorId),
+    queryKey: ["orders", actorRole, actorId, page, pageSize, query],
+    queryFn: () => fetchOrders(page, pageSize, query, actorRole as AppRole, actorId),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
     enabled: !auth.loading && auth.session.status === "authenticated" && actorReady,
@@ -445,7 +446,7 @@ export default function OrderHistoryPage() {
   const orders = data?.data ?? [];
   const ordersForExport = orders.map(order => withDisplayOrderAmounts(order, summaryOverrides[order.order_id]));
   const totalCount = data?.count ?? 0;
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const totalPages = Math.ceil(totalCount / pageSize);
   const orderIdsKey = orders.map((o) => (o as any).order_id ?? (o as any).orderId ?? "").filter(Boolean).join(",");
 
   useEffect(() => {
@@ -630,7 +631,7 @@ export default function OrderHistoryPage() {
                           return (
                             <tr key={oid || idx} className={`hover:bg-blue-50/30 transition-colors ${isDeleted ? "opacity-60" : ""}`}>
                               <td className="px-4 py-3.5 text-gray-700 font-medium">
-                                {String((page - 1) * PAGE_SIZE + idx + 1).padStart(2, "0")}
+                                {String((page - 1) * pageSize + idx + 1).padStart(2, "0")}
                               </td>
                               <td className="px-4 py-3.5">
                                 <div className="flex items-center gap-2">
@@ -719,9 +720,24 @@ export default function OrderHistoryPage() {
 
             {!isLoading && !isError && totalPages > 1 && (
               <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50">
-                <p className="text-[13px] text-gray-700 font-medium">
-                  Page {page} of {totalPages} · <span className="text-gray-600">{totalCount} orders</span>
-                </p>
+                <div className="flex items-center gap-4 flex-wrap">
+                  <p className="text-[13px] text-gray-700 font-medium">
+                    Page {page} of {totalPages} · <span className="text-gray-600">{totalCount} orders</span>
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold text-gray-500">Show</span>
+                    {ORDER_PAGE_SIZE_OPTIONS.map(size => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => { setPageSize(size); setPage(1); }}
+                        className={`h-8 min-w-9 px-2.5 rounded-lg border text-[12px] font-semibold transition-all ${pageSize === size ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"}`}
+                      >
+                        {size}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="flex items-center gap-1">
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
                     className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-all font-medium">‹</button>

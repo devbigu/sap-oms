@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { findOrderOverlay } from "@/lib/orderOverlays";
 import type { OrderDispatchRecord } from "@/lib/orderDispatch";
-import { ACTIVE_ORDER_PERIOD_VERSION } from "@/lib/activeOrderPeriod.js";
-import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import {
   aggregatePendingProducts,
   buildPendingProductDrilldown,
@@ -151,18 +151,17 @@ async function fetchPaginatedRows<T>(urlBuilder: (page: number) => string): Prom
 async function fetchRoleScopedOrders(
   actor: PendingProductsActor,
   assignedDealerIds: string[],
-  forceRefresh: boolean,
+  _forceRefresh: boolean,
 ): Promise<PendingProductsOrderRow[]> {
   const source = actor.role === "admin"
     ? "orderpegination"
     : actor.role === "staff"
       ? "staffOrderrPagination"
       : "orderhispegination";
-  const loaded = await loadActiveOrderHeaders({
+  const loaded = await loadOrderHeaders({
     source,
     actor: { role: actor.role, actorId: actor.actorId },
     assignedDealerIds,
-    forceRefresh,
   });
   return loaded.rows as PendingProductsOrderRow[];
 }
@@ -277,7 +276,13 @@ async function fetchOrderItems(orderId: string, actorCacheKey: string): Promise<
   }
 
   const payload = await fetchJson<{ data?: unknown }>(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`);
-  const items = normalizeItemsFromPayload(orderId, payload);
+  const overlay = await findOrderOverlay(orderId).catch(() => null);
+  const latestEdit = overlay?.status !== "cancelled" && Array.isArray(overlay?.edits)
+    ? overlay.edits[overlay.edits.length - 1]
+    : null;
+  const items = latestEdit?.effectiveItems?.length
+    ? normalizeItemsFromPayload(orderId, { data: latestEdit.effectiveItems })
+    : normalizeItemsFromPayload(orderId, payload);
   orderItemCache.set(cacheKey, { cachedAt: Date.now(), cacheVersion, items });
   return items;
 }
@@ -328,7 +333,7 @@ async function fetchDispatchRecordsByOrderIds(orderIds: string[]) {
 }
 
 async function loadBaseScope(actor: PendingProductsActor, refreshToken: string) {
-  const actorCacheKey = `${ACTIVE_ORDER_PERIOD_VERSION}:${actor.role}:${actor.actorId || "admin"}`;
+  const actorCacheKey = `all-orders-v1:${actor.role}:${actor.actorId || "admin"}`;
   const cached = baseScopeCache.get(actorCacheKey);
   const cacheVersion = getPendingProductsCacheVersion();
   const forceRefresh = Boolean(refreshToken) && cached?.refreshToken !== refreshToken;

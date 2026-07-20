@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
-import { ACTIVE_ORDER_CUTOFF_DATE } from "@/lib/activeOrderPeriod.js";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -31,7 +30,7 @@ export async function GET(
 
   try {
     const db  = await getDb();
-    const doc = await db.collection("order_drafts").findOne({ _id: oid, dealer_id: dealerId, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
+    const doc = await db.collection("order_drafts").findOne({ _id: oid, dealer_id: dealerId });
     if (!doc) return NextResponse.json({ success: false, message: "Draft not found" }, { status: 404 });
     return NextResponse.json({ success: true, data: toDoc(doc) });
   } catch (e: any) {
@@ -73,7 +72,7 @@ export async function PUT(
     const result = await db
       .collection("order_drafts")
       .findOneAndUpdate(
-        { _id: oid, dealer_id, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } },
+        { _id: oid, dealer_id },
         { $set: set },
         { returnDocument: "after" }
       );
@@ -102,7 +101,7 @@ export async function DELETE(
 
   try {
     const db     = await getDb();
-    const result = await db.collection("order_drafts").deleteOne({ _id: oid, dealer_id: dealerId, createdAt: { $gte: ACTIVE_ORDER_CUTOFF_DATE } });
+    const result = await db.collection("order_drafts").deleteOne({ _id: oid, dealer_id: dealerId });
     if (result.deletedCount === 0)
       return NextResponse.json({ success: false, message: "Draft not found" }, { status: 404 });
     return NextResponse.json({ success: true });

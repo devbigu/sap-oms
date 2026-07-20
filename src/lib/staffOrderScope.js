@@ -1,5 +1,3 @@
-import { filterActiveOrders } from "./activeOrderPeriod.js";
-
 export const STAFF_ORDER_SCOPE_VERSION = "assigned-dealers-v1";
 
 export function normalizeScopeId(value) {
@@ -42,20 +40,20 @@ export function getAssignedDealerIds(dealers, staffId) {
 export function filterOrdersForActor(input) {
   const role = normalizeScopeId(input?.role).toLowerCase();
   const actorId = normalizeScopeId(input?.actorId);
-  const activeOrders = filterActiveOrders(Array.isArray(input?.orders) ? input.orders : []);
+  const scopedOrders = Array.isArray(input?.orders) ? input.orders : [];
 
-  if (role === "admin" || role === "accountant") return activeOrders;
+  if (role === "admin" || role === "accountant") return scopedOrders;
 
   if (role === "dealer") {
     if (!actorId) return [];
-    return activeOrders.filter((order) => resolveOrderDealerId(order) === actorId);
+    return scopedOrders.filter((order) => resolveOrderDealerId(order) === actorId);
   }
 
   if (role === "staff") {
     if (!actorId) return [];
     const allowed = new Set(splitScopeIds(input?.assignedDealerIds));
     if (allowed.size === 0) return [];
-    return activeOrders.filter((order) => allowed.has(resolveOrderDealerId(order)));
+    return scopedOrders.filter((order) => allowed.has(resolveOrderDealerId(order)));
   }
 
   return [];

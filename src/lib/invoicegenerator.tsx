@@ -3,7 +3,6 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/Exporttopdf";
 import moment from "moment";
-import { ACTIVE_ORDER_CUTOFF_DATE, OUTSIDE_ACTIVE_ORDER_PERIOD, isActiveOrder } from "@/lib/activeOrderPeriod.js";
 import { hasPriorityTag } from "@/lib/orderPriority";
 import {
     getOrderDiscountSummaryRows,
@@ -104,7 +103,6 @@ function resolveInvoiceActor(options?: InvoiceDownloadOptions) {
 }
 
 export function canGenerateOrderInvoiceForActor(order: OrderInvoiceData, options?: InvoiceDownloadOptions) {
-    if (!isActiveOrder(order)) return false;
     const actor = resolveInvoiceActor(options);
     if (actor.role !== "dealer") return true;
     const ownerId = resolveOrderDealerId(order as unknown as Record<string, unknown>);
@@ -463,7 +461,7 @@ function resolveCatalogueNumber(item: any): string {
 
 // ─── Main PDF Generator ───────────────────────────────────────────────────────
 export async function generateOrderInvoicePDF(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<Blob> {
-    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error(OUTSIDE_ACTIVE_ORDER_PERIOD);
+    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error("Unauthorized invoice access");
     const dp = getDealerProfile();
     const summaryOverride = await fetchOrderSummaryOverride(order);
     const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
@@ -1056,7 +1054,7 @@ export async function uploadOrderInvoiceToSupabase(
     order: OrderInvoiceData,
     options?: InvoiceDownloadOptions
 ): Promise<InvoiceResult> {
-    if (!canGenerateOrderInvoiceForActor(order, options)) return { success: false, message: OUTSIDE_ACTIVE_ORDER_PERIOD };
+    if (!canGenerateOrderInvoiceForActor(order, options)) return { success: false, message: "Unauthorized invoice access" };
     try {
         const summaryOverride = await fetchOrderSummaryOverride(order);
         const displayOrder = summaryOverride ? { ...(order as any), ...summaryOverride } : order;
@@ -1096,7 +1094,7 @@ export async function uploadOrderInvoiceToSupabase(
 
 // ─── Download to device ────────────────────────────────────────────────────────
 export async function downloadOrderInvoice(order: OrderInvoiceData, options?: InvoiceDownloadOptions): Promise<InvoiceResult> {
-    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error(OUTSIDE_ACTIVE_ORDER_PERIOD);
+    if (!canGenerateOrderInvoiceForActor(order, options)) throw new Error("Unauthorized invoice access");
     try {
         const blob = await generateOrderInvoicePDF(order, options);
         const url = URL.createObjectURL(blob);
@@ -1118,12 +1116,11 @@ export async function listInvoices(dealerId: string, limit = 100) {
     try {
         let query = supabase
             .from("invoices").select("*")
-            .gte("invoice_date", ACTIVE_ORDER_CUTOFF_DATE)
             .order("created_at", { ascending: false }).limit(limit);
         if (dealerId) query = query.eq("dealer_id", dealerId);
         const { data, error } = await query;
         if (error) return { success: false, message: "Failed", error: error.message, data: [] };
-        return { success: true, message: "OK", data: (data || []).filter((invoice) => isActiveOrder({ order_date: invoice.invoice_date })) };
+        return { success: true, message: "OK", data: data || [] };
     } catch (err) {
         return { success: false, message: "Error", error: err instanceof Error ? err.message : "Unknown", data: [] };
     }
@@ -1136,10 +1133,9 @@ export async function deleteInvoice(invoiceId: string, filePath: string) {
             .from("invoices")
             .select("invoice_date")
             .eq("invoice_id", invoiceId)
-            .gte("invoice_date", ACTIVE_ORDER_CUTOFF_DATE)
             .maybeSingle();
-        if (!invoice || !isActiveOrder({ order_date: invoice.invoice_date })) {
-            return { success: false, message: OUTSIDE_ACTIVE_ORDER_PERIOD };
+        if (!invoice) {
+            return { success: false, message: "Invoice not found" };
         }
         await supabase.storage.from("invoices").remove([filePath]);
         const { error } = await supabase.from("invoices").delete().eq("invoice_id", invoiceId);

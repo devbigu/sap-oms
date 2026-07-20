@@ -1478,7 +1478,7 @@ function AddOrderPageInner() {
   const getLatestOrderIdForDealer = async () => {
     if (!user?.Dealer_Id) return "";
     try {
-      const res = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+      const res = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
       const json = await res.json();
       return String(json?.data?.[0]?.order_id ?? "").trim();
     } catch {
@@ -1493,7 +1493,7 @@ function AddOrderPageInner() {
     setExpectedOrderLoading(true);
     const loadLatestOrderId = async () => {
       try {
-        const res = await fetch(`/api/active-orders?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+        const res = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
         const json = await res.json();
         return String(json?.data?.[0]?.order_id ?? "").trim();
       } catch {

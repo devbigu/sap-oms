@@ -9,7 +9,6 @@ import moment from 'moment'
 import { hasPriorityTag } from '@/lib/orderPriority'
 import { OrderAmountSource, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { mergeFallbackProductNotes } from '@/lib/orderProductNotes.mjs'
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from '@/lib/activeOrderPeriod.js'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
@@ -223,9 +222,9 @@ export default function StaffDealerViewPage() {
   const loadOrders = useCallback(async () => {
     setLoadingOrders(true)
     try {
-      const res  = await fetch(`/api/active-orders?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`)
+      const res  = await fetch(`/api/orders-data?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`)
       const json = await res.json()
-      setAllOrders(filterActiveOrders(Array.isArray(json.data) ? json.data : []))
+      setAllOrders(Array.isArray(json.data) ? json.data : [])
     } catch {
       setAllOrders([])
     } finally {
@@ -271,10 +270,10 @@ export default function StaffDealerViewPage() {
 
   // Order items via React Query
   const { data: itemsResp, isLoading: itemsLoading, isError: itemsError } = useQuery<OrderItemResponse>({
-    queryKey: ['staff-dealer-items', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage, search],
+    queryKey: ['staff-dealer-items', STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage, search],
     queryFn: async () => {
       const res = await axios.get(
-        `/api/active-orders?source=Orderstspegination&role=staff&page=${itemPage}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
+        `/api/orders-data?source=Orderstspegination&role=staff&page=${itemPage}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
       )
       return res.data
     },
@@ -287,10 +286,10 @@ export default function StaffDealerViewPage() {
   useEffect(() => {
     if (!dealerAccessAllowed || !staffId || !dealerId || tab !== "items") return
     queryClient.prefetchQuery({
-      queryKey: ['staff-dealer-items', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage + 1, search],
+      queryKey: ['staff-dealer-items', STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage + 1, search],
       queryFn: async () => {
         const res = await axios.get(
-          `/api/active-orders?source=Orderstspegination&role=staff&page=${itemPage + 1}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
+          `/api/orders-data?source=Orderstspegination&role=staff&page=${itemPage + 1}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
         )
         return res.data
       },

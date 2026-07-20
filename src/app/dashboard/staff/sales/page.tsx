@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { CalendarRange, ChevronLeft, RefreshCw, Search } from "lucide-react"
 import { DistributorSalesRow, formatRupee, getOrderDate, groupOrdersByDistributor, type SalesOrder } from "@/lib/companySales"
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js"
 import { STAFF_ORDER_SCOPE_VERSION } from "@/lib/staffOrderScope.js"
 
 type OrderResponse = {
@@ -42,23 +41,23 @@ async function fetchJson<T>(url: string): Promise<T> {
 async function fetchAllStaffOrders(staffId: string): Promise<SalesOrder[]> {
   const pageSize = 500
   const scope = `role=staff&id=${encodeURIComponent(staffId)}`
-  const first = await fetchJson<OrderResponse>(`/api/active-orders?source=staffOrderrPagination&${scope}&page=1&limit=${pageSize}&search=`)
+  const first = await fetchJson<OrderResponse>(`/api/orders-data?source=staffOrderrPagination&${scope}&page=1&limit=${pageSize}&search=`)
   const firstRows = first.data ?? []
   const totalRows = first.total ?? first.count ?? firstRows.length
   const totalPages = first.last_page ?? Math.max(1, Math.ceil(totalRows / pageSize))
 
-  if (totalPages <= 1) return filterActiveOrders(firstRows)
+  if (totalPages <= 1) return firstRows
 
   const rest = await Promise.all(
     Array.from({ length: totalPages - 1 }, (_, idx) => idx + 2).map(page =>
-      fetchJson<OrderResponse>(`/api/active-orders?source=staffOrderrPagination&${scope}&page=${page}&limit=${pageSize}&search=`)
+      fetchJson<OrderResponse>(`/api/orders-data?source=staffOrderrPagination&${scope}&page=${page}&limit=${pageSize}&search=`)
     )
   )
 
-  return filterActiveOrders([
+  return [
     ...firstRows,
     ...rest.flatMap(row => row.data ?? []),
-  ])
+  ]
 }
 
 function resolveStaffSession(): StaffSession | null {
@@ -94,7 +93,7 @@ function SalesReportPageInner() {
   }, [router])
 
   const { data: orders = [], isLoading, isError, refetch, isFetching } = useQuery<SalesOrder[]>({
-    queryKey: ["staffSalesOrders", ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, session?.staff_id],
+    queryKey: ["staffSalesOrders", STAFF_ORDER_SCOPE_VERSION, session?.staff_id],
     queryFn: () => fetchAllStaffOrders(session!.staff_id),
     enabled: !!session,
   })

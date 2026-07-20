@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrderResponse } from '@/lib/activeOrderPeriod.js'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 
 type Role = 'admin' | 'dealer' | 'staff' | 'accountant'
@@ -143,11 +142,11 @@ export default function PendingOrdersPage() {
   }, [router])
 
   const { data: response, isLoading, isError } = useQuery<ResponseType>({
-    queryKey: ['pendingorders', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, viewerRole, viewerId, page, search, statusFilter, acceptFilter],
+    queryKey: ['pendingorders', STAFF_ORDER_SCOPE_VERSION, viewerRole, viewerId, page, search, statusFilter, acceptFilter],
     enabled: authResolved && hasAccess,
     queryFn: async () => {
-      const res = await axios.get(`/api/active-orders?source=orderpeginationnew&role=${viewerRole}&id=${encodeURIComponent(viewerId)}&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&order_status=${encodeURIComponent(statusFilter)}&accepted=${encodeURIComponent(acceptFilter)}`)
-      return filterActiveOrderResponse(res.data)
+      const res = await axios.get(`/api/orders-data?source=orderpeginationnew&role=${viewerRole}&id=${encodeURIComponent(viewerId)}&page=${page}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&order_status=${encodeURIComponent(statusFilter)}&accepted=${encodeURIComponent(acceptFilter)}`)
+      return res.data
     },
     placeholderData: keepPreviousData, staleTime: 5 * 60 * 1000,
   })
@@ -169,8 +168,8 @@ export default function PendingOrdersPage() {
     if (!authResolved || !hasAccess) return
     if (page >= totalPages) return
     queryClient.prefetchQuery({
-      queryKey: ['pendingorders', ACTIVE_ORDER_PERIOD_VERSION, STAFF_ORDER_SCOPE_VERSION, viewerRole, viewerId, page + 1, search, statusFilter, acceptFilter],
-      queryFn: async () => { const res = await axios.get(`/api/active-orders?source=orderpeginationnew&role=${viewerRole}&id=${encodeURIComponent(viewerId)}&page=${page + 1}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&order_status=${encodeURIComponent(statusFilter)}&accepted=${encodeURIComponent(acceptFilter)}`); return filterActiveOrderResponse(res.data) },
+      queryKey: ['pendingorders', STAFF_ORDER_SCOPE_VERSION, viewerRole, viewerId, page + 1, search, statusFilter, acceptFilter],
+      queryFn: async () => { const res = await axios.get(`/api/orders-data?source=orderpeginationnew&role=${viewerRole}&id=${encodeURIComponent(viewerId)}&page=${page + 1}&limit=${ITEMS_PER_PAGE}&search=${encodeURIComponent(search)}&order_status=${encodeURIComponent(statusFilter)}&accepted=${encodeURIComponent(acceptFilter)}`); return res.data },
     })
   }, [acceptFilter, authResolved, hasAccess, page, queryClient, search, statusFilter, totalPages, viewerId, viewerRole])
 

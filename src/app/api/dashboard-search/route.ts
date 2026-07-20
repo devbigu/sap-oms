@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ACTIVE_ORDER_PERIOD_VERSION, filterActiveOrders } from "@/lib/activeOrderPeriod.js";
-import { loadActiveOrderHeaders } from "@/lib/activeOrderSnapshot";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import dashboardSearch from "@/lib/dashboardSearch.js";
 import { filterOrdersForActor } from "@/lib/staffOrderScope.js";
@@ -131,7 +130,7 @@ async function fetchCandidateOrders(actor: DashboardActor, query: string) {
     : actor.role === "staff"
       ? "staffOrderrPagination"
       : "orderhispegination";
-  const loaded = await loadActiveOrderHeaders({ source, actor, assignedDealerIds });
+  const loaded = await loadOrderHeaders({ source, actor, assignedDealerIds });
   const scoped = filterOrdersForActor({
     role: actor.role,
     actorId: actor.actorId,
@@ -179,7 +178,7 @@ function collectItemSearchText(rows: Record<string, unknown>[]) {
 }
 
 async function fetchOrderItemSearchText(orderId: string, actor: DashboardActor) {
-  const cacheKey = `${ACTIVE_ORDER_PERIOD_VERSION}:${actor.role}:${actor.actorId || "admin"}:${orderId}`;
+  const cacheKey = `all-orders-v1:${actor.role}:${actor.actorId || "admin"}:${orderId}`;
   const cached = orderItemSummaryCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < ORDER_ITEM_CACHE_TTL_MS) {
     return cached.searchText;
@@ -297,7 +296,7 @@ export async function GET(req: NextRequest) {
     const candidateOrdersPromise = fetchCandidateOrders(actor, query);
     const dealersPromise = actor.role === "admin" ? fetchAdminDealers(query) : Promise.resolve([]);
     const staffPromise = actor.role === "admin" ? fetchAdminStaff(query) : Promise.resolve([]);
-    const candidateOrders = filterActiveOrders(await candidateOrdersPromise);
+    const candidateOrders = await candidateOrdersPromise;
     const [dealers, staff, itemSummariesByOrderId] = await Promise.all([
       dealersPromise,
       staffPromise,

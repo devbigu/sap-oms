@@ -1,5 +1,4 @@
 const productSearch = require("./productSearch.js");
-const { filterActiveOrders } = require("./activeOrderPeriod.js");
 
 const {
   buildSearchUrl,
@@ -401,7 +400,7 @@ function searchDashboardOrders(orders, query, options = {}) {
   const itemSummariesByOrderId = options.itemSummariesByOrderId || {};
   const results = [];
 
-  for (const order of filterActiveOrders(orders)) {
+  for (const order of orders) {
     const orderId = pickFirstString(order.order_id, order.orderId, order.id);
     if (!orderId) continue;
 
