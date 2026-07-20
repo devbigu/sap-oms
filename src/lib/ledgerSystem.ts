@@ -1,5 +1,6 @@
 import { Db } from "mongodb";
 import { getDb } from "@/lib/mongodb";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import {
   OrderAmountSource,
   resolveOrderAmounts,
@@ -7,7 +8,7 @@ import {
 } from "@/lib/orderAmounts";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
-const CACHE_ID = "collective_ledger_snapshot";
+const CACHE_ID = "collective_ledger_snapshot:all-orders-v1";
 const CACHE_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = Number(process.env.LEDGER_FETCH_TIMEOUT_MS ?? 30_000);
 const MAX_PAGES = 10;
@@ -180,15 +181,18 @@ async function fetchLiveSnapshot(): Promise<LedgerSnapshot> {
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const [dealers, orders] = await Promise.all([
+    const [dealers, activeOrders] = await Promise.all([
       fetchPaginated("dealerpegination", controller.signal),
-      fetchPaginated("orderpegination", controller.signal),
+      loadOrderHeaders({
+        source: "orderpegination",
+        actor: { role: "admin", actorId: "" },
+      }),
     ]);
 
     return {
       updatedAt: new Date().toISOString(),
       dealers,
-      orders,
+      orders: activeOrders.rows,
     };
   } finally {
     clearTimeout(timer);

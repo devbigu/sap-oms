@@ -249,7 +249,7 @@ function ProductMetric({
 }
 
 function PendingProductsDashboardInner({ role }: { role: Role }) {
-  const [actor] = useState<DashboardActor | null>(() => resolveDashboardActor(role));
+  const [actor, setActor] = useState<DashboardActor | null>(() => resolveDashboardActor(role));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -261,6 +261,16 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
   const [detailProductKey, setDetailProductKey] = useState("");
   const [detailPage, setDetailPage] = useState(1);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const refreshActor = () => setActor(resolveDashboardActor(role));
+    window.addEventListener("storage", refreshActor);
+    window.addEventListener("omsons-auth-changed", refreshActor);
+    return () => {
+      window.removeEventListener("storage", refreshActor);
+      window.removeEventListener("omsons-auth-changed", refreshActor);
+    };
+  }, [role]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -297,7 +307,7 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
       refreshToken,
     ],
     enabled: !!actor && actor.role === role,
-    placeholderData: keepPreviousData,
+    placeholderData: role === "dealer" ? undefined : keepPreviousData,
     queryFn: async () => {
       const params = new URLSearchParams({
         page: String(page),
@@ -333,7 +343,7 @@ function PendingProductsDashboardInner({ role }: { role: Role }) {
       refreshToken,
     ],
     enabled: !!actor && actor.role === role && !!detailProductKey,
-    placeholderData: keepPreviousData,
+    placeholderData: role === "dealer" ? undefined : keepPreviousData,
     queryFn: async () => {
       const params = new URLSearchParams({
         productKey: detailProductKey,

@@ -1,38 +1,10 @@
-custom-discount-requests GET failed MongoServerSelectionError: read ECONNRESET
-    at async s (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__deb3f05d._.js:1:1286)
-    at async i (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__deb3f05d._.js:1:1429)
-    at async N (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__86469cb3._.js:1:2369) {
-  errorLabelSet: Set(0) {},
-  reason: [TopologyDescription],
-  code: undefined,
-  [cause]: MongoNetworkError: read ECONNRESET
-      at ignore-listed frames {
-    errorLabelSet: Set(3) { 'SystemOverloadedError', 'RetryableError', 'ResetPool' },
-    beforeHandshake: false,
-    [cause]: Error: read ECONNRESET
-        at ignore-listed frames {
-      errno: -4077,
-      code: 'ECONNRESET',
-      syscall: 'read'
-    }
-  }
-}
-custom-discount-requests GET failed MongoServerSelectionError: read ECONNRESET
-    at async s (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__deb3f05d._.js:1:1286)
-    at async i (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__deb3f05d._.js:1:1429)
-    at async N (C:\Users\JoJo\job work\omsons\frontend\.next\server\chunks\[root-of-the-server]__86469cb3._.js:1:2369) {
-  errorLabelSet: Set(0) {},
-  reason: [TopologyDescription],
-  code: undefined,
-  [cause]: MongoNetworkError: read ECONNRESET
-      at ignore-listed frames {
-    errorLabelSet: Set(3) { 'SystemOverloadedError', 'RetryableError', 'ResetPool' },
-    beforeHandshake: false,
-    [cause]: Error: read ECONNRESET
-        at ignore-listed frames {
-      errno: -4077,
-      code: 'ECONNRESET',
-      syscall: 'read'
-    }
-  }
+⨯ Failed to start server
+Error: listen EADDRINUSE: address already in use :::3001
+    at <unknown> (Error: listen EADDRINUSE: address already in use :::3001)
+    at new Promise (<anonymous>) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 3001
 }

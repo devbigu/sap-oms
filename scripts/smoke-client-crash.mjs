@@ -21,7 +21,15 @@ const pageChecks = [
   "/search?q=OM310-020",
   "/dashboard/dealer",
   "/dashboard/dealer/AddOrderForm",
+  "/dashboard/staff",
+  "/dashboard/staff/dealerlist",
+  "/dashboard/staff/orderstatus",
+  "/dashboard/staff/pending-products",
+  "/dashboard/staff/sales",
+  "/Pages/Ordermanagement",
+  "/Pages/Ordermanagement/outstandingorders",
   "/dashboard/admin",
+  "/dashboard/admin/dealer/DealerList",
 ];
 
 const artifactChecks = [
@@ -29,6 +37,14 @@ const artifactChecks = [
   ".next/server/app/Products/[sku]/page_client-reference-manifest.js",
   ".next/server/app/dashboard/dealer/page_client-reference-manifest.js",
   ".next/server/app/dashboard/dealer/AddOrderForm/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/staff/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/staff/dealerlist/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/staff/orderstatus/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/staff/pending-products/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/staff/sales/page_client-reference-manifest.js",
+  ".next/server/app/Pages/Ordermanagement/page_client-reference-manifest.js",
+  ".next/server/app/Pages/Ordermanagement/outstandingorders/page_client-reference-manifest.js",
+  ".next/server/app/dashboard/admin/dealer/DealerList/page_client-reference-manifest.js",
 ];
 
 const apiChecks = [

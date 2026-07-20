@@ -1,10 +1,22 @@
 'use client'
 
 import { Suspense, useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useRouter, useSearchParams } from 'next/navigation'
 import axios from 'axios'
 import { Pencil, Trash2, Download, Search, Package, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { compactCategoryList, matchesCategory } from '@/lib/categories'
+import {
+  getCatalogueProductDescriptor,
+  getVariantSpecSummary,
+  stripHtml,
+  type CatalogueProduct,
+  type CatalogueVariant,
+} from '@/lib/catalogue'
+import { loadCatalogueProducts } from '@/lib/catalogueClient'
+import productSearch from '@/lib/productSearch.js'
+
+const { getSearchQueryInfo, normalizeCatalogueNumber, searchProducts } = productSearch
 
 type ProductData = {
   product_id: string
@@ -15,6 +27,10 @@ type ProductData = {
   product_unit: string
   product_quantity: string
   product_cat: string
+  product_category: string
+  product_categories: string[]
+  product_stock_state: string
+  product_detail_href: string
 }
 
 type ProductResponse = {
@@ -25,6 +41,109 @@ type ProductResponse = {
 
 const BACKEND_URL    = "https://mirisoft.co.in/sas/dealerapi/api"
 const ITEMS_PER_PAGE = 10
+
+function firstNonEmpty(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim()
+    if (text) return text
+  }
+  return ""
+}
+
+function priceToString(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return String(value)
+  }
+
+  const parsed = Number(String(value ?? "").replace(/,/g, "").trim())
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : ""
+}
+
+function getVariantImage(product: CatalogueProduct, variant?: CatalogueVariant): string {
+  return firstNonEmpty(
+    ...(variant?.images ?? []),
+    ...(product.images ?? [])
+  )
+}
+
+function getVariantPackSize(variant?: CatalogueVariant): string {
+  const pack = Number(variant?.pack)
+  return Number.isFinite(pack) && pack > 0 ? String(pack) : ""
+}
+
+function mapCatalogueProductToRows(product: CatalogueProduct, matchingVariants?: Array<CatalogueVariant | undefined>): ProductData[] {
+  const variants = matchingVariants?.length
+    ? matchingVariants
+    : product.variants?.length
+      ? product.variants
+      : [undefined]
+  const productSku = firstNonEmpty(product.sku, product.id)
+  const descriptor = getCatalogueProductDescriptor(product) || stripHtml(product.descriptionHtml)
+  const productCategory = firstNonEmpty(product.category, product.categories?.[0], "Uncategorized")
+  const productCategories = compactCategoryList([product.category, ...(product.categories ?? [])])
+
+  return variants.map((variant, index) => {
+    const sku = firstNonEmpty(variant?.sku, variant?.id, productSku)
+    const variantSummary = variant ? getVariantSpecSummary(variant) : ""
+
+    return {
+      product_id: sku || `${productSku || "product"}-${index}`,
+      product_name: firstNonEmpty(product.name, variant?.name, sku, "Unnamed product"),
+      product_image: getVariantImage(product, variant),
+      product_price: priceToString(variant?.price),
+      product_discription: firstNonEmpty(variantSummary, descriptor),
+      product_unit: "Pack",
+      product_quantity: getVariantPackSize(variant),
+      product_cat: sku,
+      product_category: productCategory,
+      product_categories: productCategories,
+      product_stock_state: variant?.inStock === false ? "Out of stock" : "In stock",
+      product_detail_href: `/Products/${encodeURIComponent(sku || productSku)}`,
+    }
+  })
+}
+
+function filterCatalogueProducts(
+  products: CatalogueProduct[],
+  search: string,
+  selectedCategory: string
+): ProductData[] {
+  const categoryMatches = (product: CatalogueProduct) => {
+      if (selectedCategory === "all") return true
+      return matchesCategory(compactCategoryList([product.category, ...(product.categories ?? [])]), selectedCategory)
+  }
+
+  if (!search.trim()) {
+    return products
+      .filter(categoryMatches)
+      .flatMap((product) => mapCatalogueProductToRows(product))
+  }
+
+  const queryInfo = getSearchQueryInfo(search)
+  const catalogueQuery = normalizeCatalogueNumber(queryInfo.normalizedQuery)
+
+  return (searchProducts(products, queryInfo.normalizedQuery) as Array<{
+    originalProduct: CatalogueProduct
+    matchedVariant?: CatalogueVariant | null
+    normalizedCatalogueNumber?: string
+  }>)
+    .filter((result) => categoryMatches(result.originalProduct))
+    .flatMap((result) => {
+      const variant = result.matchedVariant ?? undefined
+      const variantCatalogue = normalizeCatalogueNumber(variant?.sku ?? variant?.id ?? "")
+      const isVariantCatalogueMatch = Boolean(
+        variant &&
+        catalogueQuery &&
+        variantCatalogue &&
+        variantCatalogue.includes(catalogueQuery)
+      )
+
+      return mapCatalogueProductToRows(
+        result.originalProduct,
+        isVariantCatalogueMatch ? [variant] : undefined
+      )
+    })
+}
 
 function normalizeCategory(value: unknown): string {
   return String(value ?? "").trim().toLowerCase()
@@ -43,10 +162,13 @@ function productMatchesCategory(product: ProductData, selectedCategory: string):
     .map(normalizeCategory)
     .filter(Boolean)
 
-  return productValues.some((value) =>
-    value === target ||
-    value.includes(target) ||
-    target.includes(value)
+  return (
+    matchesCategory(compactCategoryList([product.product_category, ...(product.product_categories ?? [])]), selectedCategory) ||
+    productValues.some((value) =>
+      value === target ||
+      value.includes(target) ||
+      target.includes(value)
+    )
   )
 }
 
@@ -62,8 +184,6 @@ function ProductListContent() {
   const [selectedCategory, setSelectedCategory] = useState(urlCategory)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [toastMsg,      setToastMsg]      = useState<{ text: string; ok: boolean } | null>(null)
-
-  const queryClient = useQueryClient()
 
   useEffect(() => {
     if (!toastMsg) return
@@ -84,14 +204,17 @@ function ProductListContent() {
   const { data: response, isLoading, isError, refetch } = useQuery<ProductResponse>({
     queryKey: ['products', page, search, selectedCategory],
     queryFn: async () => {
-      const params = new URLSearchParams({ page: String(page), search })
-      if (selectedCategory !== "all") {
-        params.set("cat", selectedCategory)
+      const catalogueProducts = await loadCatalogueProducts()
+      const filteredProducts = filterCatalogueProducts(catalogueProducts, search, selectedCategory)
+      const start = (page - 1) * ITEMS_PER_PAGE
+      const pagedProducts = filteredProducts.slice(start, start + ITEMS_PER_PAGE)
+
+      return {
+        data: pagedProducts,
+        count: filteredProducts.length,
+        last_page: Math.max(1, Math.ceil(filteredProducts.length / ITEMS_PER_PAGE)),
       }
-      const res = await axios.get(`${BACKEND_URL}/pegination?${params.toString()}`)
-      return res.data
     },
-    placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -102,20 +225,6 @@ function ProductListContent() {
   )
   const total      = response?.count ?? 0
   const totalPages = response?.last_page || Math.max(1, Math.ceil(total / ITEMS_PER_PAGE))
-
-  useEffect(() => {
-    queryClient.prefetchQuery({
-      queryKey: ['products', page + 1, search, selectedCategory],
-      queryFn: async () => {
-        const params = new URLSearchParams({ page: String(page + 1), search })
-        if (selectedCategory !== "all") {
-          params.set("cat", selectedCategory)
-        }
-        const res = await axios.get(`${BACKEND_URL}/pegination?${params.toString()}`)
-        return res.data
-      },
-    })
-  }, [page, search, selectedCategory, queryClient])
 
   useEffect(() => {
     const t = setTimeout(() => { setPage(1); setSearch(searchInput) }, 400)
@@ -432,7 +541,7 @@ function ProductListContent() {
           <div className="flex items-center justify-between px-[22px] py-[14px] border-t border-[#f1f5fb] flex-wrap gap-3">
             <div className="text-[12px] text-[#94a3b8]">
               {filteredData.length > 0 ? (
-                <>Showing <strong className="text-[#374151] font-semibold">{startIndex}–{Math.min(endIndex, filteredData.length)}</strong> of <strong className="text-[#374151] font-semibold">{filteredData.length.toLocaleString()}</strong> products</>
+                <>Showing <strong className="text-[#374151] font-semibold">{startIndex}–{endIndex}</strong> of <strong className="text-[#374151] font-semibold">{total.toLocaleString()}</strong> products</>
               ) : "No results"}
             </div>
             <div className="flex items-center gap-1">

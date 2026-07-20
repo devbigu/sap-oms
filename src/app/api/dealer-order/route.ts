@@ -77,7 +77,8 @@ export async function POST(request: NextRequest) {
       ? `${PHP_BASE}/importdata`
       : `${PHP_BASE}/PlaceOrderarray?id=${encodeURIComponent(dealerId)}&staffid=${encodeURIComponent(staffId)}`;
 
-    return await forwardToPhp(endpoint, forwarded);
+    const response = await forwardToPhp(endpoint, forwarded);
+    return response;
   } catch (error) {
     console.error("dealer-order POST failed", error);
     return safeJsonResponse({ success: false, message: "Unable to submit order." }, 500);

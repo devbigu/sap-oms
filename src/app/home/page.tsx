@@ -12,6 +12,7 @@ import Footer from "@/components/Footer";
 import Link from "next/link";
 import axios from "axios";
 import { OrderAmountSource, withDisplayOrderAmounts } from "@/lib/orderAmounts";
+import { useAuthSession } from "@/hooks/useAuthSession";
 // import { getRecentlyViewed, pushRecentlyViewed, type RecentlyViewedItem } from "@/components/Header";
 
 import { getRecentlyViewed, pushRecentlyViewed, type RecentlyViewedItem } from "@/components/Header";
@@ -113,17 +114,8 @@ type CatalogRouteResolver = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const getDealerId = (): string => {
-  if (typeof window === "undefined") return "225";
-  try {
-    return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225";
-  } catch {
-    return "225";
-  }
-};
-
 async function fetchOrders(id: string): Promise<ApiResponse> {
-  const r = await fetch(`${BACKEND}/orderhispegination?page=1&search=&id=${id}`);
+  const r = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=10&search=&id=${encodeURIComponent(id)}`);
   if (!r.ok) throw new Error("Failed to fetch orders");
   return r.json();
 }
@@ -316,11 +308,14 @@ function ProductCardSkeleton() {
 
 export default function Page() {
   const router = useRouter();
+  const auth = useAuthSession();
   const [navOpen, setNavOpen] = useState(false);
   const [hotItems, setHotItems] = useState<HotItemDisplay[]>([]);
   const [relatedProducts, setRelatedProducts] = useState<RelatedProductDisplay[]>([]);
   const [hotLoading, setHotLoading] = useState(true);
-  const [dealerId] = useState(getDealerId);
+  const dealerId = !auth.loading && auth.session.status === "authenticated" && auth.session.role === "dealer"
+    ? String(auth.session.user.Dealer_Id ?? "").trim()
+    : "";
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({});
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedItem[]>([]);
   const [catalogResolver, setCatalogResolver] = useState<CatalogRouteResolver | null>(null);
@@ -380,11 +375,11 @@ export default function Page() {
 
   // Fetch real orders
   const { data: ordersData, isLoading: ordersLoading, isError: ordersError } = useQuery({
-    queryKey: ["orders-home", dealerId],
+    queryKey: ["orders-home", "dealer", dealerId],
     queryFn: () => fetchOrders(dealerId),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
-    enabled: !!dealerId,
+    enabled: !auth.loading && auth.session.status === "authenticated" && auth.session.role === "dealer" && !!dealerId,
   });
 
   useEffect(() => {

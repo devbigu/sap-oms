@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import catalogueProducts from "../../../../../public/data/omsons_products_from_excel_with_images.json";
 import dealerCategoryReport from "@/lib/dealerCategoryReport";
 import dealerCategoryReportAccess from "@/lib/dealerCategoryReportAccess";
 import { getPhpApiBaseUrl } from "@/lib/phpBackend";
+import { findOrderOverlay } from "@/lib/orderOverlays";
 
 export const runtime = "nodejs";
 
 const BACKEND_URL = getPhpApiBaseUrl();
-const ORDER_PAGE_SIZE = 200;
-const MAX_ORDER_PAGES = 50;
 const ORDER_ITEM_CONCURRENCY = 5;
 
 type ReportActor = {
@@ -40,13 +40,6 @@ type OrderHeader = Record<string, unknown> & {
   order_status?: string;
   mtstatus?: string;
   reason?: string;
-};
-
-type OrderListResponse = {
-  data?: OrderHeader[];
-  last_page?: number;
-  count?: number;
-  total?: number;
 };
 
 type NormalizedDealer = {
@@ -170,35 +163,11 @@ async function fetchDealerById(dealerId: string, staffScopedDealers: NormalizedD
 }
 
 async function fetchDealerOrders(dealerId: string) {
-  const rows: OrderHeader[] = [];
-  let page = 1;
-  let lastPage = 1;
-
-  while (page <= lastPage && page <= MAX_ORDER_PAGES) {
-    const json = await fetchJson<OrderListResponse>(
-      `${BACKEND_URL}/orderhispegination?page=${page}&limit=${ORDER_PAGE_SIZE}&search=&id=${encodeURIComponent(dealerId)}`
-    );
-    const data = Array.isArray(json.data) ? json.data : [];
-    rows.push(...data);
-
-    const responseLastPage = Number(json.last_page);
-    if (Number.isFinite(responseLastPage) && responseLastPage > 0) {
-      lastPage = responseLastPage;
-    } else {
-      const total = Number(json.count ?? json.total);
-      if (Number.isFinite(total) && total > rows.length) {
-        lastPage = Math.ceil(total / ORDER_PAGE_SIZE);
-      } else if (data.length >= ORDER_PAGE_SIZE) {
-        lastPage = page + 1;
-      } else {
-        lastPage = page;
-      }
-    }
-
-    page += 1;
-  }
-
-  return rows;
+  const loaded = await loadOrderHeaders({
+    source: "orderhispegination",
+    actor: { role: "dealer", actorId: dealerId },
+  });
+  return loaded.rows as OrderHeader[];
 }
 
 function normalizeOrderItems(orderId: string, raw: unknown) {
@@ -251,6 +220,13 @@ async function fetchOrderItems(orderId: string) {
   const json = await fetchJson<{ data?: unknown }>(
     `${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`
   );
+  const overlay = await findOrderOverlay(orderId).catch(() => null);
+  const latestEdit = overlay?.status !== "cancelled" && Array.isArray(overlay?.edits)
+    ? overlay.edits[overlay.edits.length - 1]
+    : null;
+  if (latestEdit?.effectiveItems?.length) {
+    return normalizeOrderItems(orderId, latestEdit.effectiveItems);
+  }
   return normalizeOrderItems(orderId, json.data);
 }
 
@@ -393,8 +369,7 @@ export async function GET(req: NextRequest) {
         orderDetailEndpoint: "orderdatalist",
         orderDetailMethod: "GET",
         orderDetailIdentifier: "id",
-        orderPageSize: ORDER_PAGE_SIZE,
-        maxOrderPages: MAX_ORDER_PAGES,
+        orderHeaderSource: "current order headers",
         orderItemConcurrency: ORDER_ITEM_CONCURRENCY,
         inlineOrderItemOrderCount: uniqueOrders.length - ordersNeedingDetail.length,
         detailFetchedOrderCount: ordersNeedingDetail.length,

@@ -19,6 +19,13 @@ import {
 import { formatRupee, resolveCurrentMonthTotal } from "@/lib/companySales"
 import PendingProductsPreview from "@/components/dashboard/PendingProductsPreview"
 import { clearAuthStorage } from "@/lib/roleAccess"
+import { STAFF_ORDER_SCOPE_VERSION } from "@/lib/staffOrderScope.js"
+import {
+  applyDealerStatusOverrides,
+  fetchDealerStatusOverrides,
+  isActiveDealerStatus,
+  type DealerStatusDocument,
+} from "@/lib/dealerStatus"
 
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -72,12 +79,14 @@ type StaffDealer = {
 type OrderItem   = {
   order_id: string
   total: string
+  order_amount?: string | number
+  order_dealer?: string
+  staffid?: string
   status?: string
   order_status?: string
   order_date?: string
   orderDate?: string
   Dealer_Name?: string
-  order_amount?: string | number
   outstandingDate?: string
   accept_order?: string
 }
@@ -208,10 +217,13 @@ function ExecutiveDashboard() {
   ] = useQueries({
     queries: [
       {
-        queryKey:  ["staffOrders", user?.staff_id],
-        queryFn:   () => fetchJson<{ data: OrderItem[] }>(`${BACKEND_URL}/getStaffOrders?staff_id=${user!.staff_id}`),
+        queryKey:  ["staffOrders", STAFF_ORDER_SCOPE_VERSION, user?.staff_id],
+        queryFn:   () => fetchJson<{ data: OrderItem[] }>(`/api/orders-data?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(user!.staff_id)}`),
         enabled,
-        select:    (d: { data: OrderItem[] }) => d.data ?? [],
+        select:    (d: { data: OrderItem[] }) => (d.data ?? []).map((order) => ({
+          ...order,
+          total: String(order.total ?? order.order_amount ?? 0),
+        })),
       },
       {
         queryKey:  ["staffDealers", user?.staff_id],
@@ -227,26 +239,26 @@ function ExecutiveDashboard() {
       },
       {
         queryKey:  ["monthlyOrders"],
-        queryFn:   () => fetchJson<MonthlyData>(`${BACKEND_URL}/getMonthlyreporttotalorder`),
+        queryFn:   async () => ({ month: [], total: [] } as MonthlyData),
         enabled,
         staleTime: 5 * 60_000,
       },
       {
         queryKey:  ["monthlyValue"],
-        queryFn:   () => fetchJson<MonthlyData>(`${BACKEND_URL}/getMonthlyreporttotalvalue`),
+        queryFn:   async () => ({ month: [], total: [] } as MonthlyData),
         enabled,
         staleTime: 5 * 60_000,
       },
       {
         queryKey:  ["topOrders"],
-        queryFn:   () => fetchJson<{ top: TopOrder[] }>(`${BACKEND_URL}/getMonthlyreporttoporder`),
+        queryFn:   async () => ({ top: [] as TopOrder[] }),
         enabled,
         select:    (d: { top: TopOrder[] }) => d.top ?? [],
         staleTime: 5 * 60_000,
       },
       {
         queryKey:  ["topDealers"],
-        queryFn:   () => fetchJson<{ top: TopDealer[] }>(`${BACKEND_URL}/getMonthlyreporttopdealer`),
+        queryFn:   async () => ({ top: [] as TopDealer[] }),
         enabled,
         select:    (d: { top: TopDealer[] }) => d.top ?? [],
         staleTime: 5 * 60_000,
@@ -255,15 +267,51 @@ function ExecutiveDashboard() {
   })
 
   // ── Derived values ────────────────────────────────────────────
-  const orders  = (ordersQ.data  as OrderItem[]   | undefined) ?? []
-  const dealers = (dealersQ.data as StaffDealer[] | undefined) ?? []
+  const dealerStatusesQ = useQuery<DealerStatusDocument[]>({
+    queryKey: ["staffDealerStatuses"],
+    queryFn: fetchDealerStatusOverrides,
+    enabled,
+    staleTime: 5 * 60_000,
+  })
+
+  const rawOrders = (ordersQ.data as OrderItem[] | undefined) ?? []
+  const rawDealers = (dealersQ.data as StaffDealer[] | undefined) ?? []
+  const dealers = useMemo(
+    () => applyDealerStatusOverrides(rawDealers, dealerStatusesQ.data ?? [])
+      .filter((dealer) => isActiveDealerStatus(dealer.status)),
+    [dealerStatusesQ.data, rawDealers]
+  )
   const discountRequests = (discountRequestsQ.data as DiscountRequest[] | undefined) ?? []
-  const totalOrders  = monthlyOrdersQ.data as MonthlyData | undefined
-  const totalValue   = monthlyValueQ.data  as MonthlyData | undefined
-  const topOrders    = (topOrdersQ.data  as TopOrder[]  | undefined) ?? []
-  const topDealers   = (topDealersQ.data as TopDealer[] | undefined) ?? []
-  const companyWideOrders = resolveCurrentMonthTotal(totalOrders)
-  const companyWideSales = resolveCurrentMonthTotal(totalValue)
+  const monthlyTotals = new Map<string, { orders: number; value: number }>()
+  for (const order of rawOrders) {
+    const month = String(order.order_date ?? order.orderDate ?? "").slice(0, 7)
+    if (!month) continue
+    const current = monthlyTotals.get(month) ?? { orders: 0, value: 0 }
+    current.orders += 1
+    current.value += Number(order.total ?? order.order_amount ?? 0)
+    monthlyTotals.set(month, current)
+  }
+  const monthlyEntries = Array.from(monthlyTotals.entries()).sort(([left], [right]) => left.localeCompare(right))
+  const totalOrders: MonthlyData = { month: monthlyEntries.map(([month]) => month), total: monthlyEntries.map(([, totals]) => String(totals.orders)) }
+  const totalValue: MonthlyData = { month: monthlyEntries.map(([month]) => month), total: monthlyEntries.map(([, totals]) => String(totals.value)) }
+  const topOrders: TopOrder[] = rawOrders
+    .map((order) => ({ order_id: String(order.order_id ?? ""), total: String(order.total ?? order.order_amount ?? 0) }))
+    .sort((left, right) => Number(right.total) - Number(left.total))
+    .slice(0, 5)
+  const dealerTotals = new Map<string, number>()
+  for (const order of rawOrders) {
+    const name = String(order.Dealer_Name ?? "Dealer")
+    dealerTotals.set(name, (dealerTotals.get(name) ?? 0) + Number(order.total ?? order.order_amount ?? 0))
+  }
+  const topDealers: TopDealer[] = Array.from(dealerTotals, ([Dealer_Name, total]) => ({ Dealer_Name, total: String(total) }))
+    .sort((left, right) => Number(right.total) - Number(left.total))
+    .slice(0, 5)
+  const currentMonth = new Date().toISOString().slice(0, 7)
+  const currentMonthOrders = rawOrders.filter((order) => String(order.order_date ?? order.orderDate ?? "").slice(0, 7) === currentMonth)
+  const companyWideOrders = currentMonthOrders.length
+  const companyWideSales = currentMonthOrders.reduce((sum, order) => sum + Number(order.total ?? order.order_amount ?? 0), 0)
+
+  const orders = rawOrders
 
   const stats = useMemo(() => ({
     myOrders:      orders.length,
@@ -273,10 +321,7 @@ function ExecutiveDashboard() {
     pendingDiscountRequests: discountRequests.length,
   }), [orders, dealers, discountRequests])
 
-  const activeDealers = useMemo(
-    () => dealers.filter(d => Number(d.status) === 1).length,
-    [dealers]
-  )
+  const activeDealers = dealers.length
 
   const companyMonthLoading = monthlyOrdersQ.isLoading || monthlyValueQ.isLoading
 
@@ -303,6 +348,7 @@ function ExecutiveDashboard() {
     monthlyValueQ.refetch()
     topOrdersQ.refetch()
     topDealersQ.refetch()
+    dealerStatusesQ.refetch()
   }
 
   // ── Chart data ────────────────────────────────────────────────
@@ -347,7 +393,7 @@ function ExecutiveDashboard() {
 
   const STAT_CONFIG = [
     {
-      label: "Company-wide Sales",
+      label: "Assigned Sales",
       value: formatRupee(companyWideSales),
       badge: "badge-purple",
       badgeLabel: "This month",
@@ -355,7 +401,7 @@ function ExecutiveDashboard() {
       sub: "Sales across all distributors",
     },
     {
-      label: "Company-wide Orders",
+      label: "Assigned Orders",
       value: companyWideOrders.toLocaleString("en-IN"),
       badge: "badge-blue",
       badgeLabel: "This month",
@@ -970,7 +1016,7 @@ function ChartPanel({
         <div className="chart-empty">No data available</div>
       ) : (
         <div className="chart-canvas">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={240} minWidth={0}>
             <BarChart data={data}>
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 
+const dealerDraftQuery = (dealerId: string) => ({ dealer_id: dealerId });
+
 function toDoc(doc: any): object {
   return {
     ...doc,
@@ -22,13 +24,13 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
 
     if (req.nextUrl.searchParams.get("count") === "1") {
-      const count = await db.collection("order_drafts").countDocuments({ dealer_id: dealerId });
+      const count = await db.collection("order_drafts").countDocuments(dealerDraftQuery(dealerId));
       return NextResponse.json({ success: true, count });
     }
 
     const docs = await db
       .collection("order_drafts")
-      .find({ dealer_id: dealerId })
+      .find(dealerDraftQuery(dealerId))
       .sort({ updatedAt: -1 })
       .toArray();
 

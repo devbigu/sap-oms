@@ -238,7 +238,7 @@ export default function OrderBookPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch(`${BACKEND_URL}/orderpegination?page=1&limit=1000&search=`);
+      const res  = await fetch(`/api/orders-data?source=orderpegination&role=accountant&page=1&limit=1000&search=`);
       const json = await res.json();
       setOrders(Array.isArray(json.data) ? json.data : []);
     } catch {

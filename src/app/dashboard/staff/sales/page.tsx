@@ -6,8 +6,7 @@ import { useRouter } from "next/navigation"
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { CalendarRange, ChevronLeft, RefreshCw, Search } from "lucide-react"
 import { DistributorSalesRow, formatRupee, getOrderDate, groupOrdersByDistributor, type SalesOrder } from "@/lib/companySales"
-
-const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
+import { STAFF_ORDER_SCOPE_VERSION } from "@/lib/staffOrderScope.js"
 
 type OrderResponse = {
   data: SalesOrder[]
@@ -39,9 +38,10 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json()
 }
 
-async function fetchAllCompanyOrders(): Promise<SalesOrder[]> {
+async function fetchAllStaffOrders(staffId: string): Promise<SalesOrder[]> {
   const pageSize = 500
-  const first = await fetchJson<OrderResponse>(`${BACKEND_URL}/orderpegination?page=1&limit=${pageSize}&search=`)
+  const scope = `role=staff&id=${encodeURIComponent(staffId)}`
+  const first = await fetchJson<OrderResponse>(`/api/orders-data?source=staffOrderrPagination&${scope}&page=1&limit=${pageSize}&search=`)
   const firstRows = first.data ?? []
   const totalRows = first.total ?? first.count ?? firstRows.length
   const totalPages = first.last_page ?? Math.max(1, Math.ceil(totalRows / pageSize))
@@ -50,7 +50,7 @@ async function fetchAllCompanyOrders(): Promise<SalesOrder[]> {
 
   const rest = await Promise.all(
     Array.from({ length: totalPages - 1 }, (_, idx) => idx + 2).map(page =>
-      fetchJson<OrderResponse>(`${BACKEND_URL}/orderpegination?page=${page}&limit=${pageSize}&search=`)
+      fetchJson<OrderResponse>(`/api/orders-data?source=staffOrderrPagination&${scope}&page=${page}&limit=${pageSize}&search=`)
     )
   )
 
@@ -93,8 +93,8 @@ function SalesReportPageInner() {
   }, [router])
 
   const { data: orders = [], isLoading, isError, refetch, isFetching } = useQuery<SalesOrder[]>({
-    queryKey: ["staffCompanySalesOrders"],
-    queryFn: fetchAllCompanyOrders,
+    queryKey: ["staffSalesOrders", STAFF_ORDER_SCOPE_VERSION, session?.staff_id],
+    queryFn: () => fetchAllStaffOrders(session!.staff_id),
     enabled: !!session,
   })
 
@@ -204,9 +204,9 @@ function SalesReportPageInner() {
 
           <section className="hero">
             <div className="hero-kicker">Staff dashboard report</div>
-            <h1 className="hero-title">Company-wide Sales</h1>
+            <h1 className="hero-title">Assigned Dealer Sales</h1>
             <div className="hero-sub">
-              Read-only monthly sales report across all distributors. Filter by month or date range, then review gross, discount, and net sales with a totals row at the bottom.
+              Monthly sales for your assigned dealers. Filter by month or date range, then review gross, discount, and net sales with a totals row at the bottom.
             </div>
             <div className="hero-meta">
               <span className="meta-chip">

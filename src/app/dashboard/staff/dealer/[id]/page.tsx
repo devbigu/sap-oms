@@ -9,6 +9,7 @@ import moment from 'moment'
 import { hasPriorityTag } from '@/lib/orderPriority'
 import { OrderAmountSource, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { mergeFallbackProductNotes } from '@/lib/orderProductNotes.mjs'
+import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api"
 const YEAR        = new Date().getFullYear()
@@ -169,12 +170,44 @@ export default function StaffDealerViewPage() {
   const [search,        setSearch]       = useState("")
   const [searchInput,   setSearchInput]  = useState("")
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([])
+  const [staffId, setStaffId] = useState("")
+  const [dealerAccessAllowed, setDealerAccessAllowed] = useState(false)
 
   const queryClient = useQueryClient()
 
-  // Fetch dealer info
   useEffect(() => {
-    if (!dealerId) return
+    let active = true
+    try {
+      const raw = localStorage.getItem("staffData") || localStorage.getItem("UserData")
+      const parsed = raw ? JSON.parse(raw) : null
+      const actorId = String(parsed?.staff_id ?? "").trim()
+      if (!actorId) {
+        router.replace("/auth/login")
+        return
+      }
+      setStaffId(actorId)
+      fetch(`${BACKEND_URL}/staffDealers?id=${encodeURIComponent(actorId)}`, { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+        .then((json) => {
+          if (!active) return
+          const allowed = (Array.isArray(json.data) ? json.data : [])
+            .some((row: DealerInfo) => String(row.Dealer_Id) === String(dealerId))
+          if (!allowed) {
+            router.replace("/dashboard/staff")
+            return
+          }
+          setDealerAccessAllowed(true)
+        })
+        .catch(() => router.replace("/dashboard/staff"))
+    } catch {
+      router.replace("/auth/login")
+    }
+    return () => { active = false }
+  }, [dealerId, router])
+
+  // Fetch dealer info only after assignment ownership is verified.
+  useEffect(() => {
+    if (!dealerId || !dealerAccessAllowed) return
     fetch(`${BACKEND_URL}/getdealer?id=${dealerId}`, {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
@@ -183,13 +216,13 @@ export default function StaffDealerViewPage() {
       .then(r => r.json())
       .then(json => { if (json.status) setDealer(json.data) })
       .catch(() => {})
-  }, [dealerId])
+  }, [dealerAccessAllowed, dealerId])
 
   // Fetch all orders (filter by dealer name client-side)
   const loadOrders = useCallback(async () => {
     setLoadingOrders(true)
     try {
-      const res  = await fetch(`${BACKEND_URL}/orderpegination?page=1&limit=1000&search=`)
+      const res  = await fetch(`/api/orders-data?source=staffOrderrPagination&role=staff&page=1&limit=1000&search=&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`)
       const json = await res.json()
       setAllOrders(Array.isArray(json.data) ? json.data : [])
     } catch {
@@ -197,9 +230,11 @@ export default function StaffDealerViewPage() {
     } finally {
       setLoadingOrders(false)
     }
-  }, [])
+  }, [dealerId, staffId])
 
-  useEffect(() => { loadOrders() }, [loadOrders])
+  useEffect(() => {
+    if (dealerAccessAllowed && staffId) loadOrders()
+  }, [dealerAccessAllowed, loadOrders, staffId])
 
   useEffect(() => {
     const orderIds = Array.from(new Set(allOrders.map(o => String(o.order_id || "").trim()).filter(Boolean)))
@@ -235,31 +270,31 @@ export default function StaffDealerViewPage() {
 
   // Order items via React Query
   const { data: itemsResp, isLoading: itemsLoading, isError: itemsError } = useQuery<OrderItemResponse>({
-    queryKey: ['staff-dealer-items', dealerId, itemPage, search],
+    queryKey: ['staff-dealer-items', STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage, search],
     queryFn: async () => {
       const res = await axios.get(
-        `${BACKEND_URL}/Orderstspegination?page=${itemPage}&search=${search}&id=${dealerId}`
+        `/api/orders-data?source=Orderstspegination&role=staff&page=${itemPage}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
       )
       return res.data
     },
-    enabled: !!dealerId && tab === "items",
+    enabled: dealerAccessAllowed && !!staffId && !!dealerId && tab === "items",
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
 
   // Prefetch next items page
   useEffect(() => {
-    if (!dealerId || tab !== "items") return
+    if (!dealerAccessAllowed || !staffId || !dealerId || tab !== "items") return
     queryClient.prefetchQuery({
-      queryKey: ['staff-dealer-items', dealerId, itemPage + 1, search],
+      queryKey: ['staff-dealer-items', STAFF_ORDER_SCOPE_VERSION, staffId, dealerId, itemPage + 1, search],
       queryFn: async () => {
         const res = await axios.get(
-          `${BACKEND_URL}/Orderstspegination?page=${itemPage + 1}&search=${search}&id=${dealerId}`
+          `/api/orders-data?source=Orderstspegination&role=staff&page=${itemPage + 1}&search=${encodeURIComponent(search)}&id=${encodeURIComponent(staffId)}&target_dealer=${encodeURIComponent(dealerId)}`
         )
         return res.data
       },
     })
-  }, [dealerId, itemPage, search, tab])
+  }, [dealerAccessAllowed, dealerId, itemPage, queryClient, search, staffId, tab])
 
   const pricedAllOrders = useMemo(() => {
     return allOrders.map(order => withDisplayOrderAmounts(order, summaryOverrides[order.order_id]))

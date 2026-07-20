@@ -89,6 +89,14 @@ const catalogue = [
     id: "minimal-1",
     sku: "MIN-1",
     name: "Minimal Pipette",
+    variants: [
+      {
+        id: "58/8",
+        sku: "58/8",
+        name: "Minimal Pipette - 10 mL",
+        specs: { Capacity: "10 mL" },
+      },
+    ],
   },
   {
     id: "alpha-1",
@@ -144,6 +152,13 @@ test("Matching is case-insensitive", () => {
 test("Exact catalogue-number match ranks first", () => {
   const [firstResult] = searchProducts(catalogue, "50/8");
   assert.equal(firstResult.catalogueNumber, "50/8");
+});
+
+test("Variant-only catalogue-number match routes to the variant product detail", () => {
+  const [firstResult] = searchProducts(catalogue, "58/8");
+  assert.equal(firstResult.productName, "Minimal Pipette");
+  assert.equal(firstResult.catalogueNumber, "58/8");
+  assert.equal(firstResult.route, "/Products/58%2F8");
 });
 
 test("Catalogue prefix ranks above description-only match", () => {

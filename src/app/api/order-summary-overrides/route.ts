@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Document, Filter, WithId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getReadableAdditionalDiscountText } from "@/lib/orderAmounts";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -16,6 +18,26 @@ function safeAmount(value: unknown) {
   return Math.round((amount + Number.EPSILON) * 100) / 100;
 }
 
+function normalizeOrderLookupKey(value: unknown) {
+  const text = safeText(value, 120);
+  if (!text) return "";
+  const trailing = text.match(/(\d+)(?!.*\d)/)?.[1];
+  if (!trailing) return text;
+  const normalized = String(Number(trailing));
+  return normalized === "NaN" ? trailing : normalized;
+}
+
+function orderIdVariants(value: unknown) {
+  const raw = safeText(value, 120);
+  const normalized = normalizeOrderLookupKey(raw);
+  const year = new Date().getFullYear();
+  return Array.from(new Set([
+    raw,
+    normalized,
+    normalized ? `OM/${year}/${normalized}` : "",
+  ].filter(Boolean)));
+}
+
 function normalizeAdditionalDiscountType(value: unknown) {
   const text = String(value ?? "").trim().toLowerCase();
   if (!text) return null;
@@ -24,7 +46,11 @@ function normalizeAdditionalDiscountType(value: unknown) {
   return null;
 }
 
-function toDoc(doc: any) {
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+function toDoc(doc: WithId<Document>) {
   return {
     ...doc,
     id: doc._id.toString(),
@@ -45,19 +71,31 @@ export async function GET(req: NextRequest) {
     const dealerId = req.nextUrl.searchParams.get("dealer_id");
     const orderId = req.nextUrl.searchParams.get("order_id");
     const orderIds = req.nextUrl.searchParams.get("order_ids");
+    if (!orderId && !orderIds) {
+      return NextResponse.json({ success: false, message: "order_id or order_ids required" }, { status: 400 });
+    }
 
-    const query: Record<string, any> = {};
+    const requestedIds = orderIds
+      ? orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200)
+      : orderId ? [orderId] : [];
+    const query: Filter<Document> = {};
     if (dealerId) query.dealerId = dealerId;
-    if (orderId) query.orderId = orderId;
-    if (orderIds) {
-      query.orderId = {
-        $in: orderIds.split(",").map((id) => id.trim()).filter(Boolean).slice(0, 200),
-      };
+    const visibleIdList = requestedIds;
+    const visibleVariants = Array.from(new Set(visibleIdList.flatMap(orderIdVariants)));
+    const visibleNumbers = Array.from(new Set(visibleIdList
+      .map((id) => Number(normalizeOrderLookupKey(id)))
+      .filter((id) => Number.isFinite(id))));
+    if (orderId || orderIds) {
+      const idClauses: Filter<Document>[] = [];
+      if (visibleVariants.length > 0) idClauses.push({ orderId: { $in: visibleVariants } });
+      if (visibleNumbers.length > 0) idClauses.push({ orderIdNumber: { $in: visibleNumbers } });
+      if (idClauses.length === 0) return NextResponse.json({ success: true, data: [] });
+      query.$or = idClauses;
     }
 
     const collection = await getCollection();
     const resultLimit = orderIds
-      ? Math.min(query.orderId?.$in?.length || 200, 1000)
+      ? Math.min(visibleVariants.length || visibleNumbers.length || 200, 1000)
       : 200;
 
     const docs = await collection
@@ -67,15 +105,15 @@ export async function GET(req: NextRequest) {
       .toArray();
 
     return NextResponse.json({ success: true, data: docs.map(toDoc) });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[GET /api/order-summary-overrides]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+    return NextResponse.json({ success: false, message: errorMessage(e) }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await req.json() as Record<string, unknown>;
     const orderId = safeText(body.orderId || body.order_id, 80);
     const dealerId = safeText(body.dealerId || body.dealer_id || body.order_dealer, 80);
 
@@ -95,6 +133,9 @@ export async function POST(req: NextRequest) {
     const slabDiscountAmount = safeAmount(body.slabDiscountAmount ?? body.slab_discount_amount);
     const couponDiscountPercent = safeAmount(body.couponDiscountPercent ?? body.coupon_discount_percent) ?? 0;
     const approvedDiscountPercent = safeAmount(body.approvedDiscountPercent ?? body.approved_discount_percent);
+    const items = Array.isArray(body.items)
+      ? body.items.filter((item) => item && typeof item === "object").slice(0, 500)
+      : [];
 
     if (!orderId || !dealerId || grossAmount === undefined || discountAmount === undefined || netPayableAmount === undefined) {
       return NextResponse.json(
@@ -102,6 +143,8 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const access = await resolveOrderAccess(orderId, dealerId);
+    if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 404 });
 
     const normalizedAdditionalType =
       additionalDiscountType
@@ -134,7 +177,7 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    const orderIdNumber = Number(orderId);
+    const orderIdNumber = Number(normalizeOrderLookupKey(orderId));
     const doc = {
       orderId,
       dealerId,
@@ -165,6 +208,7 @@ export async function POST(req: NextRequest) {
       slabDiscountAmount: normalizedSlabDiscountAmount,
       couponDiscountPercent,
       approvedDiscountPercent,
+      items,
       reason: safeText(body.reason, 200) || getReadableAdditionalDiscountText({
         additionalDiscountType: normalizedAdditionalType,
         slabDiscountPercent,
@@ -187,8 +231,8 @@ export async function POST(req: NextRequest) {
 
     const saved = await collection.findOne({ orderId, dealerId });
     return NextResponse.json({ success: true, data: toDoc(saved!) }, { status: 201 });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[POST /api/order-summary-overrides]", e);
-    return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+    return NextResponse.json({ success: false, message: errorMessage(e) }, { status: 500 });
   }
 }

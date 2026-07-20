@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import catalogueProducts from "../../../../public/data/omsons_products_from_excel_with_images.json";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { findOrderOverlay } from "@/lib/orderOverlays";
 import type { OrderDispatchRecord } from "@/lib/orderDispatch";
+import { loadOrderHeaders } from "@/lib/orderHeaders";
 import {
   aggregatePendingProducts,
   buildPendingProductDrilldown,
@@ -11,6 +13,7 @@ import {
   filterPendingOrdersByRoleScope,
   filterPendingProductLines,
   filterPendingProducts,
+  getPendingProductsCacheVersion,
   isEligibleOrderForPendingProducts,
   paginatePendingProducts,
   sortPendingProducts,
@@ -38,11 +41,14 @@ type PendingProductsActor = {
 
 type CachedOrderItems = {
   cachedAt: number;
+  cacheVersion: number;
   items: PendingProductsItemRow[];
 };
 
 type CachedBaseScope = {
   cachedAt: number;
+  cacheVersion: number;
+  refreshToken: string;
   lines: ReturnType<typeof buildPendingProductLines>;
   warnings: string[];
 };
@@ -142,22 +148,22 @@ async function fetchPaginatedRows<T>(urlBuilder: (page: number) => string): Prom
   return rows;
 }
 
-async function fetchRoleScopedOrders(actor: PendingProductsActor): Promise<PendingProductsOrderRow[]> {
-  if (actor.role === "admin") {
-    return fetchPaginatedRows<PendingProductsOrderRow>(
-      (page) => `${BACKEND_URL}/orderpegination?page=${page}&limit=${PAGINATION_LIMIT}&search=`
-    );
-  }
-
-  if (actor.role === "staff") {
-    return fetchPaginatedRows<PendingProductsOrderRow>(
-      (page) => `${BACKEND_URL}/staffOrderrPagination?page=${page}&limit=${PAGINATION_LIMIT}&search=&id=${encodeURIComponent(actor.actorId)}`
-    );
-  }
-
-  return fetchPaginatedRows<PendingProductsOrderRow>(
-    (page) => `${BACKEND_URL}/orderhispegination?page=${page}&limit=${PAGINATION_LIMIT}&search=&id=${encodeURIComponent(actor.actorId)}`
-  );
+async function fetchRoleScopedOrders(
+  actor: PendingProductsActor,
+  assignedDealerIds: string[],
+  _forceRefresh: boolean,
+): Promise<PendingProductsOrderRow[]> {
+  const source = actor.role === "admin"
+    ? "orderpegination"
+    : actor.role === "staff"
+      ? "staffOrderrPagination"
+      : "orderhispegination";
+  const loaded = await loadOrderHeaders({
+    source,
+    actor: { role: actor.role, actorId: actor.actorId },
+    assignedDealerIds,
+  });
+  return loaded.rows as PendingProductsOrderRow[];
 }
 
 async function fetchDealerDirectory(actor: PendingProductsActor): Promise<PendingDealerDirectoryRow[]> {
@@ -261,15 +267,23 @@ function normalizeItemsFromPayload(orderId: string, payload: unknown): PendingPr
   return [];
 }
 
-async function fetchOrderItems(orderId: string): Promise<PendingProductsItemRow[]> {
-  const cached = orderItemCache.get(orderId);
-  if (cached && Date.now() - cached.cachedAt < ORDER_ITEM_CACHE_TTL_MS) {
+async function fetchOrderItems(orderId: string, actorCacheKey: string): Promise<PendingProductsItemRow[]> {
+  const cacheKey = `${actorCacheKey}:${orderId}`;
+  const cached = orderItemCache.get(cacheKey);
+  const cacheVersion = getPendingProductsCacheVersion();
+  if (cached && cached.cacheVersion === cacheVersion && Date.now() - cached.cachedAt < ORDER_ITEM_CACHE_TTL_MS) {
     return cached.items;
   }
 
   const payload = await fetchJson<{ data?: unknown }>(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(orderId)}`);
-  const items = normalizeItemsFromPayload(orderId, payload);
-  orderItemCache.set(orderId, { cachedAt: Date.now(), items });
+  const overlay = await findOrderOverlay(orderId).catch(() => null);
+  const latestEdit = overlay?.status !== "cancelled" && Array.isArray(overlay?.edits)
+    ? overlay.edits[overlay.edits.length - 1]
+    : null;
+  const items = latestEdit?.effectiveItems?.length
+    ? normalizeItemsFromPayload(orderId, { data: latestEdit.effectiveItems })
+    : normalizeItemsFromPayload(orderId, payload);
+  orderItemCache.set(cacheKey, { cachedAt: Date.now(), cacheVersion, items });
   return items;
 }
 
@@ -318,32 +332,38 @@ async function fetchDispatchRecordsByOrderIds(orderIds: string[]) {
   }, {});
 }
 
-async function loadBaseScope(actor: PendingProductsActor, forceRefresh: boolean) {
-  const actorCacheKey = `${actor.role}:${actor.actorId || "admin"}`;
+async function loadBaseScope(actor: PendingProductsActor, refreshToken: string) {
+  const actorCacheKey = `all-orders-v1:${actor.role}:${actor.actorId || "admin"}`;
   const cached = baseScopeCache.get(actorCacheKey);
-  if (!forceRefresh && cached && Date.now() - cached.cachedAt < BASE_SCOPE_CACHE_TTL_MS) {
+  const cacheVersion = getPendingProductsCacheVersion();
+  const forceRefresh = Boolean(refreshToken) && cached?.refreshToken !== refreshToken;
+  if (!forceRefresh && cached && cached.cacheVersion === cacheVersion && Date.now() - cached.cachedAt < BASE_SCOPE_CACHE_TTL_MS) {
     return cached;
   }
 
   const warnings: string[] = [];
-  const [orders, dealerDirectoryResult] = await Promise.all([
-    fetchRoleScopedOrders(actor),
-    fetchDealerDirectory(actor).then(
-      (rows) => ({ ok: true as const, rows }),
-      () => ({ ok: false as const, rows: [] as PendingDealerDirectoryRow[] })
-    ),
-  ]);
+  const dealerDirectoryResult = await fetchDealerDirectory(actor).then(
+    (rows) => ({ ok: true as const, rows }),
+    () => ({ ok: false as const, rows: [] as PendingDealerDirectoryRow[] }),
+  );
 
   const dealerDirectoryRows = dealerDirectoryResult.rows;
   if (!dealerDirectoryResult.ok && actor.role !== "dealer") {
-    warnings.push("Dealer assignment metadata is temporarily unavailable. Pending quantities remain accurate.");
+    warnings.push(actor.role === "staff"
+      ? "Dealer assignment metadata is temporarily unavailable, so no staff order data is shown."
+      : "Dealer metadata is temporarily unavailable. Pending quantities remain accurate.");
   }
+
+  const assignedDealerIds = dealerDirectoryRows
+    .map((row) => safeText(row.Dealer_Id, 120))
+    .filter(Boolean);
+  const orders = await fetchRoleScopedOrders(actor, assignedDealerIds, forceRefresh);
 
   const scopedOrders = filterPendingOrdersByRoleScope({
     role: actor.role,
     actorId: actor.actorId,
     orders,
-    assignedDealerIds: dealerDirectoryRows.map((row) => row.Dealer_Id ?? ""),
+    assignedDealerIds,
   }).filter(isEligibleOrderForPendingProducts);
 
   const orderIds = scopedOrders
@@ -353,7 +373,7 @@ async function loadBaseScope(actor: PendingProductsActor, forceRefresh: boolean)
   const orderItemsByOrderId: Record<string, PendingProductsItemRow[]> = {};
   const orderItems = await mapWithConcurrencySettled(orderIds, ORDER_ITEM_CONCURRENCY, async (orderId) => ({
     orderId,
-    items: await fetchOrderItems(orderId),
+    items: await fetchOrderItems(orderId, actorCacheKey),
   }));
 
   let failedOrderDetailCount = 0;
@@ -394,6 +414,8 @@ async function loadBaseScope(actor: PendingProductsActor, forceRefresh: boolean)
 
   const cachedScope = {
     cachedAt: Date.now(),
+    cacheVersion,
+    refreshToken,
     lines,
     warnings,
   };
@@ -423,10 +445,10 @@ export async function GET(req: NextRequest) {
   const productKey = safeText(req.nextUrl.searchParams.get("productKey"), 260);
   const page = safeInteger(req.nextUrl.searchParams.get("page"), 1);
   const pageSize = safeInteger(req.nextUrl.searchParams.get("pageSize"), 20);
-  const forceRefresh = safeText(req.nextUrl.searchParams.get("refreshToken"), 40) !== "";
+  const refreshToken = safeText(req.nextUrl.searchParams.get("refreshToken"), 40);
 
   try {
-    const baseScope = await loadBaseScope(actor, forceRefresh);
+    const baseScope = await loadBaseScope(actor, refreshToken);
     const scopedLines = filterPendingProductLines(baseScope.lines, { dealerId, assignedStaffId });
     const scopeSummary = buildPendingProductsSummaryFromLines(scopedLines);
     const filterOptions = buildPendingProductFilterOptions(scopedLines);

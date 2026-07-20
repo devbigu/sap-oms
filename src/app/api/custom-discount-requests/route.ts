@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 import {
   buildDraftApprovalState,
   buildOrderApprovalSnapshot,
@@ -73,7 +74,13 @@ export async function GET(req: NextRequest) {
       .limit(limit)
       .toArray();
 
-    return NextResponse.json({ success: true, data: docs.map(toDoc) });
+    const visibleDocs = (await Promise.all(docs.map(async (doc) => {
+      const linkedOrderId = safeText(doc.orderId || doc.order_id, 120);
+      if (!linkedOrderId) return doc;
+      const access = await resolveOrderAccess(linkedOrderId, doc.dealerId).catch(() => ({ visible: false }));
+      return access.visible ? doc : null;
+    }))).filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+    return NextResponse.json({ success: true, data: visibleDocs.map(toDoc) });
   } catch (error: unknown) {
     console.error("custom-discount-requests GET failed", error);
     const status = isMongoDependencyError(error) ? 503 : 500;

@@ -8,6 +8,8 @@ import { exportOrdersToSupabase, downloadPDFDirectly } from "@/lib/Exporttopdf";
 import { InvoiceModal } from "@/components/InvoiceModel";
 import { downloadOrderInvoice, uploadOrderInvoiceToSupabase, generateOrderInvoicePDF } from "@/lib/invoicegenerator";
 import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from "@/lib/orderAmounts";
+import { useAuthSession } from "@/hooks/useAuthSession";
+import type { AppRole } from "@/lib/roleAccess";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Order = {
@@ -25,6 +27,7 @@ type Order = {
   remark?: string;
   remarks?: string;
   reason?: string;
+  order_dealer?: string | number;
 };
 type ApiResponse = { msg: string; count: number; status: boolean; data: Order[] };
 type OrderNoteOverlay = {
@@ -44,7 +47,8 @@ type OrderSummaryOverride = {
   order_net_amount?: number | string;
 };
 
-const PAGE_SIZE = 10;
+const ORDER_PAGE_SIZE_OPTIONS = [10, 20, 30, 40] as const;
+const DEFAULT_PAGE_SIZE = 10;
 const BACKEND = "https://mirisoft.co.in/sas/dealerapi/api";
 
 type PhpExchangeLog = {
@@ -92,12 +96,6 @@ function logPhpExchange(label: string, details: PhpExchangeLog) {
   console.groupEnd();
 }
 
-const getDealerId = () => {
-  if (typeof window === "undefined") return "225";
-  try { return JSON.parse(localStorage.getItem("UserData") ?? "{}")?.Dealer_Id ?? "225"; }
-  catch { return "225"; }
-};
-
 function formatMoney(amount: number) {
   return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
@@ -110,8 +108,13 @@ function extractOrderNote(order: Order, overlayNote?: string) {
   return remarks.match(/Order note:\s*([^|]+)/i)?.[1]?.trim() || "";
 }
 
-async function fetchOrders(page: number, search: string, id: string): Promise<ApiResponse> {
-  const url = `${BACKEND}/orderhispegination?page=${page}&search=${search}&id=${id}`;
+async function fetchOrders(page: number, pageSize: number, search: string, role: AppRole, actorId: string): Promise<ApiResponse> {
+  const source = role === "dealer"
+    ? "orderhispegination"
+    : role === "staff"
+      ? "staffOrderrPagination"
+      : "orderpegination";
+  const url = `/api/orders-data?source=${source}&role=${encodeURIComponent(role)}&page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}${actorId ? `&id=${encodeURIComponent(actorId)}` : ""}`;
   const r = await fetch(url);
 
   if (!r.ok) {
@@ -119,7 +122,7 @@ async function fetchOrders(page: number, search: string, id: string): Promise<Ap
     logPhpExchange("orderhispegination", {
       method: "GET",
       url,
-      request: { page, search, id },
+      request: { page, pageSize, search, role, actorId },
       error: { status: r.status, statusText: r.statusText, response: errorBody },
     });
     throw new Error("Failed");
@@ -129,7 +132,7 @@ async function fetchOrders(page: number, search: string, id: string): Promise<Ap
   logPhpExchange("orderhispegination", {
     method: "GET",
     url,
-    request: { page, search, id },
+    request: { page, pageSize, search, role, actorId },
     response: rawData,
   });
 
@@ -169,7 +172,7 @@ function SkeletonRow() {
 }
 
 // ─── Per-row Invoice Button — always visible ──────────────────────────────────
-function InvoiceRowButton({ order }: { order: Order }) {
+function InvoiceRowButton({ order, role, actorId }: { order: Order; role: AppRole | null; actorId: string }) {
   const [loading,  setLoading ] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [toast,    setToast   ] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -181,7 +184,7 @@ function InvoiceRowButton({ order }: { order: Order }) {
 
   const handleDownload = async () => {
     setLoading(true); setShowMenu(false);
-    const res = await downloadOrderInvoice(order);
+    const res = await downloadOrderInvoice(order, { normalizedRole: role, actorId });
     setLoading(false);
     showToast(res.success ? "success" : "error", res.success ? "PDF downloaded" : (res.error || "Download failed"));
   };
@@ -189,8 +192,9 @@ function InvoiceRowButton({ order }: { order: Order }) {
   const handleUpload = async () => {
     setLoading(true); setShowMenu(false);
     try {
-      const blob = await generateOrderInvoicePDF(order);
-      const res  = await uploadOrderInvoiceToSupabase(blob, order);
+      const options = { normalizedRole: role, actorId };
+      const blob = await generateOrderInvoicePDF(order, options);
+      const res  = await uploadOrderInvoiceToSupabase(blob, order, options);
       showToast(res.success ? "success" : "error", res.success ? "Invoice saved to cloud" : (res.error || "Upload failed"));
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Failed";
@@ -407,30 +411,42 @@ function DeleteModal({ orderId, onConfirm, onClose }: { orderId: string; onConfi
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function OrderHistoryPage() {
   const router = useRouter();
+  const auth = useAuthSession();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [dealerId, setDealerId] = useState(() => getDealerId());
   const [year] = useState(new Date().getFullYear());
   const [deleteOrderId, setDeleteOrderId] = useState<string | null>(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [orderNotes, setOrderNotes] = useState<Record<string, OrderNoteOverlay>>({});
   const [summaryOverrides, setSummaryOverrides] = useState<Record<string, OrderSummaryOverride>>({});
 
-  useEffect(() => { setDealerId(getDealerId()); }, []);
+  const actorRole = !auth.loading && auth.session.status === "authenticated"
+    ? auth.session.role
+    : null;
+  const actorId = !auth.loading && auth.session.status === "authenticated"
+    ? actorRole === "dealer"
+      ? String(auth.session.user.Dealer_Id ?? "").trim()
+      : actorRole === "staff"
+        ? String(auth.session.user.staff_id ?? "").trim()
+        : String(auth.session.user.id ?? auth.session.user.admin_id ?? auth.session.user.Admin_Id ?? "").trim()
+    : "";
+  const dealerId = actorRole === "dealer" ? actorId : "";
+  const actorReady = actorRole === "admin" || actorRole === "accountant" || Boolean(actorId);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ["orders", page, query, dealerId],
-    queryFn: () => fetchOrders(page, query, dealerId),
+    queryKey: ["orders", actorRole, actorId, page, pageSize, query],
+    queryFn: () => fetchOrders(page, pageSize, query, actorRole as AppRole, actorId),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
-    enabled: !!dealerId,
+    enabled: !auth.loading && auth.session.status === "authenticated" && actorReady,
   });
 
   const orders = data?.data ?? [];
   const ordersForExport = orders.map(order => withDisplayOrderAmounts(order, summaryOverrides[order.order_id]));
   const totalCount = data?.count ?? 0;
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const totalPages = Math.ceil(totalCount / pageSize);
   const orderIdsKey = orders.map((o) => (o as any).order_id ?? (o as any).orderId ?? "").filter(Boolean).join(",");
 
   useEffect(() => {
@@ -615,7 +631,7 @@ export default function OrderHistoryPage() {
                           return (
                             <tr key={oid || idx} className={`hover:bg-blue-50/30 transition-colors ${isDeleted ? "opacity-60" : ""}`}>
                               <td className="px-4 py-3.5 text-gray-700 font-medium">
-                                {String((page - 1) * PAGE_SIZE + idx + 1).padStart(2, "0")}
+                                {String((page - 1) * pageSize + idx + 1).padStart(2, "0")}
                               </td>
                               <td className="px-4 py-3.5">
                                 <div className="flex items-center gap-2">
@@ -676,7 +692,7 @@ export default function OrderHistoryPage() {
                                   </button>
 
                                   {/* Invoice button — always present */}
-                                  <InvoiceRowButton order={displayOrder} />
+                                  <InvoiceRowButton order={displayOrder} role={actorRole} actorId={actorId} />
 
                                   {!isDeleted && (
                                     <button
@@ -704,9 +720,24 @@ export default function OrderHistoryPage() {
 
             {!isLoading && !isError && totalPages > 1 && (
               <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50">
-                <p className="text-[13px] text-gray-700 font-medium">
-                  Page {page} of {totalPages} · <span className="text-gray-600">{totalCount} orders</span>
-                </p>
+                <div className="flex items-center gap-4 flex-wrap">
+                  <p className="text-[13px] text-gray-700 font-medium">
+                    Page {page} of {totalPages} · <span className="text-gray-600">{totalCount} orders</span>
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold text-gray-500">Show</span>
+                    {ORDER_PAGE_SIZE_OPTIONS.map(size => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => { setPageSize(size); setPage(1); }}
+                        className={`h-8 min-w-9 px-2.5 rounded-lg border text-[12px] font-semibold transition-all ${pageSize === size ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"}`}
+                      >
+                        {size}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="flex items-center gap-1">
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
                     className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-all font-medium">‹</button>

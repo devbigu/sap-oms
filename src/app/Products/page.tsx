@@ -3,7 +3,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import axios from 'axios';
 import { Suspense } from 'react';
 import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from '@/lib/categories';
 import {
@@ -11,6 +10,7 @@ import {
   groupProductsBySection,
   matchesCatalogueQuery,
 } from '@/lib/catalogue';
+import { loadCatalogueProducts } from '@/lib/catalogueClient';
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
@@ -92,7 +92,6 @@ const PAGE_SIZE = 24;
 // ─────────────────────────────────────────────────────────────
 function ProductCard({ product }: { product: Product }) {
   const img = getProductImage(product);
-  console.log(img);
   const { regular, sale } = getLowestPrice(product);
   const displayPrice = sale ?? regular;
   const packSize = displayPrice !== null ? getFirstPackSize(product) : 1;
@@ -264,8 +263,8 @@ function ProductsContent() {
   }, [q, category]);
 
   useEffect(() => {
-    axios.get("/data/omsons_products_from_excel_with_images.json")
-      .then(res => { setAllData(res.data); setLoading(false); })
+    loadCatalogueProducts()
+      .then((data) => { setAllData(data as Product[]); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
@@ -429,7 +428,7 @@ function ProductsContent() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-                    {section.products.map(p => <ProductCard key={p.sku} product={p} />)}
+                    {section.products.map(p => <ProductCard key={`${section.section}:${p.id}`} product={p} />)}
                   </div>
                 </section>
               ))}

@@ -15,6 +15,7 @@
 
 # Markdown files
 *.md
+!pre-prd.md
 
 # Log files
 *.log

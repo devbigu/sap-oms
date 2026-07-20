@@ -163,6 +163,28 @@ function payloadAmount(amount: number): string {
   return String(Math.round((amount + Number.EPSILON) * 100) / 100);
 }
 
+const ORDER_DETAILS_FALLBACK_STORAGE_KEY = "omsons.orderDetailsFallback.v1";
+
+function saveLocalOrderDetailsFallback(orderId: string, fallback: Record<string, unknown>) {
+  if (typeof window === "undefined" || !orderId) return;
+  try {
+    const raw = localStorage.getItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const records = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    localStorage.setItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY, JSON.stringify({
+      ...records,
+      [orderId]: {
+        ...fallback,
+        orderId,
+        order_id: orderId,
+        savedAt: new Date().toISOString(),
+      },
+    }));
+  } catch {}
+}
+
 function roundRupees(amount: number): number {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   return Math.round((amount + Number.EPSILON) * 100) / 100;
@@ -594,7 +616,12 @@ function AddOrderPageInner() {
     if (seededRef.current) return;
 
     setReorderLoading(true);
-    fetch(`/api/custom-discount-requests/${encodeURIComponent(reorderIdParam)}`)
+    fetch(`/api/custom-discount-requests/${encodeURIComponent(reorderIdParam)}`, {
+      headers: {
+        "x-omsons-actor-role": "dealer",
+        "x-omsons-actor-id": String(user.Dealer_Id),
+      },
+    })
       .then((r) => {
         if (r.status === 404) throw new Error("NOT_FOUND");
         if (!r.ok) throw new Error("NETWORK");
@@ -701,7 +728,12 @@ function AddOrderPageInner() {
         let request: CustomDiscountRequest | null = null;
 
         if (approvalRequestId) {
-          const res = await fetch(`/api/custom-discount-requests/${encodeURIComponent(approvalRequestId)}`);
+          const res = await fetch(`/api/custom-discount-requests/${encodeURIComponent(approvalRequestId)}`, {
+            headers: {
+              "x-omsons-actor-role": "dealer",
+              "x-omsons-actor-id": String(user.Dealer_Id),
+            },
+          });
           if (res.ok) {
             const json = await res.json();
             if (json.success) request = json.data as CustomDiscountRequest;
@@ -1468,7 +1500,7 @@ function AddOrderPageInner() {
   const getLatestOrderIdForDealer = async () => {
     if (!user?.Dealer_Id) return "";
     try {
-      const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+      const res = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
       const json = await res.json();
       return String(json?.data?.[0]?.order_id ?? "").trim();
     } catch {
@@ -1483,7 +1515,7 @@ function AddOrderPageInner() {
     setExpectedOrderLoading(true);
     const loadLatestOrderId = async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/orderhispegination?page=1&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
+        const res = await fetch(`/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(user.Dealer_Id)}`);
         const json = await res.json();
         return String(json?.data?.[0]?.order_id ?? "").trim();
       } catch {
@@ -1519,7 +1551,7 @@ function AddOrderPageInner() {
     }).catch(() => { });
   };
 
-  const saveOrderSummaryOverride = async (orderId: string) => {
+  const saveOrderSummaryOverride = async (orderId: string, items: Array<Record<string, unknown>>) => {
     if (!orderId || !user?.Dealer_Id) return;
 
     const approvedDiscountPercent = hasApprovedCustomDiscount
@@ -1569,6 +1601,7 @@ function AddOrderPageInner() {
         slabDiscountAmount: payloadAmount(discountPayload.slabDiscountAmount),
         couponDiscountPercent: discountPayload.couponDiscountPercent,
         approvedDiscountPercent,
+        items,
         reason: readableReason,
       }),
     }).catch((err) => {
@@ -1624,6 +1657,8 @@ function AddOrderPageInner() {
       const rowDiscountAmount = rowSubtotal * (rowDiscountPercent / 100);
       return {
         productname: r.productname,
+        productName: r.displayName || r.productname,
+        catNo: r.variantCode || r.productname,
         // PHP calculates amount as producQuanity * price, so send pieces here.
         producQuanity: String(totalPieces),
         quantityPacks: String(quantityPacks),
@@ -1705,9 +1740,43 @@ function AddOrderPageInner() {
         response: data,
       });
       const placedOrderId = extractOrderIdFromResponse(data) || await getLatestOrderIdForDealer();
+      saveLocalOrderDetailsFallback(placedOrderId, {
+        dealerId: user.Dealer_Id,
+        dealerName: user.Dealer_Name,
+        order_dealer: user.Dealer_Id,
+        Dealer_Name: user.Dealer_Name,
+        grossAmount: payloadAmount(discountPayload.subtotal),
+        order_amount: payloadAmount(discountPayload.subtotal),
+        discountAmount: payloadAmount(discountPayload.discountAmount),
+        order_discount_amount: payloadAmount(discountPayload.discountAmount),
+        netPayableAmount: payloadAmount(discountPayload.finalPayableAmount),
+        order_net_amount: payloadAmount(discountPayload.finalPayableAmount),
+        discountPercent: discountPayload.discountPercent,
+        allocatedDiscountPercent: discountPayload.allocatedDiscountPercent,
+        baseDiscountPercent: discountPayload.baseDiscountPercent,
+        baseDiscountAmount: payloadAmount(discountPayload.baseDiscountAmount),
+        postBaseAmount: payloadAmount(discountPayload.postBaseAmount),
+        additionalDiscountType: discountPayload.additionalDiscountType,
+        additionalDiscountAmount: payloadAmount(discountPayload.additionalDiscountAmount),
+        customDiscountAmount: payloadAmount(discountPayload.customDiscountAmount),
+        slabDiscountPercent: discountPayload.slabDiscountPercent,
+        slabDiscountAmount: payloadAmount(discountPayload.slabDiscountAmount),
+        couponDiscountPercent: discountPayload.couponDiscountPercent,
+        accept_order: "0",
+        del_status: "0",
+        staffid: user.assignedstaff,
+        assignedstaff: user.assignedstaff,
+        items: payload.map((item) => ({
+          ...item,
+          productId: item.catNo,
+          productName: item.productName,
+          discountAmount: item.discount,
+          finalPrice: item.afterDiscountPrice,
+        })),
+      });
       await Promise.allSettled([
         saveOrderNoteForHistory(placedOrderId),
-        saveOrderSummaryOverride(placedOrderId),
+        saveOrderSummaryOverride(placedOrderId, payload),
         linkCustomDiscountRequestsToOrder(customDiscountSources, placedOrderId),
         verifySubmittedProductNotes(placedOrderId),
       ]);

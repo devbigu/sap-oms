@@ -121,18 +121,25 @@ function emptyText(role: Role) {
 }
 
 export default function PendingProductsPreview({ role, moreHref }: PendingProductsPreviewProps) {
-  const [initialState] = useState(() => {
-    const resolvedActor = resolveDashboardActor(role);
-    return {
-      actor: resolvedActor,
-      loading: !!resolvedActor && resolvedActor.role === role,
-    };
-  });
-  const actor = initialState.actor;
+  const [actor, setActor] = useState<DashboardActor | null>(() => resolveDashboardActor(role));
   const [payload, setPayload] = useState<PendingProductsPayload | null>(null);
-  const [loading, setLoading] = useState(initialState.loading);
+  const [loading, setLoading] = useState(() => Boolean(resolveDashboardActor(role)));
   const [error, setError] = useState("");
   const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    const refreshActor = () => {
+      setActor(resolveDashboardActor(role));
+      setPayload(null);
+      setError("");
+    };
+    window.addEventListener("storage", refreshActor);
+    window.addEventListener("omsons-auth-changed", refreshActor);
+    return () => {
+      window.removeEventListener("storage", refreshActor);
+      window.removeEventListener("omsons-auth-changed", refreshActor);
+    };
+  }, [role]);
 
   useEffect(() => {
     const handleDispatchUpdated = () => setRefreshToken((current) => current + 1);

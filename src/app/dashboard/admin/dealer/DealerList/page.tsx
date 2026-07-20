@@ -9,6 +9,7 @@ import { confirmAlert } from 'react-confirm-alert'
 import {
   dealerStatusBadge,
   fetchDealerStatusOverrides,
+  isActiveDealerStatus,
   normalizeDealerStatus,
   saveDealerStatus,
   saveDealerStatuses,
@@ -84,8 +85,27 @@ function getRole(): AppRole {
   return "admin"
 }
 
+function getStaffId(): string {
+  if (typeof window === "undefined") return ""
+
+  for (const key of ["staffData", "UserData"]) {
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) continue
+      const value = JSON.parse(raw) as { staff_id?: unknown }
+      const staffId = String(value.staff_id ?? "").trim()
+      if (staffId) return staffId
+    } catch {
+      // Try the next legacy session key.
+    }
+  }
+
+  return ""
+}
+
 export default function DealerListPage() {
   const [role]          = useState<AppRole>(() => getRole())
+  const [staffId]       = useState(() => getStaffId())
   const [page,          setPage]          = useState(1)
   const [search,        setSearch]        = useState("")
   const [searchInput,   setSearchInput]   = useState("")
@@ -122,10 +142,14 @@ export default function DealerListPage() {
   }, [])
 
   const { data: response, isLoading, isError, refetch } = useQuery<DealerResponse>({
-    queryKey: ['dealers', page, search],
+    queryKey: ['dealers', role, staffId, page, search],
     queryFn: async () => {
+      if (role === "staff") {
+        return fetchJson<DealerResponse>(`${BACKEND_URL}/staffDealers?id=${encodeURIComponent(staffId)}`)
+      }
       return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page}&search=${search}`)
     },
+    enabled: role !== "staff" || Boolean(staffId),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
   })
@@ -152,31 +176,48 @@ export default function DealerListPage() {
   }, [statusResponse, statusOverrides])
 
   const data: Dealer[] = useMemo(() => {
-    return (response?.data || []).map((dealer) => ({
+    const merged = (response?.data || []).map((dealer) => ({
       ...dealer,
       status: statusMap.get(String(dealer.Dealer_Id)) ?? normalizeDealerStatus(dealer.status),
     }))
-  }, [response?.data, statusMap])
+
+    if (role !== "staff") return merged
+
+    const normalizedSearch = search.trim().toLowerCase()
+    return merged
+      .filter((dealer) => isActiveDealerStatus(dealer.status))
+      .filter((dealer) => !normalizedSearch || [
+        dealer.Dealer_Name,
+        dealer.Dealer_Dealercode,
+        dealer.Dealer_City,
+        dealer.Dealer_Email,
+        dealer.Dealer_Number,
+      ].some((value) => String(value ?? "").toLowerCase().includes(normalizedSearch)))
+  }, [response?.data, role, search, statusMap])
 
   const total =
-    response
-      ? getDealerResponseTotal(response, (page - 1) * ITEMS_PER_PAGE + data.length)
-      : (page - 1) * ITEMS_PER_PAGE + data.length
+    role === "staff"
+      ? data.length
+      : response
+        ? getDealerResponseTotal(response, (page - 1) * ITEMS_PER_PAGE + data.length)
+        : (page - 1) * ITEMS_PER_PAGE + data.length
 
-  const totalPages =
-    Number(response?.last_page) ||
-    Math.ceil(total / ITEMS_PER_PAGE) ||
-    (data.length < ITEMS_PER_PAGE ? page : page + 1)
+  const totalPages = role === "staff"
+    ? 1
+    : Number(response?.last_page) ||
+      Math.ceil(total / ITEMS_PER_PAGE) ||
+      (data.length < ITEMS_PER_PAGE ? page : page + 1)
 
   // Prefetch next page
   useEffect(() => {
+    if (role === "staff") return
     queryClient.prefetchQuery({
-      queryKey: ['dealers', page + 1, search],
+      queryKey: ['dealers', role, staffId, page + 1, search],
       queryFn: async () => {
         return fetchJson<DealerResponse>(`${BACKEND_URL}/dealerpegination?page=${page + 1}&search=${search}`)
       },
     })
-  }, [page, search, queryClient])
+  }, [page, queryClient, role, search])
 
   // Debounced search
   useEffect(() => {
@@ -477,8 +518,8 @@ export default function DealerListPage() {
   }
 
   const canManageDealers = role === "admin" || role === "staff"
-  const startIndex = (page - 1) * ITEMS_PER_PAGE + 1
-  const endIndex   = Math.min(page * ITEMS_PER_PAGE, total)
+  const startIndex = role === "staff" ? 1 : (page - 1) * ITEMS_PER_PAGE + 1
+  const endIndex   = role === "staff" ? data.length : Math.min(page * ITEMS_PER_PAGE, total)
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -534,7 +575,9 @@ export default function DealerListPage() {
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Dealer List</h1>
-              <p className="text-sm text-gray-500 mt-1">Manage all registered dealers</p>
+              <p className="text-sm text-gray-500 mt-1">
+                {role === "staff" ? "View your active assigned dealers" : "Manage all registered dealers"}
+              </p>
             </div>
           </div>
 

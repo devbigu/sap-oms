@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
+import { resolveOrderAccess } from "@/lib/orderAccess";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -45,6 +46,11 @@ export async function POST(
     }
     if (String(existing.dealerId) !== dealerId) {
       return NextResponse.json({ success: false, message: "Request belongs to another dealer" }, { status: 403 });
+    }
+    const sourceOrderId = safeText(existing.orderId || existing.order_id, 120);
+    if (sourceOrderId) {
+      const access = await resolveOrderAccess(sourceOrderId, dealerId);
+      if (!access.visible) return NextResponse.json({ success: false, message: access.reason }, { status: 409 });
     }
 
     const updated = await db.collection("custom_discount_requests").findOneAndUpdate(

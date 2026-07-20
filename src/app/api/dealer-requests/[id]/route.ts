@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { normalizeDealerFormSnapshot, validateDealerFormSnapshot } from "@/lib/dealerForm";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
+import { invalidateStaffAssignmentCache } from "@/lib/orderScopeServer";
 import {
   appendAuditEntry,
   buildDealerRequestAccessQuery,
@@ -292,6 +293,7 @@ export async function PATCH(
           return buildResponseError("Dealer request could not be finalized", 409);
         }
 
+        invalidateStaffAssignmentCache();
         return NextResponse.json({ success: true, data: toDealerRequestDetail(accepted) });
       } catch (error) {
         await collection.updateOne(

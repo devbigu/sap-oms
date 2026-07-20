@@ -400,7 +400,7 @@ function searchDashboardOrders(orders, query, options = {}) {
   const itemSummariesByOrderId = options.itemSummariesByOrderId || {};
   const results = [];
 
-  for (const order of Array.isArray(orders) ? orders : []) {
+  for (const order of orders) {
     const orderId = pickFirstString(order.order_id, order.orderId, order.id);
     if (!orderId) continue;
 

@@ -3,6 +3,19 @@ import { getSearchQueryInfo, normalizeCatalogueNumber } from "./productSearch.js
 
 export type PendingProductsRole = "admin" | "staff" | "dealer";
 
+const pendingProductsGlobal = globalThis as typeof globalThis & {
+  __pendingProductsCacheVersion?: number;
+};
+
+export function getPendingProductsCacheVersion() {
+  return pendingProductsGlobal.__pendingProductsCacheVersion ?? 0;
+}
+
+export function invalidatePendingProductsCache() {
+  pendingProductsGlobal.__pendingProductsCacheVersion = getPendingProductsCacheVersion() + 1;
+  return pendingProductsGlobal.__pendingProductsCacheVersion;
+}
+
 export type PendingProductsOrderRow = {
   order_id?: string | number;
   orderId?: string | number;
@@ -257,12 +270,13 @@ export function filterPendingOrdersByRoleScope(input: {
 }): PendingProductsOrderRow[] {
   const role = input.role;
   const actorId = safeText(input.actorId);
+  const scopedOrders = input.orders ?? [];
 
-  if (role === "admin") return input.orders ?? [];
+  if (role === "admin") return scopedOrders;
 
   if (role === "dealer") {
     if (!actorId) return [];
-    return (input.orders ?? []).filter((order) => resolvePendingOrderDealerId(order) === actorId);
+    return scopedOrders.filter((order) => resolvePendingOrderDealerId(order) === actorId);
   }
 
   const allowedDealerIds = new Set(
@@ -270,7 +284,7 @@ export function filterPendingOrdersByRoleScope(input: {
   );
   if (allowedDealerIds.size === 0) return [];
 
-  return (input.orders ?? []).filter((order) => allowedDealerIds.has(resolvePendingOrderDealerId(order)));
+  return scopedOrders.filter((order) => allowedDealerIds.has(resolvePendingOrderDealerId(order)));
 }
 
 function normalizeLookupEntry(raw: Record<string, unknown>, category: string, image: string, catalogueNumber: string): CatalogueLookupEntry {
