@@ -44,6 +44,29 @@ function rowsFrom(payload: unknown): Record<string, unknown>[] {
     : [];
 }
 
+function fallbackOrderFromDetailPayload(orderId: string, payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object") return null;
+  const data = (payload as { data?: unknown }).data;
+  const rows = Array.isArray(data)
+    ? data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object")
+    : [];
+  const first = rows[0];
+  if (!first) return null;
+
+  const resolvedOrderId = normalizeLookupOrderId(first.orderdata_orderid ?? first.order_id ?? orderId);
+  if (resolvedOrderId !== orderId) return null;
+
+  return {
+    order_id: resolvedOrderId,
+    order_dealer: first.orderdata_dealerid ?? first.order_dealer ?? first.Dealer_Id,
+    orderdata_dealerid: first.orderdata_dealerid,
+    Dealer_Id: first.Dealer_Id,
+    del_status: first.del_status,
+    order_date: first.orderdata_datetime,
+    orderdata_datetime: first.orderdata_datetime,
+  };
+}
+
 export function messageForReason(reason: OrderAccessReason) {
   switch (reason) {
     case "forbidden": return "This order is outside your assigned order scope.";
@@ -105,6 +128,32 @@ function applyActorAccess(order: Record<string, unknown> | null, options: OrderA
   return forbiddenResult();
 }
 
+function applyLegacyDealerAccess(order: Record<string, unknown> | null, dealerId: string): OrderAccess {
+  if (!order || !dealerId) return result(order);
+  return resolveOrderDealerId(order) === dealerId ? result(order) : result(null);
+}
+
+async function fetchFallbackOrderFromDetails(id: string): Promise<Record<string, unknown> | null> {
+  const response = await fetch(`${BACKEND_URL}/orderdatalist?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+  if (!response.ok) return null;
+  return fallbackOrderFromDetailPayload(id, await response.json());
+}
+
+async function fetchFallbackOrderFromHeaders(id: string, endpoint: string, legacyDealerId: string): Promise<Record<string, unknown> | null> {
+  const params = new URLSearchParams({ page: "1", limit: "200", search: "" });
+  if (legacyDealerId) params.set("id", legacyDealerId);
+
+  const response = await fetch(`${BACKEND_URL}/${endpoint}?${params.toString()}`, { cache: "no-store" });
+  if (!response.ok) return null;
+  const rows = rowsFrom(await response.json());
+  return rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null;
+}
+
+async function fetchFallbackOrder(id: string, endpoint: string, legacyDealerId: string): Promise<Record<string, unknown> | null> {
+  return await fetchFallbackOrderFromHeaders(id, endpoint, legacyDealerId).catch(() => null)
+    ?? await fetchFallbackOrderFromDetails(id).catch(() => null);
+}
+
 export async function resolveOrderAccess(orderId: unknown, dealerIdOrOptions?: unknown): Promise<OrderAccess> {
   const id = normalizeLookupOrderId(orderId);
   if (!id) return result(null);
@@ -116,12 +165,21 @@ export async function resolveOrderAccess(orderId: unknown, dealerIdOrOptions?: u
 
   try {
     const response = await fetch(`${BACKEND_URL}/${endpoint}?${params.toString()}`, { cache: "no-store" });
-    if (!response.ok) return unavailableResult();
+    if (!response.ok) {
+      const fallbackOrder = await fetchFallbackOrder(id, endpoint, legacyDealerId);
+      if (!fallbackOrder) return unavailableResult();
+      return options ? applyActorAccess(fallbackOrder, options) : applyLegacyDealerAccess(fallbackOrder, legacyDealerId);
+    }
     const rows = rowsFrom(await response.json());
     const order = rows.find((row) => normalizeLookupOrderId(row.order_id ?? row.orderId) === id) ?? null;
-    return applyActorAccess(order, options);
+    if (order) return applyActorAccess(order, options);
+
+    const fallbackOrder = await fetchFallbackOrder(id, endpoint, legacyDealerId);
+    return options ? applyActorAccess(fallbackOrder, options) : applyLegacyDealerAccess(fallbackOrder, legacyDealerId);
   } catch {
-    return unavailableResult();
+    const fallbackOrder = await fetchFallbackOrder(id, endpoint, legacyDealerId);
+    if (!fallbackOrder) return unavailableResult();
+    return options ? applyActorAccess(fallbackOrder, options) : applyLegacyDealerAccess(fallbackOrder, legacyDealerId);
   }
 }
 

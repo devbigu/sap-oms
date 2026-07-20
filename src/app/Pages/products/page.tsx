@@ -9,12 +9,14 @@ import { compactCategoryList, matchesCategory } from '@/lib/categories'
 import {
   getCatalogueProductDescriptor,
   getVariantSpecSummary,
-  matchesCatalogueQuery,
   stripHtml,
   type CatalogueProduct,
   type CatalogueVariant,
 } from '@/lib/catalogue'
 import { loadCatalogueProducts } from '@/lib/catalogueClient'
+import productSearch from '@/lib/productSearch.js'
+
+const { getSearchQueryInfo, normalizeCatalogueNumber, searchProducts } = productSearch
 
 type ProductData = {
   product_id: string
@@ -69,8 +71,12 @@ function getVariantPackSize(variant?: CatalogueVariant): string {
   return Number.isFinite(pack) && pack > 0 ? String(pack) : ""
 }
 
-function mapCatalogueProductToRows(product: CatalogueProduct): ProductData[] {
-  const variants = product.variants?.length ? product.variants : [undefined]
+function mapCatalogueProductToRows(product: CatalogueProduct, matchingVariants?: Array<CatalogueVariant | undefined>): ProductData[] {
+  const variants = matchingVariants?.length
+    ? matchingVariants
+    : product.variants?.length
+      ? product.variants
+      : [undefined]
   const productSku = firstNonEmpty(product.sku, product.id)
   const descriptor = getCatalogueProductDescriptor(product) || stripHtml(product.descriptionHtml)
   const productCategory = firstNonEmpty(product.category, product.categories?.[0], "Uncategorized")
@@ -102,13 +108,41 @@ function filterCatalogueProducts(
   search: string,
   selectedCategory: string
 ): ProductData[] {
-  return products
-    .filter((product) => matchesCatalogueQuery(product, search))
-    .filter((product) => {
+  const categoryMatches = (product: CatalogueProduct) => {
       if (selectedCategory === "all") return true
       return matchesCategory(compactCategoryList([product.category, ...(product.categories ?? [])]), selectedCategory)
+  }
+
+  if (!search.trim()) {
+    return products
+      .filter(categoryMatches)
+      .flatMap((product) => mapCatalogueProductToRows(product))
+  }
+
+  const queryInfo = getSearchQueryInfo(search)
+  const catalogueQuery = normalizeCatalogueNumber(queryInfo.normalizedQuery)
+
+  return (searchProducts(products, queryInfo.normalizedQuery) as Array<{
+    originalProduct: CatalogueProduct
+    matchedVariant?: CatalogueVariant | null
+    normalizedCatalogueNumber?: string
+  }>)
+    .filter((result) => categoryMatches(result.originalProduct))
+    .flatMap((result) => {
+      const variant = result.matchedVariant ?? undefined
+      const variantCatalogue = normalizeCatalogueNumber(variant?.sku ?? variant?.id ?? "")
+      const isVariantCatalogueMatch = Boolean(
+        variant &&
+        catalogueQuery &&
+        variantCatalogue &&
+        variantCatalogue.includes(catalogueQuery)
+      )
+
+      return mapCatalogueProductToRows(
+        result.originalProduct,
+        isVariantCatalogueMatch ? [variant] : undefined
+      )
     })
-    .flatMap(mapCatalogueProductToRows)
 }
 
 function normalizeCategory(value: unknown): string {

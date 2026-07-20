@@ -44,6 +44,22 @@ const products = [
     categories: ["Laboratory Instruments > Hotplate"],
     specsText: "240V heating mantle",
   },
+  {
+    id: "prod-3",
+    sku: "PIPETTE-ROOT",
+    name: "Measuring Pipette",
+    category: "Pipettes",
+    categories: ["Laboratory Glassware > Pipettes"],
+    variants: [
+      {
+        id: "58/8",
+        sku: "58/8",
+        name: "Measuring Pipette - 10 mL",
+        specs: { Capacity: "10 mL" },
+        specsText: "Capacity: 10 mL",
+      },
+    ],
+  },
 ];
 
 const orders = [
@@ -292,6 +308,18 @@ test("Exact catalogue number ranks correctly", () => {
 
   assert.equal(response.results[0].type, "product");
   assert.equal(response.results[0].catalogueNumber, "50/8");
+});
+
+test("Dashboard product search links variant catalogue numbers to product detail pages", () => {
+  const response = buildDashboardSearchResponse({
+    role: "admin",
+    query: "58/8",
+    products,
+  });
+
+  assert.equal(response.results[0].type, "product");
+  assert.equal(response.results[0].catalogueNumber, "58/8");
+  assert.equal(response.results[0].href, "/Products/58%2F8");
 });
 
 test("Product specification search works", () => {

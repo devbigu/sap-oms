@@ -3,7 +3,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import axios from 'axios';
 import { Suspense } from 'react';
 import { SIDEBAR_CATEGORIES, compactCategoryList, matchesCategory } from '@/lib/categories';
 import {
@@ -11,6 +10,7 @@ import {
   groupProductsBySection,
   matchesCatalogueQuery,
 } from '@/lib/catalogue';
+import { loadCatalogueProducts } from '@/lib/catalogueClient';
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
@@ -264,8 +264,8 @@ function ProductsContent() {
   }, [q, category]);
 
   useEffect(() => {
-    axios.get("/data/omsons_products_from_excel_with_images.json")
-      .then(res => { setAllData(res.data); setLoading(false); })
+    loadCatalogueProducts()
+      .then((data) => { setAllData(data as Product[]); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 

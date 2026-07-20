@@ -3,13 +3,13 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import axios from 'axios';
 import { useCartStore } from "@/Store/store";
 import {
   getCatalogueProductDescriptor,
   getCatalogueProductLabel,
   getCatalogueSection,
 } from '@/lib/catalogue';
+import { loadCatalogueProducts } from '@/lib/catalogueClient';
 
 // ─────────────────────────────────────────────────────────────
 // TYPES  (matches omsons_products_from_excel_with_images.json)
@@ -213,9 +213,9 @@ export default function ProductDetailsPage() {
 
   // Fetch data
   useEffect(() => {
-    axios.get("/data/omsons_products_from_excel_with_images.json")
-      .then(res => {
-        const data: Product[] = res.data;
+    loadCatalogueProducts()
+      .then((catalogueProducts) => {
+        const data = catalogueProducts as Product[];
         setAllProducts(data);
 
         // Match by product sku or by variant sku

@@ -59,6 +59,119 @@ test("upstream failure reports availability without a date message", async () =>
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("order detail fallback preserves Staff assignment access when order listing is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes("orderpegination")) {
+      return { ok: false, status: 500, json: async () => ({}) };
+    }
+    if (path.includes("orderdatalist")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            {
+              orderdata_orderid: "3860",
+              orderdata_dealerid: "89",
+              orderdata_datetime: "2026-07-18 23:38:37",
+            },
+          ],
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL ${path}`);
+  };
+
+  try {
+    const result = await access.resolveOrderAccess("3860", {
+      actor: { role: "staff", actorId: "24" },
+      assignedDealerIds: ["89"],
+    });
+
+    assert.equal(result.visible, true);
+    assert.equal(result.order.order_id, "3860");
+    assert.equal(result.order.order_dealer, "89");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unsearched order header fallback preserves Admin access when searched listing fails", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes("orderpegination") && path.includes("search=3862")) {
+      return { ok: false, status: 500, json: async () => ({}) };
+    }
+    if (path.includes("orderpegination") && path.includes("search=")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            {
+              order_id: "3862",
+              order_dealer: "225",
+              staffid: "53",
+              accept_order: "0",
+              del_status: "0",
+            },
+          ],
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL ${path}`);
+  };
+
+  try {
+    const result = await access.resolveOrderAccess("3862", {
+      actor: { role: "admin", actorId: "1" },
+      assignedDealerIds: [],
+    });
+
+    assert.equal(result.visible, true);
+    assert.equal(result.order.order_id, "3862");
+    assert.equal(result.order.order_dealer, "225");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("order detail fallback does not bypass legacy dealer scoped access", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes("orderhispegination")) {
+      return { ok: false, status: 500, json: async () => ({}) };
+    }
+    if (path.includes("orderdatalist")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            {
+              orderdata_orderid: "3860",
+              orderdata_dealerid: "89",
+            },
+          ],
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL ${path}`);
+  };
+
+  try {
+    const result = await access.resolveOrderAccess("3860", "90");
+    assert.equal(result.visible, false);
+    assert.equal(result.reason, "not_found");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Admin can access any existing order without assignedstaff checks", async () => {
   await withRows([{ order_id: "7001", order_dealer: "101", assignedstaff: "29" }], async (calls) => {
     const result = await access.resolveOrderAccess("7001", {

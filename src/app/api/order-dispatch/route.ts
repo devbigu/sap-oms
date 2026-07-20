@@ -6,12 +6,15 @@ import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
 import { findOrderOverlay } from "@/lib/orderOverlays";
 import {
+  BULK_DISPATCH_STATUS,
+  buildBulkDispatchPlan,
   buildDispatchIdentity,
   buildLegacyDispatchSeed,
   canUserEditDispatch,
   canUserViewDispatch,
   computeRemainingQuantity,
   DISPATCH_MUTATION_STATUSES,
+  mergeOrderItemsWithDispatchRecords,
   normalizeDispatchOrderItemId,
   normalizeDispatchRemark,
   normalizeDispatchStatus,
@@ -332,6 +335,15 @@ function hasLegacyDispatchData(item: PhpOrderItem) {
   return safeDispatchInteger(item.readyquantity) > 0 || normalizeDispatchStatus(item.orderdata_status) !== "pending";
 }
 
+function bulkUpdateId(idempotencyKey: string, line: {
+  orderItemId: string | null;
+  normalizedSku: string;
+  occurrence: number;
+}) {
+  const identity = line.orderItemId || `${line.normalizedSku}:${line.occurrence}`;
+  return `bulk:${idempotencyKey}:${identity}`.slice(0, 240);
+}
+
 async function importLegacyDispatchRecords(orderId: string, payload: PhpOrderPayload, fallback: {
   dealerId?: string;
   assignedStaffId?: string;
@@ -390,6 +402,235 @@ function authorizeEdit(actor: DispatchUserSession | null, context: {
   delStatus?: string;
 }) {
   return canUserEditDispatch(actor, context);
+}
+
+async function handleBulkDispatch(actor: DispatchUserSession, body: Record<string, unknown>) {
+  if (actor.role !== "staff") {
+    return NextResponse.json({ success: false, message: "Dispatch All is available only to assigned Staff" }, { status: 403 });
+  }
+
+  const orderId = safeText(body.orderId, 80);
+  const requestedDealerId = safeText(body.dealerId, 80);
+  const requestedAssignedStaffId = safeText(body.assignedStaffId, 80);
+  const requestedAcceptOrder = safeText(body.acceptOrder, 10);
+  const requestedDelStatus = safeText(body.delStatus, 10);
+  const idempotencyKey = safeText(body.idempotencyKey, 120);
+  const remark = normalizeDispatchRemark(body.remark, 500);
+
+  if (!orderId || isExpectedOrderNumber(orderId)) {
+    return NextResponse.json({ success: false, message: "A raw orderId is required" }, { status: 400 });
+  }
+  if (!idempotencyKey) {
+    return NextResponse.json({ success: false, message: "A stable idempotency key is required" }, { status: 400 });
+  }
+  if (!remark) {
+    return NextResponse.json({ success: false, message: "Operational remark is required" }, { status: 400 });
+  }
+  if (String(body.remark ?? "").trim().length > 500) {
+    return NextResponse.json({ success: false, message: "Operational remark must be at most 500 characters" }, { status: 400 });
+  }
+
+  const overlay = await findOrderOverlay(orderId).catch(() => null);
+  if (overlay?.status === "cancelled") {
+    return NextResponse.json({ success: false, message: "Cancelled orders cannot be dispatched" }, { status: 409 });
+  }
+  const activeAccess = await resolveOrderAccess(orderId, requestedDealerId);
+  if (!activeAccess.visible) return NextResponse.json({ success: false, message: activeAccess.reason }, { status: 409 });
+
+  const payload = await fetchPhpOrderPayload(orderId);
+  if (payload.items.length === 0) {
+    return NextResponse.json({ success: false, message: "Order not found" }, { status: 404 });
+  }
+
+  const detailContext = resolveOrderContext(payload.meta, payload.items[0] ?? null, {});
+  const headerContext = await fetchPhpOrderAccessContext(orderId, detailContext.dealerId).catch(() => null);
+  const context = buildResolvedAccessContext(
+    headerContext,
+    detailContext,
+    {
+      dealerId: requestedDealerId,
+      assignedStaffId: requestedAssignedStaffId,
+      acceptOrder: requestedAcceptOrder,
+      delStatus: requestedDelStatus,
+      orderStatus: "",
+    }
+  );
+
+  if (!authorizeEdit(actor, context)) {
+    return NextResponse.json({ success: false, message: "Unauthorized or unassigned dispatch update" }, { status: 403 });
+  }
+
+  const collection = await getCollection();
+  await importLegacyDispatchRecords(orderId, payload, context);
+
+  for (const item of payload.items) {
+    const orderedQuantity = safeDispatchInteger(item.orderdata_item_quantity);
+    if (orderedQuantity <= 0) continue;
+
+    const occurrence = resolveItemOccurrence(payload.items, item);
+    const baseDoc = buildLegacyDispatchSeed({
+      orderId,
+      orderItemId: item.orderdata_id,
+      sku: item.orderdata_cat_no,
+      occurrence,
+      dealerId: context.dealerId,
+      assignedStaffId: context.assignedStaffId || null,
+      orderedQuantity,
+      legacyReadyQuantity: safeDispatchInteger(item.readyquantity),
+      legacyStatus: item.orderdata_status,
+      now: new Date(),
+    });
+
+    try {
+      await collection.updateOne(
+        buildDispatchIdentity({
+          orderId,
+          orderItemId: item.orderdata_id,
+          sku: item.orderdata_cat_no,
+          occurrence,
+        }),
+        { $setOnInsert: baseDoc },
+        { upsert: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MongoServerError) || error.code !== 11000) {
+        throw error;
+      }
+    }
+  }
+
+  const docs = await collection.find({ orderId }).sort({ updatedAt: -1, createdAt: -1 }).toArray();
+  const mergedItems = mergeOrderItemsWithDispatchRecords(payload.items, docs);
+  const plan = buildBulkDispatchPlan(mergedItems);
+
+  if (plan.lines.length === 0) {
+    return NextResponse.json(
+      { success: false, message: "All products are already dispatched or no valid dispatchable lines remain", data: { skipped: plan.skipped } },
+      { status: 409 }
+    );
+  }
+
+  const timestamp = new Date();
+  const records: DispatchApiRecord[] = [];
+  const failures: Array<{ sku: string; orderItemId: string | null; occurrence: number; message: string }> = [];
+
+  for (const line of plan.lines) {
+    const updateId = bulkUpdateId(idempotencyKey, line);
+    const identity = buildDispatchIdentity({
+      orderId,
+      orderItemId: line.orderItemId,
+      sku: line.sku,
+      occurrence: line.occurrence,
+    });
+
+    const existing = await collection.findOne(identity);
+    if (existing?.updates?.some((update) => update.id === updateId)) {
+      records.push(existing);
+      continue;
+    }
+
+    const dispatchQuantity = line.remainingQuantity;
+    const statusExpression = {
+      $let: {
+        vars: {
+          nextDispatched: { $add: ["$dispatchedQuantity", dispatchQuantity] },
+        },
+        in: {
+          $cond: [
+            { $eq: [{ $subtract: ["$orderedQuantity", "$$nextDispatched"] }, 0] },
+            "successful",
+            BULK_DISPATCH_STATUS,
+          ],
+        },
+      },
+    };
+
+    const updated = await collection.findOneAndUpdate(
+      {
+        ...identity,
+        "updates.id": { $ne: updateId },
+        $expr: {
+          $lte: [
+            { $add: ["$dispatchedQuantity", dispatchQuantity] },
+            "$orderedQuantity",
+          ],
+        },
+      },
+      [
+        {
+          $set: {
+            orderId,
+            orderItemId: line.orderItemId,
+            sku: line.sku,
+            normalizedSku: line.normalizedSku,
+            occurrence: line.occurrence,
+            dealerId: context.dealerId,
+            assignedStaffId: context.assignedStaffId || null,
+            dispatchedQuantity: { $add: ["$dispatchedQuantity", dispatchQuantity] },
+            currentStatus: statusExpression,
+            updatedAt: timestamp,
+            updates: {
+              $concatArrays: [
+                { $ifNull: ["$updates", []] },
+                [
+                  {
+                    id: updateId,
+                    quantity: dispatchQuantity,
+                    remark,
+                    status: statusExpression,
+                    actorId: actor.id,
+                    actorRole: "staff" as DispatchActorRole,
+                    createdAt: timestamp,
+                  },
+                ],
+              ],
+            },
+          },
+        },
+      ],
+      { returnDocument: "after" }
+    );
+
+    if (updated) {
+      records.push(updated);
+      continue;
+    }
+
+    const current = await collection.findOne(identity);
+    if (current?.updates?.some((update) => update.id === updateId)) {
+      records.push(current);
+      continue;
+    }
+
+    failures.push({
+      sku: line.sku,
+      orderItemId: line.orderItemId,
+      occurrence: line.occurrence,
+      message: "Another dispatch update changed the remaining quantity",
+    });
+  }
+
+  if (failures.length > 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Some products could not be dispatched because dispatch quantities changed",
+        data: {
+          records: records.map(toResponseRecord),
+          skipped: plan.skipped,
+          failures,
+        },
+      },
+      { status: 409 }
+    );
+  }
+
+  invalidatePendingProductsCache();
+  return NextResponse.json({
+    success: true,
+    data: records.map(toResponseRecord),
+    skipped: plan.skipped,
+  });
 }
 
 export async function GET(req: NextRequest) {
@@ -463,11 +704,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: "Unauthenticated dispatch access" }, { status: 401 });
     }
 
+    const body = await req.json();
+    if (safeText(body.action, 40) === "dispatch_all") {
+      return handleBulkDispatch(actor, body);
+    }
+
     if (actor.role === "dealer" || actor.role === "unknown") {
       return NextResponse.json({ success: false, message: "Dealers cannot update dispatch details" }, { status: 403 });
     }
 
-    const body = await req.json();
     const orderId = safeText(body.orderId, 80);
     const orderItemId = normalizeDispatchOrderItemId(body.orderItemId);
     const sku = safeText(body.sku, 200);

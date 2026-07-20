@@ -25,7 +25,7 @@ test("/Pages/products uses the same catalogue source as /Products", async () => 
   const pagesSource = await readPagesProducts();
   const productsSource = await readProducts();
 
-  assert.match(productsSource, /\/data\/omsons_products_from_excel_with_images\.json/);
+  assert.match(productsSource, /loadCatalogueProducts/);
   assert.match(pagesSource, /loadCatalogueProducts/);
   assert.match(pagesSource, /from ['"]@\/lib\/catalogueClient['"]/);
 });
@@ -45,11 +45,19 @@ test("/Pages/products keeps the existing admin catalogue table UI intact", async
 test("/Pages/products preserves search, filters, and pagination behavior", async () => {
   const source = await readPagesProducts();
 
-  assert.match(source, /matchesCatalogueQuery\(product,\s*search\)/);
+  assert.match(source, /searchProducts\(products,\s*queryInfo\.normalizedQuery\)/);
   assert.match(source, /productMatchesCategory\(product,\s*selectedCategory\)/);
   assert.match(source, /filteredProducts\.slice\(start,\s*start \+ ITEMS_PER_PAGE\)/);
   assert.match(source, /function pageNumbers/);
   assert.match(source, /handlePageChange/);
+});
+
+test("/Pages/products narrows variant catalogue-number searches to the matching variant row", async () => {
+  const source = await readPagesProducts();
+
+  assert.match(source, /matchedVariant/);
+  assert.match(source, /variantCatalogue\.includes\(catalogueQuery\)/);
+  assert.match(source, /isVariantCatalogueMatch \? \[variant\] : undefined/);
 });
 
 test("/Pages/products maps catalogue rows to card fields used by the existing UI", async () => {
@@ -68,5 +76,5 @@ test("/Pages/products preserves product detail route data without changing /Prod
 
   assert.match(pagesSource, /product_detail_href:\s*`\/Products\/\$\{encodeURIComponent/);
   assert.match(productsSource, /Link href=\{`\/Products\/\$\{product\.sku\}`\}/);
-  assert.match(productsSource, /axios\.get\("\/data\/omsons_products_from_excel_with_images\.json"\)/);
+  assert.match(productsSource, /loadCatalogueProducts\(\)/);
 });

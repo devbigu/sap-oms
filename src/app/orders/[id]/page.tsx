@@ -15,7 +15,9 @@ import {
 import { mergeFallbackProductNotes } from "@/lib/orderProductNotes.mjs";
 import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
 import {
+  buildBulkDispatchPlan,
   mergeOrderItemsWithDispatchRecords,
+  canUserBulkDispatch,
   canUserEditDispatch,
   type DispatchUserSession,
   type OrderDispatchRecord,
@@ -912,7 +914,15 @@ export default function ViewOrderDealerPage() {
   const [summaryOverride, setSummaryOverride] = useState<OrderSummaryOverride | null>(null);
   const [fallbackProductNotes, setFallbackProductNotes] = useState<OrderProductNote[]>([]);
   const [dispatchRecords, setDispatchRecords] = useState<DispatchRecordResponse[]>([]);
+  const [dispatchRecordsLoaded, setDispatchRecordsLoaded] = useState(false);
+  const [dispatchRecordsOrderId, setDispatchRecordsOrderId] = useState("");
+  const [dispatchRecordsError, setDispatchRecordsError] = useState("");
   const [activeDispatchItemId, setActiveDispatchItemId] = useState<string | null>(null);
+  const [dispatchAllDialogOpen, setDispatchAllDialogOpen] = useState(false);
+  const [dispatchAllRemark, setDispatchAllRemark] = useState("");
+  const [dispatchAllIdempotencyKey, setDispatchAllIdempotencyKey] = useState("");
+  const [dispatchAllSaving, setDispatchAllSaving] = useState(false);
+  const [dispatchAllError, setDispatchAllError] = useState("");
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [overlayState, setOverlayState] = useState<EffectiveOrderOverlayState | null>(null);
@@ -1179,11 +1189,22 @@ export default function ViewOrderDealerPage() {
       .then((json) => {
         if (json.success && Array.isArray(json.data)) {
           setDispatchRecords(json.data);
+          setDispatchRecordsLoaded(true);
+          setDispatchRecordsOrderId(id);
+          setDispatchRecordsError("");
         } else {
           setDispatchRecords([]);
+          setDispatchRecordsLoaded(false);
+          setDispatchRecordsOrderId(id);
+          setDispatchRecordsError("Dispatch data could not be verified.");
         }
       })
-      .catch(() => setDispatchRecords([]));
+      .catch(() => {
+        setDispatchRecords([]);
+        setDispatchRecordsLoaded(false);
+        setDispatchRecordsOrderId(id);
+        setDispatchRecordsError("Dispatch data could not be verified.");
+      });
   }, [currentUser, id, orderAccessVerified]);
 
   // Load product pack sizes (catNo → packSize) from local product data
@@ -1207,21 +1228,31 @@ export default function ViewOrderDealerPage() {
     return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
   }, [dispatchRecords, fallbackProductNotes, orders]);
 
-  const handleDispatchRecordSaved = (record: OrderDispatchRecord) => {
-    const nextRecord = record as DispatchRecordResponse;
+  const handleDispatchRecordsSaved = (records: OrderDispatchRecord[]) => {
     setDispatchRecords((previous) => {
-      const index = previous.findIndex((entry) =>
-        String(entry.orderItemId ?? "") && String(record.orderItemId ?? "")
-          ? entry.orderItemId === record.orderItemId
-          : buildDispatchRecordFallbackKey(entry) === buildDispatchRecordFallbackKey(record)
-      );
-
-      if (index === -1) return [nextRecord, ...previous];
-
       const copy = [...previous];
-      copy[index] = nextRecord;
+
+      for (const record of records) {
+        const nextRecord = record as DispatchRecordResponse;
+        const index = copy.findIndex((entry) =>
+          String(entry.orderItemId ?? "") && String(record.orderItemId ?? "")
+            ? entry.orderItemId === record.orderItemId
+            : buildDispatchRecordFallbackKey(entry) === buildDispatchRecordFallbackKey(record)
+        );
+
+        if (index === -1) {
+          copy.unshift(nextRecord);
+        } else {
+          copy[index] = nextRecord;
+        }
+      }
+
       return copy;
     });
+  };
+
+  const handleDispatchRecordSaved = (record: OrderDispatchRecord) => {
+    handleDispatchRecordsSaved([record]);
   };
 
   const handleExport = () => {
@@ -1269,6 +1300,15 @@ export default function ViewOrderDealerPage() {
     acceptOrder,
     delStatus: orderDeleted,
   });
+  const canUseDispatchAll = canUserBulkDispatch(currentUser, {
+    dealerId: dealerIdForDispatch,
+    assignedStaffId,
+    acceptOrder,
+    delStatus: orderDeleted,
+  }) && !overlayState?.isCancelled && dispatchRecordsLoaded && dispatchRecordsOrderId === id && !dispatchRecordsError;
+  const dispatchAllPlan = useMemo(() => buildBulkDispatchPlan(displayOrders), [displayOrders]);
+  const showDispatchAllControl = canUseDispatchAll;
+  const dispatchAllHasLines = dispatchAllPlan.lines.length > 0;
   const baseRowPricings = useMemo(
     () => displayOrders.map((o) => getRowPricing(o, packLookup, displayOrderMeta)),
     [displayOrders, packLookup, displayOrderMeta]
@@ -1386,6 +1426,74 @@ export default function ViewOrderDealerPage() {
       text: result.success ? "PDF downloaded" : result.error || "Download failed",
     });
     window.setTimeout(() => setInvoiceToast(null), 3000);
+  };
+
+  const openDispatchAllDialog = () => {
+    setDispatchAllRemark("");
+    setDispatchAllError("");
+    setDispatchAllIdempotencyKey(`${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`);
+    setDispatchAllDialogOpen(true);
+  };
+
+  const submitDispatchAll = async () => {
+    const remark = dispatchAllRemark.trim();
+    if (!canUseDispatchAll) {
+      setDispatchAllError(dispatchRecordsError || "Dispatch All is not available for this order.");
+      return;
+    }
+    if (dispatchAllPlan.lines.length === 0) {
+      setDispatchAllError("All products are already dispatched or no valid dispatchable lines remain.");
+      return;
+    }
+    if (!remark) {
+      setDispatchAllError("Operational Remark is required.");
+      return;
+    }
+
+    setDispatchAllSaving(true);
+    setDispatchAllError("");
+
+    try {
+      const response = await fetch("/api/order-dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildDispatchHeaders(currentUser),
+        },
+        body: JSON.stringify({
+          action: "dispatch_all",
+          orderId: id,
+          dealerId: dealerIdForDispatch,
+          assignedStaffId,
+          acceptOrder,
+          delStatus: orderDeleted,
+          remark,
+          idempotencyKey: dispatchAllIdempotencyKey,
+        }),
+      });
+
+      const json = await response.json().catch(() => null);
+      const records = Array.isArray(json?.data) ? json.data as OrderDispatchRecord[] : Array.isArray(json?.data?.records) ? json.data.records as OrderDispatchRecord[] : [];
+      if (records.length > 0) {
+        handleDispatchRecordsSaved(records);
+      }
+
+      if (!response.ok || !json?.success) {
+        setDispatchAllError(json?.message || "Failed to dispatch all products.");
+        return;
+      }
+
+      setDispatchAllDialogOpen(false);
+      setInvoiceToast({ type: "success", text: "All dispatchable products dispatched." });
+      window.setTimeout(() => setInvoiceToast(null), 3000);
+      window.dispatchEvent(new CustomEvent("orderDispatchUpdated", {
+        detail: { orderId: id, bulk: true },
+      }));
+    } catch {
+      setDispatchAllError("Failed to dispatch all products.");
+    } finally {
+      setDispatchAllSaving(false);
+    }
   };
 
   const submitCancellation = async (reason: string) => {
@@ -1567,6 +1675,20 @@ export default function ViewOrderDealerPage() {
           </div>
           <div className="flex items-center gap-3">
             <ViewToggle mode={viewMode} onChange={setViewMode} />
+            {showDispatchAllControl && (
+              <button
+                type="button"
+                onClick={dispatchAllHasLines ? openDispatchAllDialog : undefined}
+                disabled={!dispatchAllHasLines || dispatchAllSaving}
+                className={`flex items-center gap-2 px-4 py-2 text-[13px] font-semibold rounded-xl border transition-colors ${
+                  dispatchAllHasLines
+                    ? "bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600"
+                    : "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
+                } disabled:opacity-80`}
+              >
+                {dispatchAllHasLines ? "Dispatch All" : "All Products Dispatched"}
+              </button>
+            )}
             {dealerCanChangeOrder && (
               <>
                 <button onClick={() => setEditDialogOpen(true)}
@@ -1837,6 +1959,138 @@ export default function ViewOrderDealerPage() {
         onClose={() => setActiveDispatchItemId(null)}
         onRecordSaved={handleDispatchRecordSaved}
       />
+      {dispatchAllDialogOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/25 p-4 backdrop-blur-[2px]"
+          onClick={() => !dispatchAllSaving && setDispatchAllDialogOpen(false)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">Dispatch All</p>
+                <h2 className="mt-1 text-[20px] font-bold text-slate-900">OM/{year}/{id}</h2>
+                <p className="mt-1 text-[13px] text-slate-500">
+                  {dispatchAllPlan.lines.length} product line{dispatchAllPlan.lines.length === 1 ? "" : "s"} | {dispatchAllPlan.totalQuantity} total remaining quantity
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !dispatchAllSaving && setDispatchAllDialogOpen(false)}
+                disabled={dispatchAllSaving}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:opacity-50"
+                aria-label="Close dispatch all confirmation"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="max-h-[calc(90vh-96px)] overflow-y-auto p-6">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Lines</p>
+                  <p className="mt-1 font-mono text-[16px] font-bold text-slate-900">{dispatchAllPlan.lines.length}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Quantity</p>
+                  <p className="mt-1 font-mono text-[16px] font-bold text-indigo-700">{dispatchAllPlan.totalQuantity}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Skipped</p>
+                  <p className="mt-1 font-mono text-[16px] font-bold text-amber-700">{dispatchAllPlan.skipped.length}</p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-slate-200">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">Will Dispatch</p>
+                </div>
+                <div className="max-h-64 overflow-auto divide-y divide-slate-100">
+                  {dispatchAllPlan.lines.map((line) => (
+                    <div key={`${line.orderItemId ?? line.normalizedSku}:${line.occurrence}`} className="grid grid-cols-[1fr_auto] gap-4 px-4 py-3">
+                      <div>
+                        <p className="text-[13px] font-semibold text-slate-900">{line.productName || line.sku || "Product line"}</p>
+                        <p className="mt-1 font-mono text-[12px] text-amber-700">Catalogue Number: {line.sku || "-"}</p>
+                      </div>
+                      <p className="font-mono text-[14px] font-bold text-indigo-700">{line.remainingQuantity}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {dispatchAllPlan.skipped.length > 0 && (
+                <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50">
+                  <div className="border-b border-amber-200 px-4 py-3">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-700">Skipped Products</p>
+                  </div>
+                  <div className="max-h-48 overflow-auto divide-y divide-amber-100">
+                    {dispatchAllPlan.skipped.map((line) => (
+                      <div key={`${line.orderItemId ?? line.sku}:${line.occurrence}:${line.reason}`} className="grid grid-cols-[1fr_auto] gap-4 px-4 py-3">
+                        <div>
+                          <p className="text-[13px] font-semibold text-amber-950">{line.productName || line.sku || "Product line"}</p>
+                          <p className="mt-1 font-mono text-[12px] text-amber-700">Catalogue Number: {line.sku || "-"}</p>
+                        </div>
+                        <p className="text-[12px] font-semibold text-amber-700">{line.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-5">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="dispatch-all-remark" className="block text-[12px] font-semibold text-slate-700">
+                    Operational Remark
+                  </label>
+                  <span className="text-[11px] font-medium text-slate-400">{dispatchAllRemark.length}/500</span>
+                </div>
+                <textarea
+                  id="dispatch-all-remark"
+                  rows={4}
+                  maxLength={500}
+                  value={dispatchAllRemark}
+                  onChange={(event) => {
+                    setDispatchAllRemark(event.target.value);
+                    setDispatchAllError("");
+                  }}
+                  disabled={dispatchAllSaving}
+                  className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-[13px] leading-6 text-slate-900 outline-none transition focus:border-indigo-300"
+                  placeholder="Add the operational dispatch remark"
+                />
+              </div>
+
+              {dispatchAllError && (
+                <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[12px] text-rose-700">
+                  {dispatchAllError}
+                </div>
+              )}
+
+              <div className="mt-5 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDispatchAllDialogOpen(false)}
+                  disabled={dispatchAllSaving}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={submitDispatchAll}
+                  disabled={dispatchAllSaving || dispatchAllPlan.lines.length === 0}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-[13px] font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {dispatchAllSaving ? "Dispatching..." : "Dispatch All Products"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {cancelDialogOpen && (
         <CancelOrderDialog
           orderId={id}

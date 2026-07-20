@@ -233,6 +233,16 @@ test("Dealer cannot update dispatch", () => {
   ), false);
 });
 
+test("Dispatch All is Staff-only and still requires assignment and accepted order access", () => {
+  const context = { dealerId: "225", assignedStaffId: "77", acceptOrder: "1", delStatus: "0" };
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, context), true);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "admin", id: "1" }, context), false);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "dealer", id: "225" }, context), false);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "90" }, context), false);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, acceptOrder: "0" }), false);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, delStatus: "1" }), false);
+});
+
 test("Missing acceptance field safely blocks staff access", () => {
   assert.equal(dispatch.canUserEditDispatch(
     { role: "staff", id: "77" },
@@ -306,6 +316,92 @@ test("Fallback SKU occurrence matching works when orderItemId is absent", () => 
   );
 });
 
+test("Bulk dispatch plan includes only remaining dispatchable lines", () => {
+  const plan = dispatch.buildBulkDispatchPlan([
+    {
+      orderdata_id: "501",
+      orderdata_orderid: "3841",
+      orderdata_cat_no: "50/8",
+      product_name: "Product A",
+      orderedQuantity: 10,
+      dispatchedQuantity: 4,
+      remainingQuantity: 6,
+      dispatchStatus: "packing",
+      occurrence: 1,
+    },
+    {
+      orderdata_id: "502",
+      orderdata_orderid: "3841",
+      orderdata_cat_no: "51/1",
+      product_name: "Product B",
+      orderedQuantity: 20,
+      dispatchedQuantity: 0,
+      remainingQuantity: 20,
+      dispatchStatus: "pending",
+      occurrence: 1,
+    },
+    {
+      orderdata_id: "503",
+      orderdata_orderid: "3841",
+      orderdata_cat_no: "52/1",
+      product_name: "Product C",
+      orderedQuantity: 5,
+      dispatchedQuantity: 5,
+      remainingQuantity: 0,
+      dispatchStatus: "successful",
+      occurrence: 1,
+    },
+    {
+      orderdata_id: "504",
+      orderdata_orderid: "3841",
+      orderdata_cat_no: "53/1",
+      product_name: "Product D",
+      orderedQuantity: 5,
+      dispatchedQuantity: 0,
+      remainingQuantity: 5,
+      dispatchStatus: "not_in_stock",
+      occurrence: 1,
+    },
+  ]);
+
+  assert.deepEqual(plan.lines.map((line) => [line.sku, line.remainingQuantity]), [
+    ["50/8", 6],
+    ["51/1", 20],
+  ]);
+  assert.equal(plan.totalQuantity, 26);
+  assert.deepEqual(plan.skipped.map((line) => line.reason), [
+    "Already fully dispatched",
+    "Not in Stock",
+  ]);
+});
+
+test("Bulk dispatch plan preserves existing item identity and duplicate SKU occurrences", () => {
+  const merged = dispatch.mergeOrderItemsWithDispatchRecords(
+    [
+      { orderdata_id: "601", orderdata_orderid: "3841", orderdata_cat_no: "50/8", orderdata_item_quantity: "10", product_name: "First duplicate" },
+      { orderdata_id: "602", orderdata_orderid: "3841", orderdata_cat_no: "50/8", orderdata_item_quantity: "10", product_name: "Second duplicate" },
+    ],
+    [
+      { orderId: "3841", orderItemId: "601", sku: "50/8", normalizedSku: "50/8", occurrence: 1, dispatchedQuantity: 2, orderedQuantity: 10, currentStatus: "packing", updates: [] },
+      { orderId: "3841", orderItemId: "602", sku: "50/8", normalizedSku: "50/8", occurrence: 2, dispatchedQuantity: 7, orderedQuantity: 10, currentStatus: "packing", updates: [] },
+    ]
+  );
+  const plan = dispatch.buildBulkDispatchPlan(merged);
+
+  assert.deepEqual(
+    plan.lines.map((line) => ({
+      orderItemId: line.orderItemId,
+      sku: line.sku,
+      occurrence: line.occurrence,
+      remainingQuantity: line.remainingQuantity,
+    })),
+    [
+      { orderItemId: "601", sku: "50/8", occurrence: 1, remainingQuantity: 8 },
+      { orderItemId: "602", sku: "50/8", occurrence: 2, remainingQuantity: 3 },
+    ]
+  );
+});
+
 test("Legacy readyquantity is imported once without double-counting", () => {
   const seed = dispatch.buildLegacyDispatchSeed({
     orderId: "3841",
@@ -371,4 +467,27 @@ test("UI and API rely on the shared normalized dispatch access helper", async ()
   assert.match(panelSource, /isAcceptedOrderForDispatch/);
   assert.doesNotMatch(panelSource, /String\(acceptOrder \?\? "0"\) !== "1"/);
   assert.match(apiSource, /canUserEditDispatch/);
+});
+
+test("Order details page wires the Staff-only Dispatch All confirmation flow", async () => {
+  const source = await fs.readFile(orderDetailPath, "utf8");
+  assert.match(source, /canUserBulkDispatch/);
+  assert.match(source, /buildBulkDispatchPlan\(displayOrders\)/);
+  assert.match(source, /Dispatch All/);
+  assert.match(source, /All Products Dispatched/);
+  assert.match(source, /Dispatch All Products/);
+  assert.match(source, /handleDispatchRecordsSaved\(records\)/);
+  assert.doesNotMatch(source, /displayOrders\.forEach\(.*fetch/s);
+});
+
+test("Dispatch All API reuses normalized merge, bulk plan, idempotency, and guarded Mongo updates", async () => {
+  const source = await fs.readFile(dispatchApiPath, "utf8");
+  assert.match(source, /action.*dispatch_all/s);
+  assert.match(source, /actor\.role !== "staff"/);
+  assert.match(source, /mergeOrderItemsWithDispatchRecords\(payload\.items, docs\)/);
+  assert.match(source, /buildBulkDispatchPlan\(mergedItems\)/);
+  assert.match(source, /bulkUpdateId\(idempotencyKey, line\)/);
+  assert.match(source, /"updates\.id": \{ \$ne: updateId \}/);
+  assert.match(source, /\$expr:\s*\{\s*\$lte:/);
+  assert.match(source, /invalidatePendingProductsCache\(\)/);
 });

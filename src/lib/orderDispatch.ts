@@ -47,6 +47,7 @@ export type DispatchSourceItem = {
   orderdata_item_quantity?: string | number;
   readyquantity?: string | number;
   orderdata_status?: string | number;
+  del_status?: string | number;
   product_name?: string;
   product_discription?: string;
   remark?: string;
@@ -78,6 +79,8 @@ export const DISPATCH_STATUS_LABELS: Record<DispatchStatus, string> = {
   not_in_stock: "Not in Stock",
   successful: "Successful",
 };
+
+export const BULK_DISPATCH_STATUS: DispatchStatus = "dispatched";
 
 function normalizeDispatchFlag(value: unknown, truthy = "1"): boolean {
   return String(value ?? "").trim() === truthy;
@@ -184,6 +187,15 @@ export function canUserEditDispatch(user: DispatchUserSession | null, context: {
   });
 }
 
+export function canUserBulkDispatch(user: DispatchUserSession | null, context: {
+  dealerId?: string | null;
+  assignedStaffId?: string | null;
+  acceptOrder?: string | number | null;
+  delStatus?: string | number | null;
+}): boolean {
+  return user?.role === "staff" && canUserEditDispatch(user, context);
+}
+
 export function mergeOrderItemsWithDispatchRecords<T extends DispatchSourceItem>(
   items: T[],
   dispatchRecords: Array<Partial<OrderDispatchRecord>>
@@ -244,6 +256,77 @@ export function mergeOrderItemsWithDispatchRecords<T extends DispatchSourceItem>
       occurrence,
     };
   });
+}
+
+export type BulkDispatchLine = {
+  orderItemId: string | null;
+  sku: string;
+  normalizedSku: string;
+  occurrence: number;
+  productName: string;
+  remainingQuantity: number;
+};
+
+export type BulkDispatchSkippedLine = {
+  orderItemId: string | null;
+  sku: string;
+  occurrence: number;
+  productName: string;
+  reason: string;
+};
+
+export function buildBulkDispatchPlan<T extends DispatchSourceItem & Partial<MergedDispatchItem>>(
+  items: T[]
+): {
+  lines: BulkDispatchLine[];
+  skipped: BulkDispatchSkippedLine[];
+  totalQuantity: number;
+} {
+  const lines: BulkDispatchLine[] = [];
+  const skipped: BulkDispatchSkippedLine[] = [];
+
+  for (const item of items ?? []) {
+    const orderItemId = normalizeDispatchOrderItemId(item.orderItemId ?? item.orderdata_id);
+    const sku = String(item.orderdata_cat_no ?? "").trim();
+    const normalizedSku = normalizeSku(sku);
+    const occurrence = Math.max(1, safeDispatchInteger(item.occurrence) || 1);
+    const productName = String(item.product_name ?? sku ?? "Product line").trim();
+    const remainingQuantity = safeDispatchInteger(item.remainingQuantity);
+    const dispatchStatus = normalizeDispatchStatus(item.dispatchStatus ?? item.orderdata_status);
+    const line = { orderItemId, sku, occurrence, productName };
+
+    if (isDeletedOrderForDispatch(item.del_status)) {
+      skipped.push({ ...line, reason: "Deleted product line" });
+      continue;
+    }
+
+    if (!orderItemId && !normalizedSku) {
+      skipped.push({ ...line, reason: "Missing dispatch identity" });
+      continue;
+    }
+
+    if (dispatchStatus === "not_in_stock") {
+      skipped.push({ ...line, reason: "Not in Stock" });
+      continue;
+    }
+
+    if (dispatchStatus === "successful" || remainingQuantity <= 0) {
+      skipped.push({ ...line, reason: "Already fully dispatched" });
+      continue;
+    }
+
+    lines.push({
+      ...line,
+      normalizedSku,
+      remainingQuantity,
+    });
+  }
+
+  return {
+    lines,
+    skipped,
+    totalQuantity: lines.reduce((sum, line) => sum + line.remainingQuantity, 0),
+  };
 }
 
 export function buildLegacyDispatchSeed(input: {
