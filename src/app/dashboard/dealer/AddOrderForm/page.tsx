@@ -22,6 +22,7 @@ import {
   type CatalogueIndex,
   type CatalogueProduct,
 } from "@/lib/catalogue";
+import { loadCatalogueProducts } from "@/lib/catalogueClient";
 import {
   saveDraft,
   updateDraft,
@@ -584,7 +585,7 @@ function AddOrderPageInner() {
     if (!user) return;
     Promise.all([
       fetch(`${BACKEND_URL}/productname`).then(r => r.json()),
-      axios.get("/data/omsons_products_from_excel_with_images.json").then(r => r.data),
+      loadCatalogueProducts(),
     ]).then(([apiData, localData]) => {
       setProducts(apiData.data ?? []);
       setCatalogueIndex(buildCatalogueIndex(localData ?? []));
@@ -1373,8 +1374,14 @@ function AddOrderPageInner() {
   };
 
   const resolveRowSelection = (row: ProductRow) => {
-    const lookupSku = String(row.catalogueVariantSku || row.productname || row.variantCode || "").trim();
-    const entry = catalogueIndex ? findCatalogueEntry(catalogueIndex, lookupSku) : null;
+    const lookupCandidates = [row.catalogueVariantSku, row.variantCode, row.productname]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+    const entry = catalogueIndex
+      ? lookupCandidates
+          .map((candidate) => findCatalogueEntry(catalogueIndex, candidate))
+          .find((candidate) => candidate?.variant) ?? null
+      : null;
     const product = entry?.product ?? null;
     const variant = entry?.variant ?? null;
     const section = row.catalogueSection || (product ? getCatalogueSection(product) : "");
@@ -1437,6 +1444,25 @@ function AddOrderPageInner() {
     if (orderLockedByPendingApproval) return;
     const v = Math.max(1, val || 1);
     setArr((prev) => { const n = [...prev]; n[i] = { ...n[i], producQuanity: v }; return n; });
+  };
+
+  const findCatalogueOption = (row: ProductRow, resolvedVariantSku: string) => {
+    const candidates = [resolvedVariantSku, row.catalogueVariantSku, row.variantCode, row.productname]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+
+    for (const candidate of candidates) {
+      const exact = optionList.find((option) => option.value === candidate);
+      if (exact) return exact;
+
+      const normalizedCandidate = candidate.toLowerCase();
+      const normalized = optionList.find(
+        (option) => option.value.trim().toLowerCase() === normalizedCandidate,
+      );
+      if (normalized) return normalized;
+    }
+
+    return null;
   };
 
   const updateProductNote = (i: number, note: string) => {
@@ -2480,6 +2506,7 @@ function AddOrderPageInner() {
                     const rowTotal = Math.max(0, listPrice - discAmt);
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
                     const rowSelection = resolveRowSelection(row);
+                    const selectedCatalogueOption = findCatalogueOption(row, rowSelection.variantSku);
                     const selectedProduct = rowSelection.product ?? catalogueIndex?.productsBySku[String(rowSelection.productSku)] ?? null;
                     const metaKey = rowSelection.variantSku || row.productname || row.variantCode;
                     const meta = variantLookup[metaKey] ?? variantLookup[row.productname];
@@ -2537,7 +2564,7 @@ function AddOrderPageInner() {
                           <div className="flex flex-col gap-2">
                             <Select<CatalogueNumberOption, false>
                               options={optionList}
-                              value={optionList.find((option) => option.value === rowSelection.variantSku) ?? null}
+                              value={selectedCatalogueOption}
                               onChange={(option) => handleChangeSelect(idx, option?.value ?? "")}
                               isDisabled={orderLockedByPendingApproval}
                               filterOption={catalogueFilter}
