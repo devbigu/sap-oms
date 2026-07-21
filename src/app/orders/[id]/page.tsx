@@ -257,6 +257,26 @@ function readLocalOrderDetailsFallback(orderId: string): OrderSummaryOverride | 
   }
 }
 
+function saveLocalOrderDetailsFallback(orderId: string, fallback: Record<string, unknown>) {
+  if (typeof window === "undefined" || !orderId) return;
+  try {
+    const raw = localStorage.getItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const records = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    localStorage.setItem(ORDER_DETAILS_FALLBACK_STORAGE_KEY, JSON.stringify({
+      ...records,
+      [orderId]: {
+        ...fallback,
+        orderId,
+        order_id: orderId,
+        savedAt: new Date().toISOString(),
+      },
+    }));
+  } catch {}
+}
+
 function firstNonEmptyString(...values: unknown[]) {
   for (const value of values) {
     const text = String(value ?? "").trim();
@@ -986,6 +1006,11 @@ export default function ViewOrderDealerPage() {
           const normalized = normalizeOrderDetailResponse(d, id);
           setPhpOrders(normalized.items as OrderData[]);
           setOrderMeta(normalized.meta as OrderMeta);
+          if (normalized.items.length > 0) {
+            const fallback = { ...(normalized.meta ?? {}), items: normalized.items };
+            saveLocalOrderDetailsFallback(id, fallback);
+            setLocalOrderFallback(fallback as OrderSummaryOverride);
+          }
         } catch {
           setPhpOrders([]);
           setOrderMeta(null);
