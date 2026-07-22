@@ -5,6 +5,7 @@ import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeSe
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
 import { parsePhpJsonResponse } from "@/lib/phpJson";
+import walletUtils from "@/lib/wallet";
 import {
   buildOrderEditRevision,
   findOrderOverlay,
@@ -211,6 +212,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         reason: safeText(body.reason, 1000),
         actor,
       });
+      const db = await getDb();
+      const originalDebit = await db.collection("wallet_transactions").findOne({
+        dealerId: context.dealerId,
+        relatedOrderId: context.orderId,
+        type: "order_debit",
+      });
+      if (originalDebit) {
+        await walletUtils.applyWalletChange(db, context.dealerId, "refund", originalDebit.amount ?? Number(originalDebit.amountPaise || 0) / 100, {
+          relatedOrderId: context.orderId,
+          relatedOrderNumber: safeText(body.formattedOrderNumber, 80),
+          reference: `refund:${context.orderId}`,
+          note: `Refund for eligible cancelled order: ${safeText(body.reason, 1000)}`,
+          actorId: actor.actorId,
+          actorRole: actor.role,
+          actorName: actor.name,
+          idempotencyKey: `order-refund:${context.orderId}`,
+        });
+      }
       invalidatePendingProductsCache();
       return NextResponse.json({ success: true, data: toSafeOverlay(saved) });
     }
@@ -230,15 +249,47 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         idempotencyKey: safeText(body.idempotencyKey, 120),
         actor,
       });
-      const saved = await saveEditRevision({
-        orderId: context.orderId,
+      const db = await getDb();
+      const originalDebit = await db.collection("wallet_transactions").findOne({
         dealerId: context.dealerId,
-        dealerName: safeText(context.originalOrder.Dealer_Name, 200),
-        assignedStaffId: context.assignedStaffId,
-        originalOrderRef: context.originalOrder,
-        revision,
-        expectedRevision,
+        relatedOrderId: context.orderId,
+        type: "order_debit",
       });
+      const difference = Math.round((revision.totals.netPayableAmount - context.effective.effectiveTotals.netPayableAmount) * 100) / 100;
+      let walletAdjustment: Awaited<ReturnType<typeof walletUtils.applyWalletChange>> | null = null;
+      if (originalDebit && Math.abs(difference) >= 0.01) {
+        walletAdjustment = await walletUtils.applyWalletChange(db, context.dealerId, difference > 0 ? "debit" : "refund", Math.abs(difference), {
+          relatedOrderId: context.orderId,
+          reference: `edit:${context.orderId}:${revision.revision}`,
+          note: difference > 0 ? "Order edit Net Payable increase" : "Order edit Net Payable decrease",
+          actorId: actor.actorId,
+          actorRole: actor.role,
+          actorName: actor.name,
+          idempotencyKey: `order-edit:${context.orderId}:${revision.revision}`,
+        });
+      }
+      let saved;
+      try {
+        saved = await saveEditRevision({
+          orderId: context.orderId,
+          dealerId: context.dealerId,
+          dealerName: safeText(context.originalOrder.Dealer_Name, 200),
+          assignedStaffId: context.assignedStaffId,
+          originalOrderRef: context.originalOrder,
+          revision,
+          expectedRevision,
+        });
+      } catch (error) {
+        if (walletAdjustment && !walletAdjustment.duplicate) {
+          await walletUtils.applyWalletChange(db, context.dealerId, difference > 0 ? "refund" : "debit", Math.abs(difference), {
+            relatedOrderId: context.orderId,
+            reference: `edit-rollback:${context.orderId}:${revision.revision}`,
+            note: "Order edit wallet rollback",
+            idempotencyKey: `order-edit-rollback:${context.orderId}:${revision.revision}`,
+          });
+        }
+        throw error;
+      }
       invalidatePendingProductsCache();
       return NextResponse.json({ success: true, data: toSafeOverlay(saved) });
     }

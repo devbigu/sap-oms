@@ -65,6 +65,13 @@ type ProductRow = {
 
 type CustomDiscountScope = "order" | "product";
 
+type WalletSnapshot = {
+  status: "active" | "inactive";
+  availableBalance: number;
+  totalConsumed: number;
+  transactions: Array<{ id: string; type: string; amount: number; createdAt?: string }>;
+};
+
 type CustomDiscountRequest = {
   id: string;
   dealerId?: string;
@@ -413,6 +420,9 @@ function AddOrderPageInner() {
   const [draftSaving, setDraftSaving] = useState(false);
   const [reorderLoading, setReorderLoading] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [wallet, setWallet] = useState<WalletSnapshot | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const orderIdempotencyKey = useRef<string | null>(null);
   const [products, setProducts] = useState<any[]>([]);
   const [catalogueIndex, setCatalogueIndex] = useState<CatalogueIndex<CatalogueProduct> | null>(null);
   const [variantLookup, setVariantLookup] = useState<Record<string, ProductMeta>>({});
@@ -1583,6 +1593,19 @@ function AddOrderPageInner() {
     };
   }, [user?.Dealer_Id]);
 
+  useEffect(() => {
+    if (!user?.Dealer_Id) return;
+    setWalletLoading(true);
+    fetch(`/api/wallet/${encodeURIComponent(user.Dealer_Id)}?limit=5`, {
+      cache: "no-store",
+      headers: { "x-omsons-actor-role": "dealer", "x-omsons-actor-id": String(user.Dealer_Id) },
+    })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("wallet unavailable")))
+      .then((json) => { if (json.success) setWallet(json); })
+      .catch(() => setWallet(null))
+      .finally(() => setWalletLoading(false));
+  }, [user?.Dealer_Id]);
+
   const saveOrderNoteForHistory = async (orderId: string) => {
     const note = orderNote.trim();
     if (!orderId || !note || !user?.Dealer_Id) return;
@@ -1779,7 +1802,13 @@ function AddOrderPageInner() {
     try {
       await ensureDealerIsActive();
       setLoading(true);
-      const { data } = await axios.post(targetApiUrl, fd);
+      orderIdempotencyKey.current ||= crypto.randomUUID();
+      const { data } = await axios.post(targetApiUrl, fd, { headers: {
+        "x-omsons-actor-role": "dealer",
+        "x-omsons-actor-id": String(user.Dealer_Id),
+        "x-omsons-actor-name": String(user.Dealer_Name ?? ""),
+        "idempotency-key": orderIdempotencyKey.current,
+      } });
       logPhpExchange("PlaceOrderarray", {
         method: "POST",
         url: targetApiUrl,
@@ -1839,6 +1868,10 @@ function AddOrderPageInner() {
         }).catch((err) => console.error("[reorder-log] failed:", err));
       }
       toast.success(data.msg, { autoClose: 5000 });
+      if (data.wallet?.used) {
+        setWallet((current) => current ? { ...current, availableBalance: Number(data.wallet.balanceAfter) } : current);
+      }
+      orderIdempotencyKey.current = null;
       clearCart();
       seededRef.current = false;
       setArr([emptyRow()]);
@@ -1894,7 +1927,13 @@ function AddOrderPageInner() {
     try {
       await ensureDealerIsActive();
       setLoading(true);
-      const { data } = await axios.post(targetApiUrl, fd);
+      orderIdempotencyKey.current ||= crypto.randomUUID();
+      const { data } = await axios.post(targetApiUrl, fd, { headers: {
+        "x-omsons-actor-role": "dealer",
+        "x-omsons-actor-id": String(user.Dealer_Id),
+        "x-omsons-actor-name": String(user.Dealer_Name ?? ""),
+        "idempotency-key": orderIdempotencyKey.current,
+      } });
       logPhpExchange("importdata", {
         method: "POST",
         url: targetApiUrl,
@@ -2947,6 +2986,24 @@ function AddOrderPageInner() {
             </div>
 
             {/* Action bar */}
+            <div className={`mx-6 mt-4 rounded-xl border px-4 py-3 ${wallet?.status === "active" && wallet.availableBalance < discountPayload.finalPayableAmount ? "border-red-200 bg-red-50" : wallet?.status === "active" ? "border-emerald-200 bg-emerald-50" : "border-gray-200 bg-gray-50"}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-gray-500">Dealer Wallet</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-900">
+                    {walletLoading ? "Loading wallet..." : wallet?.status === "active" ? `Active · Available ${fmt(toPaise(wallet.availableBalance))}` : "Inactive · normal ordering applies"}
+                  </p>
+                </div>
+                {wallet?.status === "active" && (
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${wallet.availableBalance >= discountPayload.finalPayableAmount ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                    {wallet.availableBalance >= discountPayload.finalPayableAmount ? "Balance sufficient" : "Insufficient balance"}
+                  </span>
+                )}
+              </div>
+              {wallet?.status === "active" && wallet.availableBalance < discountPayload.finalPayableAmount && (
+                <p className="mt-2 text-xs text-red-700">Insufficient wallet balance. Available: {fmt(toPaise(wallet.availableBalance))}. Required: {fmt(finalPayablePaise)}. Contact Admin to add funds.</p>
+              )}
+            </div>
             <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 flex-wrap">
               {isWaitingForApproval ? (
                 <>
@@ -2973,11 +3030,11 @@ function AddOrderPageInner() {
                   </button>
                 </>
               ) : (
-                <button onClick={handleSubmitProductArray}
+                <button onClick={handleSubmitProductArray} disabled={wallet?.status === "active" && wallet.availableBalance < discountPayload.finalPayableAmount}
                   className={`inline-flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-[13.5px] font-semibold transition-all shadow-sm hover:shadow-md hover:-translate-y-px cursor-pointer border-none ${hasAnyDiscount
                       ? "bg-gradient-to-r from-emerald-700 to-emerald-500 hover:from-emerald-800 hover:to-emerald-600"
                       : "bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600"
-                    }`}>
+                    } disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0`}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
