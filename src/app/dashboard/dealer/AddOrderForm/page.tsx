@@ -40,6 +40,7 @@ import {
 } from "@/lib/customDiscountRequests";
 import { useDraft } from "@/lib/useDrafts";
 import { buildPriorityRemarks } from "@/lib/orderPriority";
+import cataloguePricing from "@/lib/cataloguePricing";
 import {
   buildOrderRemarks as buildLineRemarks,
   verifyOrderProductNotesPersistence,
@@ -1444,7 +1445,7 @@ function AddOrderPageInner() {
         productname: variant.sku,
         displayName,
         variantCode: variant.sku,
-        price: Number(variant.price ?? 0),
+        price: cataloguePricing.variantPackPriceToUnitRupees(variant.price, variant.pack),
         packSize: Number(variant.pack ?? 1),
       };
       return next;
@@ -2101,6 +2102,22 @@ function AddOrderPageInner() {
             </button>
           </div>
         )}
+
+        {/* Wallet balance stays visible before the order details and product form. */}
+        <div className={`mb-5 rounded-2xl border px-5 py-4 shadow-sm ${wallet?.status === "active" ? (wallet.availableBalance > 0 ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50") : "border-gray-200 bg-white"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10.5px] font-bold uppercase tracking-wider text-gray-500">Dealer Wallet Balance</p>
+              <p className={`mt-1 font-mono text-2xl font-bold ${wallet?.status === "active" ? (wallet.availableBalance > 0 ? "text-emerald-700" : "text-red-700") : "text-gray-700"}`}>
+                {walletLoading ? "Loading…" : fmt(toPaise(wallet?.availableBalance ?? 0))}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">Running balance—each successful order deducts its final Net Payable.</p>
+            </div>
+            <span className={`rounded-full px-3 py-1.5 text-xs font-bold ${wallet?.status === "active" ? (wallet.availableBalance > 0 ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700") : "bg-gray-100 text-gray-600"}`}>
+              {walletLoading ? "Loading" : wallet?.status === "active" ? (wallet.availableBalance > 0 ? "Active" : "Exhausted") : "Inactive"}
+            </span>
+          </div>
+        </div>
 
         {/* Page heading */}
         <div className="mb-6 flex items-start justify-between">

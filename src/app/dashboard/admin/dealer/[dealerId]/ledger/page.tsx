@@ -370,6 +370,7 @@ export default function DealerLedgerPage() {
             <div className="space-y-4 px-5 py-5">
               <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
                 Status: <strong className={walletData?.status === 'active' ? 'text-emerald-700' : 'text-gray-600'}>{walletData?.status === 'active' ? 'Active' : 'Inactive'}</strong> · Available: ₹{Number(walletData?.availableBalance ?? walletData?.balance ?? 0).toLocaleString('en-IN')}
+                <p className="mt-1 text-xs text-gray-500">This is a running balance. Every successful order deducts its Net Payable until the balance is exhausted.</p>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {(['activate', 'topup', 'disable'] as const).map((mode) => (
@@ -400,6 +401,7 @@ export default function DealerLedgerPage() {
                   onChange={(e) => setWalletAdjustAmount(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
+                <span className="mt-1 block text-xs text-gray-500">Funds are added to the current balance; they do not set a per-order limit.</span>
               </label>}
 
               <label className="block">

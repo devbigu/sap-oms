@@ -75,6 +75,8 @@ class FakeCollection {
   }
 
   async findOneAndUpdate(filter, update, options = {}) {
+    const overlappingPaths = Object.keys(update.$setOnInsert || {}).filter((key) => Object.prototype.hasOwnProperty.call(update.$inc || {}, key));
+    if (overlappingPaths.length) throw new Error(`Conflicting update paths: ${overlappingPaths.join(",")}`);
     let row = this.rows.find((item) => this.match(filter, item));
     if (!row && !options.upsert) return { value: null };
 
@@ -193,6 +195,14 @@ test("credit wallet adds balance and writes a transaction", async () => {
   assert.equal(store.transactions.rows[0].type, "credit");
 });
 
+test("credit initialization does not send conflicting MongoDB update operators", async () => {
+  const store = createFakeDb();
+  await assert.doesNotReject(() => applyWalletChange(store.db, "D-CONFLICT", "credit", 100, {
+    idempotencyKey: "credit-no-conflict",
+  }));
+  assert.equal(store.wallets.rows[0].balancePaise, 10000);
+});
+
 test("debit wallet subtracts balance and writes a transaction", async () => {
   const store = createFakeDb({
     wallets: [{ dealerId: "D-1", balance: 1000, createdAt: "2026-07-08T00:00:00.000Z" }],
@@ -303,4 +313,22 @@ test("failed order releases reservation without consuming funds", async () => {
   assert.equal(snapshot.balance, 1000);
   assert.equal(snapshot.availableBalance, 1000);
   assert.equal(store.transactions.rows.length, 0);
+});
+
+test("wallet is a cumulative balance across multiple orders, not a per-order cap", async () => {
+  const store = createFakeDb({ wallets: [{ dealerId: "D-BAL", status: "active", balancePaise: 5000000, balance: 50000, reservedPaise: 0 }] });
+
+  await wallet.reserveOrderFunds(store.db, "D-BAL", 12000, { idempotencyKey: "order:D-BAL:1" });
+  await wallet.finalizeOrderDebit(store.db, "D-BAL", "order:D-BAL:1", { id: "1" });
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 38000);
+
+  await wallet.reserveOrderFunds(store.db, "D-BAL", 20000, { idempotencyKey: "order:D-BAL:2" });
+  await wallet.finalizeOrderDebit(store.db, "D-BAL", "order:D-BAL:2", { id: "2" });
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 18000);
+
+  await assert.rejects(
+    () => wallet.reserveOrderFunds(store.db, "D-BAL", 19000, { idempotencyKey: "order:D-BAL:3" }),
+    /Insufficient wallet balance/
+  );
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 18000);
 });

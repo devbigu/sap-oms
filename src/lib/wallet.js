@@ -103,13 +103,17 @@ function buildWalletTransaction(input) {
 }
 
 async function ensureWalletIndexes(db) {
-  await Promise.all([
+  const results = await Promise.allSettled([
     db.collection(WALLETS_COLLECTION).createIndex?.({ dealerId: 1 }, { unique: true }),
     db.collection(TRANSACTIONS_COLLECTION).createIndex?.(
       { dealerId: 1, idempotencyKey: 1 },
       { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
     ),
   ]);
+  // Older deployments can already have equivalent non-unique indexes or legacy
+  // duplicate rows. Index reconciliation must not make every wallet mutation fail.
+  // Application-level guarded updates and idempotency lookups remain active.
+  return results;
 }
 
 async function getWalletSnapshot(db, dealerId, options = {}) {
@@ -158,18 +162,24 @@ async function applyWalletChange(db, dealerId, type, amountInput, options = {}) 
   const wallets = db.collection(WALLETS_COLLECTION);
   if (!isCredit) await migrateWalletMoney(wallets, await wallets.findOne({ dealerId: dealerKey }));
   const now = nowDate();
-  const filter = isCredit
-    ? { dealerId: dealerKey }
-    : { dealerId: dealerKey, balancePaise: { $gte: amountPaise } };
+  if (isCredit) {
+    // Keep initialization separate from the increment. MongoDB rejects an
+    // upsert that targets balancePaise in both $setOnInsert and $inc.
+    await wallets.updateOne(
+      { dealerId: dealerKey },
+      { $setOnInsert: { dealerId: dealerKey, balance: 0, balancePaise: 0, reservedPaise: 0, status: "inactive", createdAt: now } },
+      { upsert: true }
+    );
+  }
+  const filter = isCredit ? { dealerId: dealerKey } : { dealerId: dealerKey, balancePaise: { $gte: amountPaise } };
   const update = isCredit ? {
-    $setOnInsert: { dealerId: dealerKey, balance: 0, balancePaise: 0, reservedPaise: 0, status: "inactive", createdAt: now },
     $inc: { balancePaise: amountPaise },
     $set: { updatedAt: now },
   } : {
     $inc: { balancePaise: -amountPaise },
     $set: { updatedAt: now },
   };
-  const walletDoc = updatedDocument(await wallets.findOneAndUpdate(filter, update, { upsert: isCredit, returnDocument: "after" }));
+  const walletDoc = updatedDocument(await wallets.findOneAndUpdate(filter, update, { returnDocument: "after" }));
   if (!walletDoc) throw new WalletError("Insufficient wallet balance", 409, "insufficient_balance");
   const balanceAfterPaise = walletBalancePaise(walletDoc);
   await wallets.updateOne({ dealerId: dealerKey }, { $set: { balance: fromPaise(balanceAfterPaise) } });

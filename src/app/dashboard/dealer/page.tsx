@@ -24,6 +24,11 @@ type DealerData = {
 };
 
 type MonthlyData = { month: string; totalorders: number; totalvalue: number };
+type WalletSnapshot = {
+  status: "active" | "inactive";
+  availableBalance: number;
+  totalConsumed: number;
+};
 type FunnelStage = { label: string; value: number; pct: number; color: string };
 type DraftRow = { producQuanity?: number; price?: number; packSize?: number };
 type OrderHistoryItem = {
@@ -150,6 +155,8 @@ function DealerDashboardInner() {
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
   const [loading,       setLoading]       = useState(true);
   const [dealer,        setDealer]        = useState<DealerData>(EMPTY_DEALER);
+  const [wallet,        setWallet]        = useState<WalletSnapshot | null>(null);
+  const [walletLoading, setWalletLoading] = useState(true);
   const [monthlyOrders, setMonthlyOrders] = useState<MonthlyData[]>([]);
   const [monthlyValues, setMonthlyValues] = useState<MonthlyData[]>([]);
   const [funnel,        setFunnel]        = useState<FunnelStage[]>([]);
@@ -165,7 +172,19 @@ function DealerDashboardInner() {
         setDealer({ ...EMPTY_DEALER, ...parsed });
 
         const dealerId = parsed.Dealer_Id;
-        if (!dealerId) { setLoading(false); return; }
+        if (!dealerId) { setLoading(false); setWalletLoading(false); return; }
+
+        fetch(`/api/wallet/${encodeURIComponent(dealerId)}?limit=5`, {
+          cache: "no-store",
+          headers: {
+            "x-omsons-actor-role": "dealer",
+            "x-omsons-actor-id": String(dealerId),
+          },
+        })
+          .then((response) => response.ok ? response.json() : Promise.reject(new Error("wallet unavailable")))
+          .then((payload) => { if (payload.success) setWallet(payload); })
+          .catch(() => setWallet(null))
+          .finally(() => setWalletLoading(false));
 
         const activeResponse = await fetchJson<{ data: OrderHistoryItem[] }>(
           `/api/orders-data?source=orderhispegination&role=dealer&page=1&limit=1000&search=&id=${encodeURIComponent(dealerId)}`
@@ -482,6 +501,15 @@ function DealerDashboardInner() {
 
             {/* Info Cards */}
             <div className="info-cards font-sans">
+              <div className="icard" style={{ borderColor: wallet?.status === "active" ? "#a7f3d0" : "#e5e7eb", background: wallet?.status === "active" ? "#ecfdf5" : "#fff" }}>
+                <div className="icard-lbl">Wallet Balance</div>
+                <div className="font-sans font-bold">{walletLoading ? "—" : fmtCurrency(wallet?.availableBalance ?? 0)}</div>
+                <div className="icard-sub">Running balance after successful orders</div>
+                <div className={`icard-badge ${wallet?.status === "active" ? (Number(wallet.availableBalance) > 0 ? "badge-green" : "badge-red") : "badge-blue"}`}>
+                  {walletLoading ? "Loading" : wallet?.status === "active" ? (Number(wallet.availableBalance) > 0 ? "Active" : "Exhausted") : "Inactive"}
+                </div>
+                {wallet?.status === "active" && <div className="icard-sub">Consumed: {fmtCurrency(wallet.totalConsumed ?? 0)}</div>}
+              </div>
               <div className="icard">
                 <div className="icard-lbl">Annual Target</div>
                 <div className=" font-sans font-bold">{fmtCurrency(annualTarget)}</div>

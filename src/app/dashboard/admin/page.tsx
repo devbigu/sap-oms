@@ -525,8 +525,10 @@ function AdminDashboardInner() {
         .quick-action-btn { display: inline-flex; align-items: center; justify-content: center; margin-top: 10px; padding: 6px 10px; border-radius: 8px; background: #f9fafb; border: 1px solid #e5e7eb; color: #4f46e5; font-size: 11.5px; font-weight: 700; text-decoration: none; transition: background .15s, border-color .15s; }
         .quick-action-btn:hover { background: #ede9fe; border-color: #ddd6fe; }
         .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px; }
-        .exposure-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
-        .exposure-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: #374151; }
+        .exposure-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; min-width: 0; }
+        .exposure-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px; font-size: 11.5px; color: #374151; }
+        .exposure-row span { min-width: 0; overflow-wrap: anywhere; }
+        .exposure-row strong { white-space: nowrap; text-align: right; }
         .table-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 20px; padding: 22px; margin-bottom: 16px; }
         .table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
         .table-search { position: relative; min-width: 260px; max-width: 100%; flex: 1; }

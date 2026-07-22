@@ -68,8 +68,45 @@ function extractOrderId(payload: any) {
 
 function phpSucceeded(response: Response, payload: any) {
   if (!response.ok) return false;
-  if (payload?.success === false || payload?.status === false || payload?.error) return false;
-  return !/(fail|error|invalid|unable)/i.test(safeText(payload?.msg || payload?.message, 500));
+  const message = safeText(payload?.msg || payload?.message, 500);
+  if (payload?.error) return false;
+  if (/(fail|error|invalid|unable|not\s+saved|not\s+placed)/i.test(message)) return false;
+  // The legacy PHP API commonly returns status:false alongside successful
+  // messages (including "Success") after it has already persisted the order.
+  // Treat an explicit false success flag as failure only when no positive
+  // success message is present; never use the legacy status flag by itself.
+  if (payload?.success === false && !/(success|saved|placed|created|inserted)/i.test(message)) return false;
+  return true;
+}
+
+function orderIdFromRow(row: Record<string, unknown>) {
+  return safeText(row.order_id ?? row.orderId ?? row.Order_Id ?? row.id, 120);
+}
+
+async function fetchRecentDealerOrders(dealerId: string): Promise<Record<string, unknown>[]> {
+  const response = await fetch(
+    `${PHP_BASE}/orderhispegination?page=1&limit=20&search=&id=${encodeURIComponent(dealerId)}`,
+    { cache: "no-store", signal: AbortSignal.timeout(10_000) }
+  );
+  if (!response.ok) return [];
+  const payload = await response.json().catch(() => null);
+  const rows: unknown[] = Array.isArray(payload?.data) ? payload.data : [];
+  return rows.filter((row: unknown): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
+}
+
+async function resolveCreatedOrderId(dealerId: string, payload: any, previousOrderIds: Set<string>) {
+  const direct = extractOrderId(payload);
+  if (direct) return direct;
+
+  // Some successful PHP responses contain only a message. Poll the authoritative
+  // Dealer order history briefly and select the ID that did not exist before POST.
+  for (const delayMs of [0, 250, 600, 1200]) {
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const rows = await fetchRecentDealerOrders(dealerId).catch(() => []);
+    const created = rows.map(orderIdFromRow).find((id) => id && !previousOrderIds.has(id));
+    if (created) return created;
+  }
+  return "";
 }
 
 export async function POST(request: NextRequest) {
@@ -92,6 +129,7 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = safeText(request.headers.get("idempotency-key"), 240);
     const snapshot = await walletUtils.getWalletSnapshot(db, dealerId, { limit: 1 });
     let netPayable = 0;
+    let previousOrderIds = new Set<string>();
     if (snapshot.status === "active") {
       if (isExcelUpload) throw new walletUtils.WalletError("Excel orders are unavailable while this Dealer wallet is active because Net Payable cannot be verified before import.", 422, "unverifiable_order_amount");
       netPayable = authoritativeNetPayable(incoming);
@@ -99,6 +137,7 @@ export async function POST(request: NextRequest) {
       const reserved = await walletUtils.reserveOrderFunds(db, dealerId, netPayable, { idempotencyKey });
       if (reserved.duplicate) return NextResponse.json({ success: true, duplicate: true, wallet: reserved });
       reservation = { dealerId, key: idempotencyKey };
+      previousOrderIds = new Set((await fetchRecentDealerOrders(dealerId).catch(() => [])).map(orderIdFromRow).filter(Boolean));
     }
 
     const forwarded = new FormData();
@@ -116,7 +155,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (reservation) {
-      const orderId = extractOrderId(payload);
+      const orderId = await resolveCreatedOrderId(dealerId, payload, previousOrderIds);
       if (!orderId) {
         await walletUtils.releaseOrderReservation(db, reservation.dealerId, reservation.key);
         reservation = null;
@@ -126,8 +165,13 @@ export async function POST(request: NextRequest) {
         actorId: actor.actorId, actorRole: actor.role, actorName: safeText(request.headers.get("x-omsons-actor-name"), 160),
       });
       reservation = null;
+      payload.order_id ||= orderId;
+      payload.success = true;
+      payload.msg ||= payload.message || "Order placed successfully.";
       payload.wallet = { used: true, transactionId: debit.id, amountConsumed: netPayable, balanceAfter: debit.balanceAfter };
     }
+    payload.success ??= true;
+    payload.msg ||= payload.message || "Order placed successfully.";
     return NextResponse.json(payload, { status: phpResponse.status });
   } catch (error: any) {
     if (reservation) {
