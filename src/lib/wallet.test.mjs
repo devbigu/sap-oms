@@ -44,11 +44,29 @@ class FakeCollection {
 
   match(filter, row) {
     return Object.entries(filter || {}).every(([key, expected]) => {
+      const actual = key.split(".").reduce((value, part) => value?.[part], row);
       if (expected && typeof expected === "object" && "$gte" in expected) {
-        return Number(row?.[key] ?? 0) >= Number(expected.$gte);
+        return Number(actual ?? 0) >= Number(expected.$gte);
       }
-      return String(row?.[key] ?? "") === String(expected);
+      if (expected && typeof expected === "object" && "$exists" in expected) {
+        return (actual !== undefined) === expected.$exists;
+      }
+      return String(actual ?? "") === String(expected);
     });
+  }
+
+  setPath(row, key, value) {
+    const parts = key.split(".");
+    const last = parts.pop();
+    const parent = parts.reduce((current, part) => current[part] ||= {}, row);
+    if (last) parent[last] = value;
+  }
+
+  unsetPath(row, key) {
+    const parts = key.split(".");
+    const last = parts.pop();
+    const parent = parts.reduce((current, part) => current?.[part], row);
+    if (parent && last) delete parent[last];
   }
 
   async findOne(filter) {
@@ -57,6 +75,8 @@ class FakeCollection {
   }
 
   async findOneAndUpdate(filter, update, options = {}) {
+    const overlappingPaths = Object.keys(update.$setOnInsert || {}).filter((key) => Object.prototype.hasOwnProperty.call(update.$inc || {}, key));
+    if (overlappingPaths.length) throw new Error(`Conflicting update paths: ${overlappingPaths.join(",")}`);
     let row = this.rows.find((item) => this.match(filter, item));
     if (!row && !options.upsert) return { value: null };
 
@@ -69,8 +89,9 @@ class FakeCollection {
       Object.assign(row, update.$setOnInsert);
     }
     if (update.$set) {
-      Object.assign(row, update.$set);
+      for (const [key, value] of Object.entries(update.$set)) this.setPath(row, key, value);
     }
+    if (update.$unset) for (const key of Object.keys(update.$unset)) this.unsetPath(row, key);
     if (update.$inc) {
       for (const [key, value] of Object.entries(update.$inc)) {
         row[key] = Number(row[key] ?? 0) + Number(value);
@@ -80,17 +101,23 @@ class FakeCollection {
     return { value: this.cloneRow(row) };
   }
 
-  async updateOne(filter, update) {
-    const row = this.rows.find((item) => this.match(filter, item));
+  async updateOne(filter, update, options = {}) {
+    let row = this.rows.find((item) => this.match(filter, item));
+    let inserted = false;
+    if (!row && options.upsert) { row = { ...filter, _id: `fake-${this.nextId += 1}` }; this.rows.push(row); inserted = true; }
     if (!row) return { matchedCount: 0, modifiedCount: 0 };
-    if (update.$set) Object.assign(row, update.$set);
+    if (inserted && update.$setOnInsert) Object.assign(row, update.$setOnInsert);
+    if (update.$set) for (const [key, value] of Object.entries(update.$set)) this.setPath(row, key, value);
     if (update.$inc) {
       for (const [key, value] of Object.entries(update.$inc)) {
         row[key] = Number(row[key] ?? 0) + Number(value);
       }
     }
+    if (update.$unset) for (const key of Object.keys(update.$unset)) this.unsetPath(row, key);
     return { matchedCount: 1, modifiedCount: 1 };
   }
+
+  async createIndex() { return "fake-index"; }
 
   async insertOne(doc) {
     const row = { ...doc, _id: `fake-${this.nextId += 1}` };
@@ -168,6 +195,14 @@ test("credit wallet adds balance and writes a transaction", async () => {
   assert.equal(store.transactions.rows[0].type, "credit");
 });
 
+test("credit initialization does not send conflicting MongoDB update operators", async () => {
+  const store = createFakeDb();
+  await assert.doesNotReject(() => applyWalletChange(store.db, "D-CONFLICT", "credit", 100, {
+    idempotencyKey: "credit-no-conflict",
+  }));
+  assert.equal(store.wallets.rows[0].balancePaise, 10000);
+});
+
 test("debit wallet subtracts balance and writes a transaction", async () => {
   const store = createFakeDb({
     wallets: [{ dealerId: "D-1", balance: 1000, createdAt: "2026-07-08T00:00:00.000Z" }],
@@ -191,7 +226,7 @@ test("debit wallet rejects insufficient balance", async () => {
 
   await assert.rejects(
     () => applyWalletChange(store.db, "D-1", "debit", 400, { reference: "PAY-FAIL" }),
-    (error) => error instanceof WalletError && error.status === 400
+    (error) => error instanceof WalletError && error.status === 409
   );
 
   assert.equal(store.wallets.rows[0].balance, 100);
@@ -237,4 +272,63 @@ test("concurrent debit requests only allow the first debit to succeed", async ()
   assert.equal(fulfilled.length, 1);
   assert.equal(rejected.length, 1);
   assert.equal(store.wallets.rows[0].balance, 100);
+});
+
+test("activation, top-up, and disable preserve balance and history", async () => {
+  const store = createFakeDb();
+  await applyWalletChange(store.db, "D-2", "activation", 5000, { idempotencyKey: "activate-credit", note: "Advance payment received" });
+  await wallet.setWalletStatus(store.db, "D-2", "active", { idempotencyKey: "activate-status", note: "Advance payment received" });
+  await applyWalletChange(store.db, "D-2", "credit", 800, { idempotencyKey: "topup-1", note: "Bank transfer received" });
+  await wallet.setWalletStatus(store.db, "D-2", "inactive", { idempotencyKey: "disable-1", note: "Admin disabled wallet" });
+  const snapshot = await wallet.getWalletSnapshot(store.db, "D-2");
+  assert.equal(snapshot.status, "inactive");
+  assert.equal(snapshot.balance, 5800);
+  assert.equal(snapshot.transactions.length, 4);
+});
+
+test("top-up idempotency key credits only once", async () => {
+  const store = createFakeDb();
+  await applyWalletChange(store.db, "D-3", "credit", 1000, { idempotencyKey: "topup-same" });
+  await applyWalletChange(store.db, "D-3", "credit", 1000, { idempotencyKey: "topup-same" });
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-3")).balance, 1000);
+  assert.equal(store.transactions.rows.length, 1);
+});
+
+test("active order reservation prevents overspend and final debit is linked once", async () => {
+  const store = createFakeDb({ wallets: [{ dealerId: "D-4", status: "active", balancePaise: 500000, balance: 5000, reservedPaise: 0 }] });
+  await wallet.reserveOrderFunds(store.db, "D-4", 4200, { idempotencyKey: "order:D-4:1" });
+  await assert.rejects(() => wallet.reserveOrderFunds(store.db, "D-4", 1000, { idempotencyKey: "order:D-4:2" }), /Insufficient wallet balance/);
+  const debit = await wallet.finalizeOrderDebit(store.db, "D-4", "order:D-4:1", { id: "101", number: "OM/2026/0101" }, { actorId: "D-4", actorRole: "dealer" });
+  assert.equal(debit.amount, 4200);
+  assert.equal(debit.balanceAfter, 800);
+  assert.equal(debit.relatedOrderId, "101");
+  assert.equal(store.transactions.rows.length, 1);
+});
+
+test("failed order releases reservation without consuming funds", async () => {
+  const store = createFakeDb({ wallets: [{ dealerId: "D-5", status: "active", balancePaise: 100000, balance: 1000, reservedPaise: 0 }] });
+  await wallet.reserveOrderFunds(store.db, "D-5", 600, { idempotencyKey: "order:D-5:1" });
+  await wallet.releaseOrderReservation(store.db, "D-5", "order:D-5:1");
+  const snapshot = await wallet.getWalletSnapshot(store.db, "D-5");
+  assert.equal(snapshot.balance, 1000);
+  assert.equal(snapshot.availableBalance, 1000);
+  assert.equal(store.transactions.rows.length, 0);
+});
+
+test("wallet is a cumulative balance across multiple orders, not a per-order cap", async () => {
+  const store = createFakeDb({ wallets: [{ dealerId: "D-BAL", status: "active", balancePaise: 5000000, balance: 50000, reservedPaise: 0 }] });
+
+  await wallet.reserveOrderFunds(store.db, "D-BAL", 12000, { idempotencyKey: "order:D-BAL:1" });
+  await wallet.finalizeOrderDebit(store.db, "D-BAL", "order:D-BAL:1", { id: "1" });
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 38000);
+
+  await wallet.reserveOrderFunds(store.db, "D-BAL", 20000, { idempotencyKey: "order:D-BAL:2" });
+  await wallet.finalizeOrderDebit(store.db, "D-BAL", "order:D-BAL:2", { id: "2" });
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 18000);
+
+  await assert.rejects(
+    () => wallet.reserveOrderFunds(store.db, "D-BAL", 19000, { idempotencyKey: "order:D-BAL:3" }),
+    /Insufficient wallet balance/
+  );
+  assert.equal((await wallet.getWalletSnapshot(store.db, "D-BAL")).availableBalance, 18000);
 });

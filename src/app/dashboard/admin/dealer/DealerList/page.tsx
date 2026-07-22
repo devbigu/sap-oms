@@ -746,6 +746,7 @@ export default function DealerListPage() {
                                 {canManageDealers && (
                                   <>
                                     <Link href={getDealerEditRoute(dealer.Dealer_Id)} className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Edit</Link>
+                                    <Link href={`/dashboard/admin/dealer/${encodeURIComponent(dealer.Dealer_Id)}/ledger`} className="block px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50">Wallet</Link>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); confirmDealerStatusChange(dealer) }}
                                       disabled={statusUpdatingId === String(dealer.Dealer_Id)}
