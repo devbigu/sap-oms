@@ -21,6 +21,7 @@ import {
   getVariantLabel,
   type CatalogueIndex,
   type CatalogueProduct,
+  type CatalogueVariant,
 } from "@/lib/catalogue";
 import { loadCatalogueProducts } from "@/lib/catalogueClient";
 import {
@@ -1465,6 +1466,26 @@ function AddOrderPageInner() {
     return null;
   };
 
+  const getSelectedVariantSpecs = (variant: CatalogueVariant | null) => {
+    const structuredSpecs = Object.entries(variant?.specs ?? {})
+      .map(([key, value]) => [key.trim(), String(value ?? "").trim()] as const)
+      .filter(([key, value]) => key && value);
+
+    if (structuredSpecs.length > 0) return structuredSpecs.slice(0, 3);
+
+    return String(variant?.specsText ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((part) => {
+        const separatorIndex = part.indexOf(":");
+        return separatorIndex > 0
+          ? [part.slice(0, separatorIndex).trim(), part.slice(separatorIndex + 1).trim()] as const
+          : ["Specification", part] as const;
+      });
+  };
+
   const updateProductNote = (i: number, note: string) => {
     if (orderLockedByPendingApproval) return;
     const normalizedNote = note.slice(0, 500);
@@ -2507,6 +2528,7 @@ function AddOrderPageInner() {
                     const totalUnits = safePositiveNumber(row.producQuanity) * (safePositiveNumber(row.packSize) || 1);
                     const rowSelection = resolveRowSelection(row);
                     const selectedCatalogueOption = findCatalogueOption(row, rowSelection.variantSku);
+                    const selectedVariantSpecs = getSelectedVariantSpecs(rowSelection.variant);
                     const selectedProduct = rowSelection.product ?? catalogueIndex?.productsBySku[String(rowSelection.productSku)] ?? null;
                     const metaKey = rowSelection.variantSku || row.productname || row.variantCode;
                     const meta = variantLookup[metaKey] ?? variantLookup[row.productname];
@@ -2615,6 +2637,24 @@ function AddOrderPageInner() {
                                 ),
                               }}
                             />
+
+                            {selectedVariantSpecs.length > 0 && (
+                              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                                {selectedVariantSpecs.map(([label, value]) => (
+                                  <div
+                                    key={`${label}-${value}`}
+                                    className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5"
+                                  >
+                                    <div className="truncate text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                                      {label}
+                                    </div>
+                                    <div className="truncate text-[11px] font-semibold text-slate-700" title={value}>
+                                      {value}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
 
                             <button
                               type="button"
