@@ -3,7 +3,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Search, BookOpen, ChevronRight, ShieldAlert } from 'lucide-react'
+import { Search, BookOpen, ChevronRight } from 'lucide-react'
+import {
+  applyDealerStatusOverrides,
+  dealerStatusBadge,
+  fetchDealerStatusOverrides,
+  normalizeDealerStatus,
+  type DealerStatusDocument,
+} from '@/lib/dealerStatus'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Dealer = {
@@ -67,9 +74,7 @@ function initials(name: string) {
 }
 
 function statusBadge(s: string) {
-  return s === '1'
-    ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Active' }
-    : { bg: 'bg-red-50',     text: 'text-red-600',     label: 'Inactive' }
+  return dealerStatusBadge(normalizeDealerStatus(s))
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
@@ -125,6 +130,13 @@ export default function LedgerDealerListPage() {
     enabled: !redirecting && role === 'staff' && !!staffId,
   })
 
+  const { data: statusOverrides } = useQuery<DealerStatusDocument[]>({
+    queryKey: ['ledger-dealer-statuses'],
+    queryFn: fetchDealerStatusOverrides,
+    staleTime: 5 * 60 * 1000,
+    enabled: !redirecting,
+  })
+
   // ── Prefetch next page (admin/accountant only) ──
   useEffect(() => {
     if (redirecting || role === 'staff') return
@@ -159,10 +171,15 @@ export default function LedgerDealerListPage() {
   // Admin/accountant: use paginated API data
   const paginatedData: Dealer[] = response?.data || []
 
-  // Unified data for the current page
-  const data: Dealer[] = isStaffRole
+  const rawData: Dealer[] = isStaffRole
     ? staffFilteredDealers.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
     : paginatedData
+
+  // Unified data for the current page, with saved status overrides preferred over legacy PHP status.
+  const data: Dealer[] = useMemo(
+    () => applyDealerStatusOverrides(rawData, statusOverrides ?? []),
+    [rawData, statusOverrides]
+  )
 
   const total = isStaffRole
     ? staffFilteredDealers.length

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { normalizeDealerStatus, type DealerStatusDocument } from "@/lib/dealerStatus";
 import {
   getLedgerSnapshot,
   normalizeDealer,
@@ -19,15 +20,29 @@ export async function GET(_req: NextRequest) {
     const snapshot = await getLedgerSnapshot();
     let payments: any[] = [];
     let paymentsLive = true;
+    let statusOverrides: DealerStatusDocument[] = [];
 
     try {
       const db = await getDb();
-      payments = await db.collection("ledger_transactions").find({}).toArray();
+      const [paymentRows, statusRows] = await Promise.all([
+        db.collection("ledger_transactions").find({}).toArray(),
+        db.collection("dealer_statuses").find({}).toArray(),
+      ]);
+      payments = paymentRows;
+      statusOverrides = statusRows.map((row: any) => ({
+        dealerId: String(row.dealerId ?? ""),
+        status: normalizeDealerStatus(row.status),
+        updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+        updatedBy: row.updatedBy,
+      }));
     } catch (paymentError) {
       paymentsLive = false;
       console.error("[GET /api/ledger payments]", paymentError);
     }
 
+    const statusByDealer = new Map(
+      statusOverrides.map((row) => [String(row.dealerId), normalizeDealerStatus(row.status)])
+    );
     const paymentsByDealer = new Map<string, { creditPaise: number; debitPaise: number }>();
     for (const payment of payments) {
       const dealerId = String(payment.Dealer_Id ?? "");
@@ -40,6 +55,7 @@ export async function GET(_req: NextRequest) {
 
     const ledgerSummaries = snapshot.dealers.map((rawDealer) => {
       const dealer = normalizeDealer(rawDealer);
+      const status = statusByDealer.get(dealer.Dealer_Id) ?? dealer.status;
       const dealerOrders = ordersForDealer(snapshot.orders, dealer.Dealer_Id);
       const accountBook = summarizeOrders(dealerOrders);
       const paymentTotals = paymentsByDealer.get(dealer.Dealer_Id) ?? { creditPaise: 0, debitPaise: 0 };
@@ -48,6 +64,7 @@ export async function GET(_req: NextRequest) {
 
       return {
         ...dealer,
+        status,
         totalDebit,
         totalCredit,
         netBalance: totalDebit - totalCredit,
