@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { resolveOrderAmounts } from '@/lib/orderAmounts'
 import { resolveStoredAuth } from '@/lib/roleAccess'
+import { dealerStatusBadge, normalizeDealerStatus, type DealerStatus } from '@/lib/dealerStatus'
 
 type AccountBook = {
   bookedCount?: number
@@ -29,6 +30,7 @@ type Dealer = {
   Dealer_Email?: string
   Dealer_Number?: string
   Dealer_City?: string
+  status?: DealerStatus | string
   creditdays?: string | number
   creditDays?: string | number
   credit_period?: string | number
@@ -478,6 +480,9 @@ export default function DealerLedgerShellPage() {
                     City
                   </th>
                   <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Status
+                  </th>
+                  <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
                     Orders
                   </th>
                   <th className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
@@ -493,7 +498,7 @@ export default function DealerLedgerShellPage() {
                 {isLoading &&
                   Array.from({ length: ITEMS_PER_PAGE }).map((_, index) => (
                     <tr key={index}>
-                      {Array.from({ length: 6 }).map((__, cellIndex) => (
+                      {Array.from({ length: 7 }).map((__, cellIndex) => (
                         <td key={cellIndex} className="px-4 py-4">
                           <div className="h-4 w-full animate-pulse rounded bg-gray-200" />
                         </td>
@@ -503,7 +508,7 @@ export default function DealerLedgerShellPage() {
 
                 {!isLoading && pageRows.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
+                    <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-400">
                       {search ? 'No dealers match your search' : 'No dealers found'}
                     </td>
                   </tr>
@@ -784,6 +789,9 @@ function FragmentRow({
           </span>
         </td>
         <td className="px-4 py-4">
+          <StatusPill status={dealer.status} />
+        </td>
+        <td className="px-4 py-4">
           <span className="font-medium text-gray-900">{orderCount}</span>
           <span className="ml-1 text-xs text-gray-400">orders</span>
         </td>
@@ -802,7 +810,7 @@ function FragmentRow({
 
       {isExpanded && (
         <tr>
-          <td colSpan={6} className="bg-slate-50 px-4 py-5">
+          <td colSpan={7} className="bg-slate-50 px-4 py-5">
             <div className="rounded-lg border border-gray-200 bg-white">
               <div className="flex flex-col gap-2 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -929,6 +937,16 @@ function FragmentRow({
         </tr>
       )}
     </>
+  )
+}
+
+function StatusPill({ status }: { status?: Dealer['status'] }) {
+  const badge = dealerStatusBadge(normalizeDealerStatus(status))
+
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${badge.bg} ${badge.text}`}>
+      {badge.label}
+    </span>
   )
 }
 

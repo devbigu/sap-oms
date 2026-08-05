@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { normalizeDealerStatus } from "@/lib/dealerStatus";
 import {
   fetchExternalDealer,
   getLedgerSnapshot,
@@ -42,14 +43,20 @@ export async function GET(
     const dealerOrders = ordersForDealer(snapshot.orders, dealerId);
     let transactions: any[] = [];
     let paymentsLive = true;
+    let statusOverride: string | null = null;
 
     try {
       const db = await getDb();
-      transactions = await db
-        .collection("ledger_transactions")
-        .find({ Dealer_Id: dealerId })
-        .sort({ date: -1 })
-        .toArray();
+      const [transactionRows, statusDoc] = await Promise.all([
+        db
+          .collection("ledger_transactions")
+          .find({ Dealer_Id: dealerId })
+          .sort({ date: -1 })
+          .toArray(),
+        db.collection("dealer_statuses").findOne({ dealerId }),
+      ]);
+      transactions = transactionRows;
+      statusOverride = statusDoc ? normalizeDealerStatus(statusDoc.status) : null;
     } catch (paymentError) {
       paymentsLive = false;
       console.error("[GET /api/ledger/[dealerId] payments]", paymentError);
@@ -63,7 +70,10 @@ export async function GET(
 
     return NextResponse.json({
       success: true,
-      dealer: normalizeDealer(dealer),
+      dealer: {
+        ...normalizeDealer(dealer),
+        ...(statusOverride ? { status: statusOverride } : {}),
+      },
       summary: {
         totalDebit,
         totalCredit,

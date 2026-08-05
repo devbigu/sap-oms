@@ -6,6 +6,7 @@ import {
   resolveOrderAmounts,
   withDisplayOrderAmounts,
 } from "@/lib/orderAmounts";
+import { normalizeDealerStatus } from "@/lib/dealerStatus";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const CACHE_ID = "collective_ledger_snapshot:all-orders-v1";
@@ -24,6 +25,7 @@ export type ExternalDealer = Record<string, any> & {
   Dealer_Address?: string;
   Dealer_City?: string;
   Dealer_Pincode?: string;
+  status?: string | number;
   walletBalance?: number;
 };
 
@@ -291,6 +293,7 @@ export function normalizeDealer(dealer: ExternalDealer) {
     Dealer_Address: dealer.Dealer_Address ?? "",
     Dealer_City: dealer.Dealer_City ?? "",
     Dealer_Pincode: dealer.Dealer_Pincode ?? "",
+    status: normalizeDealerStatus(dealer.status),
     creditdays: dealer.creditdays ?? dealer.creditDays ?? dealer.credit_period ?? dealer.Credit_Period ?? "",
     walletBalance: Number(dealer.walletBalance || 0),
   };
