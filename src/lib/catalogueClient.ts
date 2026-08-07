@@ -35,6 +35,34 @@ function hasSpecValue(value: unknown) {
   return String(value ?? "").trim().length > 0;
 }
 
+function getSpaceSeparatedNumericTokens(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => /^-?\d+(?:\.\d+)?$/.test(token));
+}
+
+function shouldUseFallbackSpecValue(primaryValue: unknown, fallbackValue: unknown) {
+  if (!hasSpecValue(primaryValue) || !hasSpecValue(fallbackValue)) return false;
+
+  const primaryTokens = getSpaceSeparatedNumericTokens(primaryValue);
+  const fallbackTokens = getSpaceSeparatedNumericTokens(fallbackValue);
+
+  if (primaryTokens.length < 2 || fallbackTokens.length !== 1) {
+    return false;
+  }
+
+  const normalizedPrimary = String(primaryValue ?? "").trim();
+  const normalizedFallback = String(fallbackValue ?? "").trim();
+
+  return (
+    primaryTokens.includes(normalizedFallback) &&
+    fallbackTokens[0] === normalizedFallback &&
+    normalizedPrimary !== normalizedFallback
+  );
+}
+
 function mergeVariantSpecs(
   primarySpecs?: Record<string, string>,
   fallbackSpecs?: Record<string, string>
@@ -49,6 +77,14 @@ function mergeVariantSpecs(
       if (!canonicalKey) continue;
 
       const existingValue = merged[canonicalKey];
+      if (
+        preferNonEmpty &&
+        hasSpecValue(existingValue) &&
+        shouldUseFallbackSpecValue(value, existingValue)
+      ) {
+        continue;
+      }
+
       if (preferNonEmpty && hasSpecValue(value)) {
         merged[canonicalKey] = value;
         continue;

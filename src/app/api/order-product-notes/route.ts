@@ -8,6 +8,7 @@ import {
   normalizeSku,
 } from "@/lib/orderProductNotes.mjs";
 import { filterExistingOrderIds, resolveOrderAccess } from "@/lib/orderAccess";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export const runtime = "nodejs";
 
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
     }
 
     const collection = await getCollection();
-    const docs = await collection.find(query).sort({ updatedAt: -1, createdAt: -1 }).limit(500).toArray();
+    const docs = await collection.find(withOrderMongoCutoff(query)).sort({ updatedAt: -1, createdAt: -1 }).limit(500).toArray();
 
     if (orderItemId && docs[0]?.orderId) {
       const access = await resolveOrderAccess(docs[0].orderId, docs[0].dealerId);

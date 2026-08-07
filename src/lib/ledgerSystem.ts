@@ -7,6 +7,7 @@ import {
   withDisplayOrderAmounts,
 } from "@/lib/orderAmounts";
 import { normalizeDealerStatus } from "@/lib/dealerStatus";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/api";
 const CACHE_ID = "collective_ledger_snapshot:all-orders-v1";
@@ -127,7 +128,7 @@ async function readOrderSummaryOverrides(
   try {
     const docs = await database
       .collection("order_summary_overrides")
-      .find({ orderId: { $in: ids } })
+      .find(withOrderMongoCutoff({ orderId: { $in: ids } }))
       .toArray();
 
     const byOrder = new Map<string, OrderAmountSource>();

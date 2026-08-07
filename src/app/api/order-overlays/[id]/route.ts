@@ -4,6 +4,7 @@ import { resolveOrderAccess } from "@/lib/orderAccess";
 import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeServer";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import { parsePhpJsonResponse } from "@/lib/phpJson";
 import walletUtils from "@/lib/wallet";
 import {
@@ -57,7 +58,7 @@ async function fetchPhpDetail(orderId: string) {
 
 async function fetchDispatchRecords(orderId: string) {
   const db = await getDb();
-  return db.collection("order_dispatch_records").find({ orderId }).toArray();
+  return db.collection("order_dispatch_records").find(withOrderMongoCutoff({ orderId })).toArray();
 }
 
 async function loadEffectiveContext(orderIdInput: string, actor: OrderOverlayActor) {

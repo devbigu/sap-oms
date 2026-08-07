@@ -3,6 +3,7 @@ import type { Document, Filter, WithId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getReadableAdditionalDiscountText } from "@/lib/orderAmounts";
 import { resolveOrderAccess } from "@/lib/orderAccess";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -99,7 +100,7 @@ export async function GET(req: NextRequest) {
       : 200;
 
     const docs = await collection
-      .find(query)
+      .find(withOrderMongoCutoff(query))
       .sort({ orderIdNumber: -1, createdAt: -1 })
       .limit(resultLimit)
       .toArray();

@@ -10,10 +10,12 @@ async function loadOverlayModule() {
   const source = await fs.readFile(filePath, "utf8");
   const mongoStubUrl = `data:text/javascript;base64,${Buffer.from('export async function getDb(){ throw new Error("not used"); }').toString("base64")}`;
   const amountStubUrl = `data:text/javascript;base64,${Buffer.from('export function resolveOrderAmounts(order){ const gross = Number(order?.grossAmount ?? order?.order_amount ?? order?.total ?? 0) || 0; const discount = Number(order?.discountAmount ?? order?.order_discount_amount ?? 0) || 0; const net = Number(order?.netPayableAmount ?? order?.order_net_amount ?? (gross - discount)) || 0; return { gross, discountAmount: discount || Math.max(0, gross - net), netPayable: net || Math.max(0, gross - discount) }; }').toString("base64")}`;
+  const cutoffStubUrl = `data:text/javascript;base64,${Buffer.from('export function withOrderMongoCutoff(query){ return query; } export function isOrderMongoDocumentVisible(doc){ return !!doc; }').toString("base64")}`;
   const rewrittenSource = source
     .replace(/from\s+["']@\/lib\/mongodb["']/, `from "${mongoStubUrl}"`)
     .replace(/from\s+["']@\/lib\/orderProductNotes\.mjs["']/, `from "${pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs")).href}"`)
-    .replace(/from\s+["']@\/lib\/orderAmounts["']/, `from "${amountStubUrl}"`);
+    .replace(/from\s+["']@\/lib\/orderAmounts["']/, `from "${amountStubUrl}"`)
+    .replace(/from\s+["']@\/lib\/orderMongoCutoff["']/, `from "${cutoffStubUrl}"`);
   const transpiled = ts.transpileModule(rewrittenSource, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,

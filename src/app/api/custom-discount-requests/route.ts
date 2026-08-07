@@ -8,6 +8,7 @@ import {
   buildPendingRequestLookup,
   normalizeCustomDiscountScope,
 } from "@/lib/customDiscountRequests";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export const runtime = "nodejs";
 
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
     const docs = await db
       .collection("custom_discount_requests")
-      .find(query)
+      .find(withOrderMongoCutoff(query))
       .sort({ createdAt: -1 })
       .limit(limit)
       .toArray();
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest) {
     }
 
     const pendingLookup = buildPendingRequestLookup(dealerId, orderDraftId);
-    const existingPending = await db.collection("custom_discount_requests").findOne(pendingLookup);
+    const existingPending = await db.collection("custom_discount_requests").findOne(withOrderMongoCutoff(pendingLookup));
     if (existingPending) {
       return NextResponse.json({ success: true, data: toDoc(existingPending) });
     }
