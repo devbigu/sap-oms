@@ -10,11 +10,15 @@ async function loadLedgerModule() {
   const mongodbStub = dataModule(`export async function getDb(){throw new Error("unused")}`);
   const amountStub = dataModule(`export function resolveOrderAmounts(o){const gross=Number(o.order_amount||0);const discount=Number(o.order_discount||0);return {netPayable:Number(o.order_net_amount??(gross-discount))}};export function withDisplayOrderAmounts(o){return o}`);
   const headersStub = dataModule(`export async function loadOrderHeaders(){return {rows:[]}}`);
+  const dealerStatusStub = dataModule(`export function normalizeDealerStatus(value){return String(value ?? "active")}`);
+  const cutoffStub = dataModule(`export function withOrderMongoCutoff(query){return query}`);
   const source = (await fs.readFile(filePath, "utf8"))
     .replace(/import\s+\{\s*Db\s*\}\s+from\s+["']mongodb["'];?/, "")
     .replace(/from\s+["']@\/lib\/mongodb["']/g, `from "${mongodbStub}"`)
     .replace(/from\s+["']@\/lib\/orderHeaders["']/g, `from "${headersStub}"`)
-    .replace(/from\s+["']@\/lib\/orderAmounts["']/g, `from "${amountStub}"`);
+    .replace(/from\s+["']@\/lib\/orderAmounts["']/g, `from "${amountStub}"`)
+    .replace(/from\s+["']@\/lib\/dealerStatus["']/g, `from "${dealerStatusStub}"`)
+    .replace(/from\s+["']@\/lib\/orderMongoCutoff["']/g, `from "${cutoffStub}"`);
   const output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
     fileName: filePath,

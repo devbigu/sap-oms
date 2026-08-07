@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { normalizeDealerStatus, type DealerStatus } from "@/lib/dealerStatus";
 import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeServer";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import walletUtils from "@/lib/wallet";
 
 export const runtime = "nodejs";
@@ -56,7 +57,7 @@ async function assertCustomDiscountApproved(db: Awaited<ReturnType<typeof getDb>
   const ids = safeText(form.get("customDiscountRequestId"), 2000).split(",").map((id) => id.trim()).filter(Boolean);
   if (!ids.length) throw new walletUtils.WalletError("Approved custom-discount reference is required.", 409, "custom_discount_not_approved");
   const objectIds = ids.map((id) => { try { return new ObjectId(id); } catch { return null; } }).filter((id): id is ObjectId => Boolean(id));
-  const approved = await db.collection("custom_discount_requests").countDocuments({ _id: { $in: objectIds }, dealerId, status: "approved" });
+  const approved = await db.collection("custom_discount_requests").countDocuments(withOrderMongoCutoff({ _id: { $in: objectIds }, dealerId, status: "approved" }));
   if (approved !== ids.length) throw new walletUtils.WalletError("Custom discount is not approved for this order.", 409, "custom_discount_not_approved");
 }
 

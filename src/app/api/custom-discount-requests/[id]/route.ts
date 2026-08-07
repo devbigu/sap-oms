@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { buildDraftApprovalState } from "@/lib/customDiscountRequests";
 import { resolveOrderAccess } from "@/lib/orderAccess";
+import { isOrderMongoDocumentVisible } from "@/lib/orderMongoCutoff";
 
 export const runtime = "nodejs";
 
@@ -82,6 +83,7 @@ export async function GET(
     const db = await getDb();
     const doc = await db.collection("custom_discount_requests").findOne({ _id: oid });
     if (!doc) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+    if (!isOrderMongoDocumentVisible(doc)) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
     const actorRole = String(req.headers.get("x-omsons-actor-role") ?? "").trim().toLowerCase();
     if (actorRole === "dealer") {
       const actorId = String(req.headers.get("x-omsons-actor-id") ?? "").trim();
@@ -170,6 +172,7 @@ export async function PATCH(
     const db = await getDb();
     const existing = await db.collection("custom_discount_requests").findOne({ _id: oid });
     if (!existing) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+    if (!isOrderMongoDocumentVisible(existing)) return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
     const existingOrderId = safeText(existing.orderId || existing.order_id, 120);
     if (existingOrderId) {
       const access = await resolveOrderAccess(existingOrderId, existing.dealerId);

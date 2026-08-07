@@ -3,6 +3,7 @@ import type { Collection, Document, Filter, WithId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { normalizeSku } from "@/lib/orderProductNotes.mjs";
 import { resolveOrderAmounts } from "@/lib/orderAmounts";
+import { isOrderMongoDocumentVisible, withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export const ORDER_OVERLAY_COLLECTION = "order_overlays";
 export const ORDER_OVERLAY_VERSION = "order-overlays-v1";
@@ -418,7 +419,11 @@ export function toSafeOverlay(doc: WithId<OrderOverlayDocument> | OrderOverlayDo
 
 export async function findOrderOverlay(orderId: unknown) {
   const collection = await getOrderOverlayCollection();
-  return collection.findOne({ orderId: normalizeOverlayOrderId(orderId) });
+  const doc = await collection.findOne(withOrderMongoCutoff(
+    { orderId: normalizeOverlayOrderId(orderId) },
+    ["createdAt", "updatedAt", "cancellation.cancelledAt", "acceptance.acceptedAt"],
+  ) as Filter<OrderOverlayDocument>);
+  return isOrderMongoDocumentVisible(doc, ["createdAt", "updatedAt", "cancellation.cancelledAt", "acceptance.acceptedAt"]) ? doc : null;
 }
 
 export function resolveEffectiveOrder(input: {
@@ -625,7 +630,11 @@ export async function listCancelledOrderOverlays(input: {
 
   const page = Math.max(1, Math.floor(input.page ?? 1));
   const limit = Math.min(5000, Math.max(1, Math.floor(input.limit ?? 10)));
-  const total = await collection.countDocuments(query);
-  const rows = await collection.find(query).sort({ "cancellation.cancelledAt": -1, updatedAt: -1 }).skip((page - 1) * limit).limit(limit).toArray();
+  const cutoffQuery = withOrderMongoCutoff(
+    query,
+    ["cancellation.cancelledAt", "updatedAt", "createdAt"],
+  ) as Filter<OrderOverlayDocument>;
+  const total = await collection.countDocuments(cutoffQuery);
+  const rows = await collection.find(cutoffQuery).sort({ "cancellation.cancelledAt": -1, updatedAt: -1 }).skip((page - 1) * limit).limit(limit).toArray();
   return { rows, total, page, limit, totalPages: Math.ceil(total / limit) };
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -30,7 +31,7 @@ export async function GET(
 
   try {
     const db  = await getDb();
-    const doc = await db.collection("order_drafts").findOne({ _id: oid, dealer_id: dealerId });
+    const doc = await db.collection("order_drafts").findOne(withOrderMongoCutoff({ _id: oid, dealer_id: dealerId }));
     if (!doc) return NextResponse.json({ success: false, message: "Draft not found" }, { status: 404 });
     return NextResponse.json({ success: true, data: toDoc(doc) });
   } catch (e: any) {
@@ -72,7 +73,7 @@ export async function PUT(
     const result = await db
       .collection("order_drafts")
       .findOneAndUpdate(
-        { _id: oid, dealer_id },
+        withOrderMongoCutoff({ _id: oid, dealer_id }),
         { $set: set },
         { returnDocument: "after" }
       );

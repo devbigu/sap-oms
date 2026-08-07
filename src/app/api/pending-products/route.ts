@@ -4,6 +4,7 @@ import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { findOrderOverlay } from "@/lib/orderOverlays";
 import type { OrderDispatchRecord } from "@/lib/orderDispatch";
 import { loadOrderHeaders } from "@/lib/orderHeaders";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import {
   aggregatePendingProducts,
   buildPendingProductDrilldown,
@@ -321,7 +322,7 @@ async function fetchDispatchRecordsByOrderIds(orderIds: string[]) {
 
   const db = await getDb();
   const collection = db.collection<OrderDispatchRecord>(DISPATCH_COLLECTION);
-  const docs = await collection.find({ orderId: { $in: orderIds } }).toArray();
+  const docs = await collection.find(withOrderMongoCutoff({ orderId: { $in: orderIds } })).toArray();
 
   return docs.reduce<Record<string, Array<Partial<OrderDispatchRecord>>>>((accumulator, record) => {
     const orderId = safeText(record.orderId, 120);

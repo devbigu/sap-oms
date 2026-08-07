@@ -4,6 +4,7 @@ import { buildOrdersPage } from "@/lib/orderPagination";
 import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeServer";
 import { STAFF_ORDER_SCOPE_VERSION } from "@/lib/staffOrderScope.js";
 import { getOrderOverlayCollection } from "@/lib/orderOverlays";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
     const loaded = await loadOrderHeaders({ source, actor, assignedDealerIds });
     const cancelledOrderIds = await getOrderOverlayCollection()
       .then((collection) => collection
-        .find({ status: "cancelled" }, { projection: { orderId: 1 } })
+        .find(withOrderMongoCutoff({ status: "cancelled" }, ["cancellation.cancelledAt", "updatedAt", "createdAt"]), { projection: { orderId: 1 } })
         .limit(5000)
         .toArray())
       .then((rows) => new Set(rows.map((row) => String(row.orderId ?? "").trim()).filter(Boolean)))

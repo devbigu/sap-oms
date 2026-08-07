@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { filterExistingOrderIds, resolveOrderAccess } from "@/lib/orderAccess";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 function safeText(value: unknown, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     const db = await getDb();
     const docs = await db
       .collection("order_notes")
-      .find(query)
+      .find(withOrderMongoCutoff(query))
       .sort({ createdAt: -1 })
       .limit(200)
       .toArray();

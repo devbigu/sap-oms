@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export async function GET(req: NextRequest) {
   const dealerId = req.nextUrl.searchParams.get("dealer_id");
@@ -8,7 +9,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const db    = await getDb();
-    const draft = await db.collection("draftcarts").findOne({ dealer_id: dealerId });
+    const draft = await db.collection("draftcarts").findOne(withOrderMongoCutoff({ dealer_id: dealerId }));
     if (!draft) return NextResponse.json({ success: true, data: null });
     return NextResponse.json({ success: true, data: { ...draft, _id: draft._id.toString() } });
   } catch (e: any) {

@@ -6,6 +6,7 @@ import { MongoServerError } from "mongodb";
 import { getDb, isMongoDependencyError } from "@/lib/mongodb";
 import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
 import { findOrderOverlay } from "@/lib/orderOverlays";
+import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import { parsePhpJsonResponse } from "@/lib/phpJson";
 import {
   buildBulkDispatchPlan,
@@ -541,7 +542,7 @@ async function handleBulkDispatch(actor: DispatchUserSession, body: Record<strin
     }
   }
 
-  const docs = await collection.find({ orderId }).sort({ updatedAt: -1, createdAt: -1 }).toArray();
+  const docs = await collection.find(withOrderMongoCutoff({ orderId })).sort({ updatedAt: -1, createdAt: -1 }).toArray();
   const mergedItems = mergeOrderItemsWithDispatchRecords(effectiveItems, docs);
   const plan = buildBulkDispatchPlan(mergedItems);
   const dispatchableByKey = new Map(plan.lines.map((line) => [buildBulkDispatchLineKey(line), line]));
@@ -732,7 +733,7 @@ export async function GET(req: NextRequest) {
     const collection = await getCollection();
 
     if (orderItemId) {
-      const doc = await collection.findOne({ orderItemId });
+      const doc = await collection.findOne(withOrderMongoCutoff({ orderItemId }));
       if (!doc) {
         return NextResponse.json({ success: false, message: "Dispatch record not found" }, { status: 404 });
       }
@@ -757,7 +758,7 @@ export async function GET(req: NextRequest) {
       if (!authorizeView(actor, context)) {
         return NextResponse.json({ success: false, message: "Unauthorized dispatch access" }, { status: 403 });
       }
-      const docs = await collection.find({ orderId }).sort({ updatedAt: -1, createdAt: -1 }).toArray();
+      const docs = await collection.find(withOrderMongoCutoff({ orderId })).sort({ updatedAt: -1, createdAt: -1 }).toArray();
       return NextResponse.json({ success: true, data: docs.map(toResponseRecord) });
     }
 
@@ -769,7 +770,7 @@ export async function GET(req: NextRequest) {
     }
 
     await importLegacyDispatchRecords(orderId, payload, context);
-    const docs = await collection.find({ orderId }).sort({ updatedAt: -1, createdAt: -1 }).toArray();
+    const docs = await collection.find(withOrderMongoCutoff({ orderId })).sort({ updatedAt: -1, createdAt: -1 }).toArray();
     return NextResponse.json({ success: true, data: docs.map(toResponseRecord) });
   } catch (error) {
     console.error("[GET /api/order-dispatch]", error);

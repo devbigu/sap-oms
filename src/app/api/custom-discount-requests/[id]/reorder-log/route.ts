@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { resolveOrderAccess } from "@/lib/orderAccess";
+import { isOrderMongoDocumentVisible } from "@/lib/orderMongoCutoff";
 
 function toObjectId(id: string) {
   try { return new ObjectId(id); } catch { return null; }
@@ -42,6 +43,9 @@ export async function POST(
     const db = await getDb();
     const existing = await db.collection("custom_discount_requests").findOne({ _id: oid });
     if (!existing) {
+      return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
+    }
+    if (!isOrderMongoDocumentVisible(existing)) {
       return NextResponse.json({ success: false, message: "Request not found" }, { status: 404 });
     }
     if (String(existing.dealerId) !== dealerId) {
