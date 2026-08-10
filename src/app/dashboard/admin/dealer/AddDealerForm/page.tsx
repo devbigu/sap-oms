@@ -125,7 +125,8 @@ function AddDealerPageContent() {
     setMessage(null);
 
     try {
-      const uniqueSnapshot = await resolveUniqueDealerCode(snapshot);
+      const shouldAutoResolveDealerCode = mode === "admin-create" || mode === "staff-submit";
+      const uniqueSnapshot = shouldAutoResolveDealerCode ? await resolveUniqueDealerCode(snapshot) : snapshot;
 
       if (mode === "admin-create") {
         const response = await fetch(DIRECT_DEALER_CREATE_URL, {

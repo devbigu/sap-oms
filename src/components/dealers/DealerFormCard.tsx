@@ -341,14 +341,16 @@ export default function DealerFormCard({
 
           <Section title="Account & credentials">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <Field label="Dealer code" required>
+              <Field label="Dealer code" required hint="Enter a unique 4-digit code. Requests will not be sent without it.">
                 <input
                   name="dealerCode"
                   type="text"
+                  inputMode="numeric"
+                  maxLength={4}
+                  pattern="\d{4}"
                   value={dealerCodeLoading ? "Generating..." : formData.dealerCode}
                   onChange={handleInputChange}
                   placeholder="Auto generated"
-                  readOnly
                   required
                 />
               </Field>
