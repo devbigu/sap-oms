@@ -6,7 +6,7 @@ import {
   LayoutDashboard, UserRoundPlus, Users, SquareUser,
   Plus, ClipboardList, Home, LogOut, Package, Images,
   ShieldCheck, Gift, Receipt, TrendingUp, BookOpen, FileText,
-  Wallet,
+  Wallet, ClipboardPenLine,
 } from "lucide-react";
 import { clearAuthStorage, type AppRole, type StoredUser } from "@/lib/roleAccess";
 import { useAuthSession } from "@/hooks/useAuthSession";
@@ -42,6 +42,7 @@ const NAV: Record<AppRole, NavItem[]> = {
     {                         label: "Pending Orders",      href: "/Pages/Ordermanagement/outstandingorders",         icon: <ClipboardList size={15} />   },
     {                         label: "Pending Products",    href: "/dashboard/admin/pending-products",                icon: <Package size={15} />         },
     {                         label: "Discount Approvals",  href: "/dashboard/admin/custom-discount-approvals",       icon: <Receipt size={15} />         },
+    { section: "Forms",       label: "Forms",               href: "/dashboard/admin/forms",                           icon: <ClipboardPenLine size={15} /> },
     { section: "Content",     label: "Slider Images",      href: "/dashboard/admin/slider",                          icon: <Images size={15} />          },
     {                         label: "Hot Items",           href: "/dashboard/admin/hot-items",                       icon: <Images size={15} />          },
     { section: "Reports",     label: "Dealer Category Report", href: "/dashboard/admin/reports/dealer-category",     icon: <TrendingUp size={15} />      },
@@ -71,6 +72,7 @@ const NAV: Record<AppRole, NavItem[]> = {
     {                      label: "Pending Products", href: "/dashboard/staff/pending-products",             icon: <Package size={15} />         },
     { section: "Dealers",  label: "Dealer List",   href: "/dashboard/staff/dealerlist",              icon: <Users size={15} />           },
     {                      label: "Dealer Ledger",  href: "/Pages/ledger",                                   icon: <BookOpen size={15} />        },
+    { section: "Forms",    label: "Forms",          href: "/dashboard/staff/forms",                          icon: <ClipboardPenLine size={15} /> },
     { section: "Reports",  label: "Dealer Category Report", href: "/dashboard/staff/reports/dealer-category", icon: <TrendingUp size={15} />      },
   ],
   accountant: [
