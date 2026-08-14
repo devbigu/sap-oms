@@ -19,6 +19,9 @@ type Submission = {
   cartridgeFilter?: Section;
   commercialInfo?: Section;
   commercialInformation?: Section;
+  visitedDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 const opts = (arr: string[]): Option[] => arr.map((value) => ({ label: value, value }));
