@@ -6,17 +6,17 @@ import { useParams } from "next/navigation";
 import Form from "@/components/Form";
 import { resolveStoredAuth } from "@/lib/roleAccess";
 
-function adminHeaders() {
+function headers() {
   const session = resolveStoredAuth(localStorage);
   const user = session.status === "authenticated" ? session.user : {};
   return {
-    "x-omsons-actor-role": "admin",
-    "x-omsons-actor-id": String(user.staff_id ?? user.id ?? user.admin_id ?? user.Admin_Id ?? ""),
-    "x-omsons-actor-name": String(user.staff_name ?? user.name ?? user.username ?? user.email ?? "Admin"),
+    "x-omsons-actor-role": "staff",
+    "x-omsons-actor-id": String(user.staff_id ?? user.id ?? ""),
+    "x-omsons-actor-name": String(user.staff_name ?? user.name ?? user.email ?? ""),
   };
 }
 
-export default function AdminFormEditPage() {
+export default function StaffFormEditPage() {
   const params = useParams<{ id: string }>();
   const [submission, setSubmission] = useState(null);
   const [error, setError] = useState("");
@@ -24,7 +24,7 @@ export default function AdminFormEditPage() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch(`/api/forms/${params.id}`, { headers: adminHeaders() });
+        const res = await fetch(`/api/forms/${params.id}`, { headers: headers() });
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(json.message || "Failed to load form");
         setSubmission(json.data);
@@ -37,5 +37,5 @@ export default function AdminFormEditPage() {
 
   if (error) return <div className="p-6 text-sm text-red-600">{error}</div>;
   if (!submission) return <div className="p-6 text-sm text-gray-500">Loading form...</div>;
-  return <><div className="bg-neutral-300 px-[10vw] pt-6"><Link href="/dashboard/admin/forms" className="rounded border bg-white px-3 py-1.5 text-xs font-semibold text-gray-700">Back to Forms</Link></div><Form submission={submission} mode="edit" role="admin" /></>;
+  return <><div className="bg-neutral-300 px-[10vw] pt-6"><Link href="/dashboard/staff/forms" className="rounded border bg-white px-3 py-1.5 text-xs font-semibold text-gray-700">Back to Forms</Link></div><Form submission={submission} mode="edit" role="staff" /></>;
 }

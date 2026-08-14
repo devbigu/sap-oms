@@ -8,10 +8,10 @@ import { resolveStoredAuth } from "@/lib/roleAccess";
 type FormRow = {
   id: string;
   leadNo: string;
-  dated: string;
   customerDetails: { companyName?: string };
   submittedBy: { name?: string };
-  submittedAt: string;
+  visitedDate: string;
+  updatedAt: string;
 };
 
 const ITEMS_PER_PAGE = 20;
@@ -124,7 +124,7 @@ export default function AdminFormsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
-                  {["Lead No.", "Company Name", "Submitted By", "Submitted Date", "Dated", "Actions"].map((header) => (
+                  {["Lead No.", "Company Name", "Submitted By", "Visited Date", "Last Updated", "Actions"].map((header) => (
                     <th key={header} className="px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">{header}</th>
                   ))}
                 </tr>
@@ -141,8 +141,8 @@ export default function AdminFormsPage() {
                     <td className="px-4 py-4 font-mono text-xs font-semibold text-gray-700">{row.leadNo || "-"}</td>
                     <td className="px-4 py-4 font-medium text-gray-900">{row.customerDetails?.companyName || "-"}</td>
                     <td className="px-4 py-4 text-gray-600">{row.submittedBy?.name || "-"}</td>
-                    <td className="px-4 py-4 text-xs text-gray-500">{formatDate(row.submittedAt)}</td>
-                    <td className="px-4 py-4 text-xs text-gray-500">{row.dated || "-"}</td>
+                    <td className="px-4 py-4 text-xs text-gray-500">{formatDate(row.visitedDate)}</td>
+                    <td className="px-4 py-4 text-xs text-gray-500">{formatDate(row.updatedAt)}</td>
                     <td className="px-4 py-4">
                       <Link href={`/dashboard/admin/forms/${row.id}`} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
                         <Eye className="h-3.5 w-3.5" /> View
