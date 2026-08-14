@@ -21,7 +21,8 @@ type DealerRequestListResponse = {
   message?: string;
 };
 
-const PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 10;
+const ACCEPTED_PAGE_SIZE = 3;
 
 function badgeStyles(status: DealerRequestStatus) {
   if (status === "accepted") return "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -72,6 +73,7 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
   const [rows, setRows] = useState<PublicDealerRequest[]>([]);
   const [total, setTotal] = useState(0);
   const [lastPage, setLastPage] = useState(1);
+  const pageSize = tab === "accepted" ? ACCEPTED_PAGE_SIZE : DEFAULT_PAGE_SIZE;
 
   useEffect(() => {
     if (!actor) {
@@ -100,7 +102,7 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
       const params = new URLSearchParams({
         status: tab,
         page: String(page),
-        limit: String(PAGE_SIZE),
+        limit: String(pageSize),
       });
 
       if (search.trim()) {
@@ -141,7 +143,7 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
     return () => {
       active = false;
     };
-  }, [actor, page, scope, search, tab]);
+  }, [actor, page, pageSize, scope, search, tab]);
 
   const title = scope === "admin" ? "Dealer Requests" : "My Dealer Requests";
   const subtitle = scope === "admin"
@@ -150,8 +152,8 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
   const accessDenied = !!actor && actor.role !== scope;
   const isTableLoading = loading && !accessDenied;
 
-  const startIndex = total > 0 ? (page - 1) * PAGE_SIZE + 1 : 0;
-  const endIndex = total > 0 ? Math.min(page * PAGE_SIZE, total) : 0;
+  const startIndex = total > 0 ? (page - 1) * pageSize + 1 : 0;
+  const endIndex = total > 0 ? Math.min(page * pageSize, total) : 0;
 
   const topActions = useMemo(() => (
     scope === "admin"
@@ -255,7 +257,7 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {isTableLoading ? (
-                  Array.from({ length: PAGE_SIZE }).map((_, index) => (
+                  Array.from({ length: pageSize }).map((_, index) => (
                     <tr key={index}>
                       {Array.from({ length: 9 }).map((__, columnIndex) => (
                         <td key={columnIndex} className="px-4 py-4">
@@ -266,9 +268,9 @@ export default function DealerRequestManagement({ scope }: DealerRequestManageme
                   ))
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-14 text-center text-sm text-gray-500">
-                      {search ? "No dealer requests match your search." : `No ${tabLabel(tab).toLowerCase()} requests found.`}
-                    </td>
+                        <td colSpan={9} className="px-6 py-14 text-center text-sm text-gray-500">
+                          {search ? "No dealer requests match your search." : `No ${tabLabel(tab).toLowerCase()} requests found.`}
+                        </td>
                   </tr>
                 ) : (
                   rows.map((request) => {

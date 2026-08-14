@@ -157,6 +157,8 @@ const ROUTE_POLICIES: Policy[] = [
   { pattern: /^\/dashboard\/admin\/dealer\/DealerList(?:\/|$)/, roles: ["admin", "accountant"] },
   { pattern: /^\/dashboard\/admin\/dealer\/[^/]+(?:\/|$)/, roles: ["admin", "staff"] },
   { pattern: /^\/dashboard\/admin\/ledger(?:\/|$)/, roles: ["admin", "staff", "accountant"] },
+  { pattern: /^\/dashboard\/admin\/forms(?:\/|$)/, roles: ["admin"] },
+  { pattern: /^\/dashboard\/staff\/forms(?:\/|$)/, roles: ["staff"] },
   { pattern: /^\/dashboard\/admin(?:\/|$)/, roles: ["admin"] },
   { pattern: /^\/dashboard\/staff(?:\/|$)/, roles: ["staff"] },
   { pattern: /^\/dashboard\/dealer(?:\/|$)/, roles: ["dealer"] },
