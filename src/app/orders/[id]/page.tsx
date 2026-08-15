@@ -534,7 +534,7 @@ function rebalanceRowDiscounts(pricings: RowPricing[], targetDiscountTotal: numb
   });
 }
 
-function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMeta?: OrderMeta | null) {
+export function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMeta?: OrderMeta | null) {
   const orderedQuantity = num(o.orderdata_item_quantity);
   const ready = num(o.dispatchedQuantity ?? o.readyquantity);
   const unitPrice = num(o.unitPrice ?? o.unit_price ?? o.orderdata_price);
@@ -548,15 +548,22 @@ function getRowPricing(o: OrderData, packLookup: Record<string, number>, orderMe
   const quantityGross = orderedQuantity * unitPrice;
   const packGross = quantityGross * packSize;
 
-  let pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity * packSize;
+  let pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity;
   let packs = explicitPacks > 0 ? explicitPacks : orderedQuantity;
 
-  if (explicitPieces <= 0 && storedGross > 0 && unitPrice > 0 && packSize > 1 && !closeTo(quantityGross, storedGross) && closeTo(packGross, storedGross)) {
-    pieces = orderedQuantity * packSize;
-  }
+  if (explicitPieces <= 0 && packSize > 1) {
+    const storedQuantityLooksLikePacks =
+      storedGross > 0 &&
+      unitPrice > 0 &&
+      !closeTo(quantityGross, storedGross) &&
+      closeTo(packGross, storedGross);
 
-  if (explicitPacks <= 0 && packSize > 1 && pieces !== orderedQuantity) {
-    packs = orderedQuantity;
+    if (storedQuantityLooksLikePacks) {
+      pieces = orderedQuantity * packSize;
+      if (explicitPacks <= 0) packs = orderedQuantity;
+    } else if (explicitPacks <= 0) {
+      packs = orderedQuantity > 0 ? Math.max(1, Math.ceil(orderedQuantity / packSize)) : 0;
+    }
   }
 
   const explicitGross = num(o.listPriceTotal ?? o.list_price_total ?? o.listPrice ?? o.list_price);
