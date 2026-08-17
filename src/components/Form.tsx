@@ -73,22 +73,24 @@ function normalizeDecisionMaker(value: unknown): DecisionMaker {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-stretch gap-4 py-[3px]">
-      <div className="w-[195px] shrink-0 pt-2 text-[13.5px] text-black">{label}</div>
-      <div className="flex-1 border border-black px-3 py-1.5">{children}</div>
+    <div className="grid gap-2 border-b border-slate-100 px-4 py-3 md:grid-cols-[220px_minmax(0,1fr)] md:items-start">
+      <div className="pt-2 text-[13px] font-semibold text-slate-700">{label}</div>
+      <div className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm transition-colors focus-within:border-[#12508C] focus-within:ring-2 focus-within:ring-[#12508C]/10">{children}</div>
     </div>
   );
 }
 
 function TextBox({ value, onChange, placeholder = "" }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
-  return <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-transparent text-[13.5px] text-black outline-none placeholder:text-black/60" />;
+  return <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="min-h-6 w-full bg-transparent text-[14px] font-medium text-black outline-none placeholder:text-black/45" />;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-4">
-      <div className="h-[3px] w-full" style={{ backgroundColor: BLUE }} />
-      <div className="mb-2 mt-3 text-[15px] font-bold" style={{ color: BLUE }}>{children}</div>
+    <div className="mt-7 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+      <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3">
+        <span className="h-5 w-1 rounded-full" style={{ backgroundColor: BLUE }} />
+        <div className="text-[15px] font-bold uppercase tracking-wide" style={{ color: BLUE }}>{children}</div>
+      </div>
     </div>
   );
 }
@@ -122,24 +124,24 @@ function MultiSelect({
 
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-h-8 w-full items-center justify-between gap-2 bg-white text-left text-[13px] text-black">
-        <span className="flex flex-wrap gap-1">
+      <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-h-7 w-full items-center justify-between gap-2 bg-white text-left text-[13px] text-black">
+        <span className="flex flex-wrap gap-1.5">
           {display.map((item) => (
-            <span key={item} className={`rounded border px-2 py-0.5 ${item === "Select" ? "border-transparent text-black/60" : "border-gray-300 bg-gray-50 text-black"}`}>{item}</span>
+            <span key={item} className={`rounded-full border px-2.5 py-1 text-[12px] font-semibold ${item === "Select" ? "border-transparent text-black/55" : "border-[#12508C]/20 bg-[#12508C]/5 text-black"}`}>{item}</span>
           ))}
         </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-gray-500" />
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1 rounded border border-gray-300 bg-white p-2 shadow-lg">
-          <div className="mb-2 flex items-center gap-2 rounded border border-gray-200 px-2 py-1">
-            <Search className="h-3.5 w-3.5 text-gray-400" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search..." className="w-full text-[12px] text-black outline-none placeholder:text-black/60" />
+        <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-900/10">
+          <div className="m-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+            <Search className="h-3.5 w-3.5 text-slate-500" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search..." className="w-full bg-transparent text-[12px] text-black outline-none placeholder:text-black/50" />
           </div>
-          <div className="max-h-48 overflow-y-auto">
+          <div className="max-h-52 overflow-y-auto px-2 pb-2">
             {filtered.map((option) => (
-              <label key={`${name}-${option.value}`} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-black hover:bg-gray-50">
-                <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} className="h-3.5 w-3.5" />
+              <label key={`${name}-${option.value}`} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-[13px] font-medium text-black hover:bg-slate-50">
+                <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} className="h-3.5 w-3.5 accent-[#12508C]" />
                 {option.label}
               </label>
             ))}
@@ -320,32 +322,42 @@ export default function Form({ submission, mode = "create", role = "staff" }: { 
   const otherInput = (show: boolean, key: string, placeholder = "Please specify") => show ? <div className="mt-2"><TextBox value={text[key] ?? ""} onChange={set(key)} placeholder={placeholder} /></div> : null;
 
   return (
-    <div className="min-h-screen w-full bg-neutral-300 py-8">
-      <form onSubmit={submit} className="mx-auto w-[80vw] border border-black bg-white px-10 py-8">
-        <div className="flex items-center justify-center gap-6 pb-2">
-          <div className="flex shrink-0 flex-col items-center"><div className="flex h-14 w-24 items-center justify-center rounded-[50%] text-[13px] font-bold italic text-white" style={{ backgroundColor: BLUE }}>OMSONS</div><div className="mt-1 text-[10px] font-semibold tracking-[0.25em]" style={{ color: BLUE }}>GERMANY</div></div>
-          <div className="text-center"><h1 className="text-[30px] font-bold tracking-tight" style={{ color: BLUE }}>OMSONS GLASSWARE PVT. LTD.</h1><p className="text-[17px]" style={{ color: BLUE }}>Exploring the Science...</p></div>
+    <div className="min-h-screen w-full bg-slate-100 py-8">
+      <form onSubmit={submit} className="mx-auto w-[80vw] overflow-visible rounded-2xl border border-slate-200 bg-white px-8 py-8 shadow-xl shadow-slate-900/10">
+        <div className="rounded-2xl border border-[#12508C]/15 bg-[#12508C]/5 px-6 py-5">
+          <div className="flex flex-col items-center justify-center gap-5 text-center md:flex-row">
+            <div className="flex shrink-0 flex-col items-center">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full border border-[#12508C]/20 bg-white p-2 shadow-md shadow-[#12508C]/20">
+                <img src="/omsons_logo.jpeg" alt="Omsons Logo" className="h-full w-full rounded-full object-contain" />
+              </div>
+              <div className="mt-2 text-[10px] font-semibold tracking-[0.25em]" style={{ color: BLUE }}>GERMANY</div>
+            </div>
+            <div>
+              <h1 className="text-[28px] font-black tracking-tight md:text-[32px]" style={{ color: BLUE }}>OMSONS GLASSWARE PVT. LTD.</h1>
+              <p className="mt-1 text-[15px] font-medium" style={{ color: BLUE }}>Exploring the Science...</p>
+            </div>
+          </div>
         </div>
-        <h2 className="mt-6 text-center text-[17px] font-bold text-black">FILTER REQUIREMENT FORM</h2>
+        <h2 className="mt-6 text-center text-[18px] font-black uppercase tracking-[0.12em] text-slate-900">Filter Requirement Form</h2>
         {message && <div className={`mt-4 rounded border px-3 py-2 text-[13px] font-semibold ${message.type === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"}`}>{message.text}</div>}
 
-        <div className="mt-5 flex items-center justify-between text-[14px] font-bold text-black">
-          <div className="flex items-center gap-2">
-            <span>Lead No.</span>
-            <span className="min-w-32 border-b border-dotted border-black px-1 text-[13px] font-normal text-black">
+        <div className="mt-5 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-[14px] font-bold text-black md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-600">Lead No.</span>
+            <span className="min-w-32 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-bold text-black shadow-sm">
               {submission?.leadNo || leadPreview || "OML-..."}
             </span>
             {!submission?.leadNo && <span className="text-[11px] font-semibold text-black">(Preview)</span>}
           </div>
-          <div className="flex items-center gap-2">
-            <span>Dated</span>
-            <span className="min-w-40 border-b border-dotted border-black px-1 text-[13px] font-normal text-black">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-600">Dated</span>
+            <span className="min-w-40 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-bold text-black shadow-sm">
               {displayDate}
             </span>
           </div>
         </div>
 
-        <div className="mt-5">
+        <div className="mt-6 overflow-visible rounded-xl border border-slate-200">
           <Row label="Products"><MultiSelect name="products" options={PRODUCTS} selected={choices.products ?? []} onChange={choose("products")} /></Row>
           <Row label="Company Name"><TextBox value={text.companyName ?? ""} onChange={set("companyName")} /></Row>
           <Row label="Contact Person"><TextBox value={text.contactPerson ?? ""} onChange={set("contactPerson")} /></Row>
