@@ -8,11 +8,17 @@ import ts from "typescript";
 async function loadDispatchModule() {
   const filePath = path.resolve("src/lib/orderDispatch.ts");
   const orderProductNotesUrl = pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs"));
+  const staffOrderScopeUrl = pathToFileURL(path.resolve("src/lib/staffOrderScope.js"));
   const source = await fs.readFile(filePath, "utf8");
-  const rewrittenSource = source.replace(
-    /from\s+["']@\/lib\/orderProductNotes\.mjs["']/,
-    `from "${orderProductNotesUrl.href}"`
-  );
+  const rewrittenSource = source
+    .replace(
+      /from\s+["']@\/lib\/orderProductNotes\.mjs["']/,
+      `from "${orderProductNotesUrl.href}"`
+    )
+    .replace(
+      /from\s+["']@\/lib\/staffOrderScope\.js["']/,
+      `from "${staffOrderScopeUrl.href}"`
+    );
   const transpiled = ts.transpileModule(rewrittenSource, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
@@ -241,6 +247,57 @@ test("Multi-item dispatch is Staff-only and still requires assignment and accept
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "90" }, context), false);
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, acceptOrder: "0" }), false);
   assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, { ...context, delStatus: "1" }), false);
+});
+
+test("Staff listed in a comma-separated assignment may dispatch", () => {
+  // Production orders store assigned staff as a list, e.g. staffid "30,42,49,55".
+  const context = { dealerId: "225", assignedStaffId: "30,42,49,55", acceptOrder: "1", delStatus: "0" };
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "55" }, context), true);
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "30" }, context), true);
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "49" }, context), true);
+});
+
+test("Staff absent from a comma-separated assignment stays blocked", () => {
+  const context = { dealerId: "225", assignedStaffId: "30,42,49,55", acceptOrder: "1", delStatus: "0" };
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "77" }, context), false);
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "5" }, context), false);
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "3" }, context), false);
+});
+
+test("Comma-separated assignment is honoured for viewing and bulk dispatch", () => {
+  const context = { dealerId: "225", assignedStaffId: "30,42,49,55", acceptOrder: "1", delStatus: "0" };
+  assert.equal(dispatch.canUserViewDispatch({ role: "staff", id: "55" }, context), true);
+  assert.equal(dispatch.canUserViewDispatch({ role: "staff", id: "77" }, context), false);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "55" }, context), true);
+  assert.equal(dispatch.canUserBulkDispatch({ role: "staff", id: "77" }, context), false);
+});
+
+test("Assignment membership tolerates spacing and stays exact per id", () => {
+  assert.equal(dispatch.isAssignedDispatchStaff("30, 42, 55", "42"), true);
+  assert.equal(dispatch.isAssignedDispatchStaff("30,42,55", "5"), false);
+  assert.equal(dispatch.isAssignedDispatchStaff("155", "55"), false);
+  assert.equal(dispatch.isAssignedDispatchStaff("", "55"), false);
+  assert.equal(dispatch.isAssignedDispatchStaff("55", ""), false);
+  assert.equal(dispatch.isAssignedDispatchStaff(undefined, "55"), false);
+});
+
+test("Comma-separated assignment still respects acceptance and deletion gates", () => {
+  const context = { dealerId: "225", assignedStaffId: "30,42,49,55", acceptOrder: "1", delStatus: "0" };
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "55" }, { ...context, acceptOrder: "0" }), false);
+  assert.equal(dispatch.canUserEditDispatch({ role: "staff", id: "55" }, { ...context, delStatus: "1" }), false);
+  assert.equal(dispatch.canUserEditDispatch({ role: "dealer", id: "55" }, context), false);
+});
+
+test("Dispatch access reuses the shared staff scope splitter", async () => {
+  const source = await fs.readFile(path.resolve("src/lib/orderDispatch.ts"), "utf8");
+  assert.match(source, /splitScopeIds/);
+  assert.doesNotMatch(source, /String\(context\.assignedStaffId \?\? ""\)\.trim\(\) === user\.id/);
+});
+
+test("Dispatch API does not truncate comma-separated staff assignments at 80 chars", async () => {
+  const source = await fs.readFile(dispatchApiPath, "utf8");
+  assert.match(source, /ASSIGNED_STAFF_MAX/);
+  assert.doesNotMatch(source, /assignedStaffId: pickFirstText\(80,/);
 });
 
 test("numeric and string acceptance values normalize consistently", () => {

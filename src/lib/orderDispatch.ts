@@ -1,4 +1,5 @@
 import { normalizeSku } from "@/lib/orderProductNotes.mjs";
+import { splitScopeIds } from "@/lib/staffOrderScope.js";
 
 export type DispatchStatus = "pending" | "packing" | "dispatched" | "not_in_stock" | "successful";
 export type DispatchActorRole = "staff" | "admin";
@@ -170,13 +171,20 @@ export function buildDispatchIdentity(input: {
   };
 }
 
+// Orders carry their assigned staff as a comma-separated list ("30,42,49,55"),
+// so membership is checked the same way order visibility resolves it.
+export function isAssignedDispatchStaff(assignedStaffId: unknown, staffId: string): boolean {
+  const actorId = String(staffId ?? "").trim();
+  return actorId ? splitScopeIds(assignedStaffId).includes(actorId) : false;
+}
+
 export function canUserViewDispatch(user: DispatchUserSession | null, context: {
   dealerId?: string | null;
   assignedStaffId?: string | null;
 }): boolean {
   if (!user?.id) return false;
   if (user.role === "admin") return true;
-  if (user.role === "staff") return String(context.assignedStaffId ?? "").trim() === user.id;
+  if (user.role === "staff") return isAssignedDispatchStaff(context.assignedStaffId, user.id);
   if (user.role === "dealer") return String(context.dealerId ?? "").trim() === user.id;
   return false;
 }
@@ -211,7 +219,7 @@ export function canUserEditDispatch(user: DispatchUserSession | null, context: {
   const viewer = user as DispatchUserSession;
   return canUpdateOrderDispatch({
     role: viewer.role,
-    isAssignedStaff: String(context.assignedStaffId ?? "").trim() === viewer.id,
+    isAssignedStaff: isAssignedDispatchStaff(context.assignedStaffId, viewer.id),
     isAccepted: isAcceptedOrderForDispatch(context.acceptOrder),
     isDeleted: isDeletedOrderForDispatch(context.delStatus),
   });

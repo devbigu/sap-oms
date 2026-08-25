@@ -72,7 +72,7 @@ function accessContextFromOrder(order: Record<string, unknown> | null): Dispatch
   const source = order ?? {};
   return {
     dealerId: pickFirstText(80, source.order_dealer, source.orderdata_dealerid, source.Dealer_Id, source.dealerId),
-    assignedStaffId: pickFirstText(80, source.assignedstaff, source.staffid),
+    assignedStaffId: pickFirstText(ASSIGNED_STAFF_MAX, source.assignedstaff, source.staffid),
     acceptOrder: pickFirstText(10, source.accept_order),
     delStatus: pickFirstText(10, source.del_status),
     orderStatus: pickFirstText(40, source.order_status),
@@ -95,6 +95,9 @@ type DispatchApiRecord = OrderDispatchRecord & {
 function safeText(value: unknown, max = 200): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
+
+// assignedstaff/staffid are comma-joined id lists, not a single id.
+const ASSIGNED_STAFF_MAX = 500;
 
 function pickFirstText(max: number, ...values: unknown[]): string {
   for (const value of values) {
@@ -276,7 +279,7 @@ async function fetchPhpOrderAccessContext(orderId: string, dealerId: string): Pr
 
   return {
     dealerId: pickFirstText(80, matched.order_dealer, normalizedDealerId),
-    assignedStaffId: pickFirstText(80, matched.assignedstaff, matched.staffid),
+    assignedStaffId: pickFirstText(ASSIGNED_STAFF_MAX, matched.assignedstaff, matched.staffid),
     acceptOrder: pickFirstText(10, matched.accept_order),
     delStatus: pickFirstText(10, matched.del_status),
     orderStatus: pickFirstText(40, matched.order_status),
@@ -302,7 +305,7 @@ function resolveOrderContext(meta: Record<string, unknown>, item: Partial<PhpOrd
     fallback.dealerId
   );
   const assignedStaffId = pickFirstText(
-    80,
+    ASSIGNED_STAFF_MAX,
     item?.assignedstaff,
     item?.staffid,
     meta.assignedstaff,
@@ -318,7 +321,7 @@ function resolveOrderContext(meta: Record<string, unknown>, item: Partial<PhpOrd
 function buildResolvedAccessContext(...sources: Array<Partial<DispatchOrderAccessContext> | null | undefined>): DispatchOrderAccessContext {
   return {
     dealerId: pickFirstText(80, ...sources.map((source) => source?.dealerId)),
-    assignedStaffId: pickFirstText(80, ...sources.map((source) => source?.assignedStaffId)),
+    assignedStaffId: pickFirstText(ASSIGNED_STAFF_MAX, ...sources.map((source) => source?.assignedStaffId)),
     acceptOrder: pickFirstText(10, ...sources.map((source) => source?.acceptOrder)),
     delStatus: pickFirstText(10, ...sources.map((source) => source?.delStatus)),
     orderStatus: pickFirstText(40, ...sources.map((source) => source?.orderStatus)),
