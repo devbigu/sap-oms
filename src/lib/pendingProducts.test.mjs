@@ -26,10 +26,12 @@ async function transpileTypeScriptModule(filePath, replacements = []) {
 async function loadPendingProductsModule() {
   const orderProductNotesUrl = pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs")).href;
   const productSearchUrl = pathToFileURL(path.resolve("src/lib/productSearch.js")).href;
+  const staffOrderScopeUrl = pathToFileURL(path.resolve("src/lib/staffOrderScope.js")).href;
 
   const orderDispatchPath = path.resolve("src/lib/orderDispatch.ts");
   const orderDispatchUrl = await transpileTypeScriptModule(orderDispatchPath, [
     [/from\s+["']@\/lib\/orderProductNotes\.mjs["']/g, `from "${orderProductNotesUrl}"`],
+    [/from\s+["']@\/lib\/staffOrderScope\.js["']/g, `from "${staffOrderScopeUrl}"`],
   ]);
 
   const pendingProductsPath = path.resolve("src/lib/pendingProducts.ts");
