@@ -19,6 +19,15 @@ import {
   resolveEffectiveOrderDetailItems,
 } from "@/lib/orderDetailItems";
 import { repairOrderDetailRows, type OrderMirrorSnapshot, type OrderMirrorVerification } from "@/lib/orderMirror";
+import {
+  applyEditedLine,
+  computeEditedLine,
+  computeLineFromPieces,
+  resolveLinePackSize,
+  resolveLinePacks,
+  resolveLinePieces,
+  sumEditedTotals,
+} from "@/lib/orderEditPricing";
 import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
 import {
   buildBulkDispatchPlan,
@@ -547,17 +556,6 @@ export function getRowPricing(o: OrderData, packLookup: Record<string, number>, 
   const storedDiscount = num(o.discountAmount ?? o.discount_amount ?? o.orderdata_discount ?? o.order_discount);
   const storedNet = num(o.finalPrice ?? o.final_price ?? o.orderdata_afterDisPrice);
 
-  // orderdata_item_quantity is a piece count and orderdata_price its unit price,
-  // so qty * unitPrice is the line gross. The backend already sends that product
-  // as orderdata_totalprice; prefer it and only fall back to computing it.
-  const lineTotal = num(o.orderdata_totalprice);
-  const explicitGross = num(o.listPriceTotal ?? o.list_price_total ?? o.listPrice ?? o.list_price);
-  const gross = explicitGross > 0
-    ? explicitGross
-    : lineTotal > 0
-      ? lineTotal
-      : orderedQuantity * unitPrice;
-
   const pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity;
   const packs = explicitPacks > 0
     ? explicitPacks
@@ -565,13 +563,30 @@ export function getRowPricing(o: OrderData, packLookup: Record<string, number>, 
       ? (pieces > 0 ? Math.max(1, Math.round(pieces / packSize)) : 0)
       : pieces;
 
+  // orderdata_item_quantity is a piece count and orderdata_price its unit price,
+  // so pieces * unitPrice is the line gross. The backend also sends that product
+  // as orderdata_totalprice, but after a quantity edit that stored total (and the
+  // stored discount/net beside it) still describes the OLD quantity. When the two
+  // disagree, quantity wins and the money is rebuilt from the line's own rate.
+  const lineTotal = num(o.orderdata_totalprice);
+  const explicitGross = num(o.listPriceTotal ?? o.list_price_total ?? o.listPrice ?? o.list_price);
+  const storedGross = explicitGross > 0 ? explicitGross : lineTotal;
+  const computedGross = pieces * unitPrice;
+  const gross = computedGross > 0 ? computedGross : storedGross;
+  const storedTotalsAreStale = storedGross > 0 && computedGross > 0
+    && Math.abs(storedGross - computedGross) > 0.02;
+
   const perItemPct = num(o.totalDiscountPercent ?? o.total_discount_percentage ?? o.total_discount ?? o.discount);
   const orderPct = num(orderMeta?.totalDiscountPercentage ?? orderMeta?.discountPercent ?? orderMeta?.allocatedDiscountPercent ?? orderMeta?.allocatedDiscount);
-  const derivedPct = gross > 0 && storedDiscount > 0 ? Math.round((storedDiscount / gross) * 10000) / 100 : 0;
+  // Derive the rate against the gross the stored discount was calculated from.
+  const derivedPctBase = storedGross > 0 ? storedGross : gross;
+  const derivedPct = derivedPctBase > 0 && storedDiscount > 0
+    ? Math.round((storedDiscount / derivedPctBase) * 10000) / 100
+    : 0;
   const pct = perItemPct || orderPct || derivedPct;
 
-  const discount = storedDiscount > 0 ? storedDiscount : gross * (pct / 100);
-  const final = storedNet > 0 ? storedNet : Math.max(0, gross - discount);
+  const discount = !storedTotalsAreStale && storedDiscount > 0 ? storedDiscount : gross * (pct / 100);
+  const final = !storedTotalsAreStale && storedNet > 0 ? storedNet : Math.max(0, gross - discount);
 
   return {
     orderedQuantity,
@@ -813,6 +828,7 @@ function CancelOrderDialog({
 
 function EditOrderDialog({
   items,
+  packLookup,
   latestRevision,
   saving,
   error,
@@ -820,13 +836,19 @@ function EditOrderDialog({
   onSave,
 }: {
   items: OrderData[];
+  packLookup: Record<string, number>;
   latestRevision: number;
   saving: boolean;
   error: string;
   onClose: () => void;
   onSave: (payload: { expectedRevision: number; items: Array<Record<string, unknown>> }) => void;
 }) {
-  const [draftItems, setDraftItems] = useState(() => items.map((item) => ({ ...item, originalLineId: item.orderdata_id })));
+  // Qty is edited in PACKS (how orders are placed); pieces = qty * pack size, and
+  // pieces is what gets saved because that is the stored unit everywhere else.
+  const [draftItems, setDraftItems] = useState(() => items.map((item) => {
+    const packSize = resolveLinePackSize(item, packLookup);
+    return { ...item, originalLineId: item.orderdata_id, _packs: String(resolveLinePacks(item, packSize)) };
+  }));
   const [reviewing, setReviewing] = useState(false);
   const visibleItems = draftItems.filter((item) => !(item as Record<string, unknown>)._removed);
   const changeSummaries = draftItems.flatMap((item) => {
@@ -834,9 +856,33 @@ function EditOrderDialog({
     if (!original) return [];
     if ((item as Record<string, unknown>)._removed) return [`Removed: ${original.product_name || original.orderdata_cat_no}`];
     const changes: string[] = [];
-    if (String(original.orderdata_cat_no) !== String(item.orderdata_cat_no)) changes.push(`Replaced ${original.orderdata_cat_no} with ${item.orderdata_cat_no}`);
-    if (String(original.orderdata_item_quantity) !== String(item.orderdata_item_quantity)) changes.push(`Quantity ${original.orderdata_item_quantity} to ${item.orderdata_item_quantity} for ${item.product_name || item.orderdata_cat_no}`);
+    const packSize = resolveLinePackSize(item, packLookup);
+    const originalPacks = resolveLinePacks(original, packSize);
+    const nextPacks = num(item._packs);
+    if (originalPacks !== nextPacks) {
+      changes.push(`Quantity ${originalPacks} to ${nextPacks} packs (${nextPacks * packSize} pcs) for ${item.product_name || item.orderdata_cat_no}`);
+    }
     return changes;
+  });
+
+  // Preview of the whole order as edited, so the money effect is visible before saving.
+  const previewTotals = sumEditedTotals(
+    draftItems
+      .filter((item) => !(item as Record<string, unknown>)._removed)
+      .map((item) => computeEditedLine(item, num(item._packs), resolveLinePackSize(item, packLookup)))
+  );
+  const originalTotals = sumEditedTotals(items.map((item) => {
+    const packSize = resolveLinePackSize(item, packLookup);
+    return computeLineFromPieces(item, resolveLinePieces(item), packSize);
+  }));
+  const netDelta = Math.round((previewTotals.netPayableAmount - originalTotals.netPayableAmount) * 100) / 100;
+
+  // Packs are a dialog-only field; save pieces in the shape the overlay expects.
+  const buildSaveItems = () => visibleItems.map((item) => {
+    const money = computeEditedLine(item, num(item._packs), resolveLinePackSize(item, packLookup));
+    const saved = applyEditedLine(item, money) as Record<string, unknown>;
+    delete saved._packs;
+    return saved;
   });
 
   const updateItem = (lineId: string, patch: Partial<OrderData>) => {
@@ -857,17 +903,30 @@ function EditOrderDialog({
           <div className="mt-5 max-h-[60vh] overflow-auto rounded-xl border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-left text-[11px] uppercase tracking-wider text-gray-500">
-                <tr><th className="p-3 text-gray-900">Cat No.</th><th className="p-3">Product</th><th className="p-3">Qty</th><th className="p-3">Pack</th><th className="p-3">Note</th><th className="p-3">Action</th></tr>
+                <tr><th className="p-3 text-gray-900">Cat No.</th><th className="p-3">Product</th><th className="p-3">Qty (Packs)</th><th className="p-3">Pack</th><th className="p-3">Pieces</th><th className="p-3">Final</th><th className="p-3">Note</th><th className="p-3">Action</th></tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {draftItems.map((item) => {
                   const removed = !!(item as Record<string, unknown>)._removed;
+                  const packSize = resolveLinePackSize(item, packLookup);
+                  const money = computeEditedLine(item, num(item._packs), packSize);
+                  const originalMoney = computeLineFromPieces(item, resolveLinePieces(item), packSize);
+                  const priceChanged = !removed && Math.abs(money.final - originalMoney.final) > 0.02;
                   return (
                     <tr key={item.originalLineId} className={removed ? "opacity-95" : ""}>
-                      <td className="p-3 text-gray-900"><input value={String(item.orderdata_cat_no ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_cat_no: event.target.value })} className="w-36 rounded-lg border border-gray-200 px-2 py-1.5 font-mono text-xs" /></td>
-                      <td className="p-3 text-gray-900"><input value={String(item.product_name ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { product_name: event.target.value })} className="w-64 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
-                      <td className="p-3 text-gray-900"><input type="number" min="1" value={String(item.orderdata_item_quantity ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { orderdata_item_quantity: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
-                      <td className="p-3 text-gray-900"><input type="number" min="1" value={String(item.packSize ?? item.pack_size ?? 1)} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { packSize: event.target.value })} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 font-mono text-xs text-gray-900">{String(item.orderdata_cat_no ?? "")}</td>
+                      <td className="p-3 text-xs text-gray-900">{String(item.product_name ?? "")}</td>
+                      <td className="p-3 text-gray-900"><input type="number" min="1" value={String(item._packs ?? "")} disabled={removed || saving} onChange={(event) => updateItem(item.originalLineId, { _packs: event.target.value } as Partial<OrderData>)} className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-xs" /></td>
+                      <td className="p-3 font-mono text-xs text-gray-500">{packSize}</td>
+                      <td className="p-3 font-mono text-xs font-semibold text-amber-700">{removed ? "—" : money.pieces}</td>
+                      <td className="p-3 font-mono text-xs font-semibold text-gray-900">
+                        {removed ? "—" : (
+                          <>
+                            {priceChanged && <span className="mr-1.5 font-normal text-gray-400 line-through">₹{originalMoney.final.toLocaleString("en-IN")}</span>}
+                            <span className={priceChanged ? "text-amber-700" : undefined}>₹{money.final.toLocaleString("en-IN")}</span>
+                          </>
+                        )}
+                      </td>
                       <td className="p-3 text-xs text-gray-900">{item.fallbackProductNote || item.remark || "—"}</td>
                       <td className="p-3">
                         <button type="button" disabled={saving} onClick={() => updateItem(item.originalLineId, { _removed: !removed } as Partial<OrderData>)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700">
@@ -886,6 +945,27 @@ function EditOrderDialog({
             {changeSummaries.length === 0 ? <p className="mt-2 text-sm text-amber-800">No changes detected.</p> : (
               <ul className="mt-2 space-y-1 text-sm text-amber-900">{changeSummaries.map((summary, index) => <li key={index}>{summary}</li>)}</ul>
             )}
+            <div className="mt-3 space-y-1 border-t border-amber-200 pt-3 text-sm text-amber-900">
+              {([
+                { label: "Gross", was: originalTotals.grossAmount, now: previewTotals.grossAmount },
+                { label: "Discount", was: originalTotals.discountAmount, now: previewTotals.discountAmount },
+                { label: "Net Payable", was: originalTotals.netPayableAmount, now: previewTotals.netPayableAmount },
+              ]).map((row) => (
+                <div key={row.label} className="flex items-baseline gap-2">
+                  <span className="w-28">{row.label}</span>
+                  {Math.abs(row.now - row.was) > 0.02 && (
+                    <span className="font-mono text-amber-700/60 line-through">₹{row.was.toLocaleString("en-IN")}</span>
+                  )}
+                  <b className="font-mono">₹{row.now.toLocaleString("en-IN")}</b>
+                </div>
+              ))}
+              {Math.abs(netDelta) > 0.02 && (
+                <p className="pt-1 font-semibold">
+                  This edit {netDelta > 0 ? "increases" : "reduces"} the order by
+                  <span className="font-mono"> ₹{Math.abs(netDelta).toLocaleString("en-IN")}</span>.
+                </p>
+              )}
+            </div>
           </div>
         )}
         {visibleItems.length === 0 && <p className="mt-3 text-sm font-medium text-red-600">An edited order cannot be saved with no items. Use Cancel Order instead.</p>}
@@ -895,7 +975,7 @@ function EditOrderDialog({
           {!reviewing ? (
             <button type="button" onClick={() => setReviewing(true)} disabled={saving || visibleItems.length === 0} className="rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Review Changes</button>
           ) : (
-            <button type="button" disabled={saving || visibleItems.length === 0 || changeSummaries.length === 0} onClick={() => onSave({ expectedRevision: latestRevision, items: visibleItems })} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+            <button type="button" disabled={saving || visibleItems.length === 0 || changeSummaries.length === 0} onClick={() => onSave({ expectedRevision: latestRevision, items: buildSaveItems() })} className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
               {saving ? "Saving..." : "Save Edit"}
             </button>
           )}
@@ -1276,7 +1356,7 @@ export default function ViewOrderDealerPage() {
   const resolvedSummary = useMemo(() => {
     // Same precedence as the line items: a manual overlay edit wins, otherwise
     // the mirror totals replace the drifted PHP ones.
-    const mirrorTotals = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches
+    const mirrorTotals = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches && !overlayState?.isEdited
       ? {
           grossAmount: mirrorSnapshot.totals.subtotal,
           discountAmount: mirrorSnapshot.totals.discountAmount,
@@ -1287,7 +1367,7 @@ export default function ViewOrderDealerPage() {
       summaryOverride ?? localOrderFallback,
       overlayTotals ?? mirrorTotals
     ) as OrderSummaryOverride;
-  }, [localOrderFallback, mirrorSnapshot, mirrorVerification, overlayTotals, summaryOverride]);
+  }, [localOrderFallback, mirrorSnapshot, mirrorVerification, overlayState?.isEdited, overlayTotals, summaryOverride]);
   const displayOrderMeta = useMemo(
     () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...resolvedSummary }) as OrderMeta,
     [activeOrderHeader, orderMeta, resolvedSummary]
@@ -2230,6 +2310,7 @@ export default function ViewOrderDealerPage() {
       {editDialogOpen && (
         <EditOrderDialog
           items={displayOrders}
+          packLookup={packLookup}
           latestRevision={overlayState?.latestRevision ?? 0}
           saving={editSaving}
           error={editError}

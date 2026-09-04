@@ -3,6 +3,7 @@ import type { Collection, Document, Filter, WithId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { normalizeSku } from "@/lib/orderProductNotes.mjs";
 import { resolveOrderAmounts } from "@/lib/orderAmounts";
+import { computeLineFromPieces, applyEditedLine, resolveLineDiscountPercent } from "@/lib/orderEditPricing";
 import { isOrderMongoDocumentVisible, withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 
 export const ORDER_OVERLAY_COLLECTION = "order_overlays";
@@ -283,18 +284,31 @@ export function resolveOrderOverlayEligibility(input: {
 }
 
 export function computeOverlayTotals(items: Array<Record<string, unknown>>, baseOrder?: Record<string, unknown> | null) {
+  // orderdata_item_quantity is a PIECE count and orderdata_price its unit price,
+  // so pieces * unitPrice is the line gross. Multiplying by pack size again
+  // double-counted it and inflated every edited order by the pack factor.
   const grossAmount = roundMoney(items.reduce((sum, item) => {
-    const quantity = numberValue(item.orderdata_item_quantity ?? item.quantityPacks ?? item.quantity);
-    const packSize = Math.max(1, numberValue(item.packSize ?? item.pack_size) || 1);
+    const pieces = numberValue(item.totalPieces ?? item.total_pieces) || numberValue(item.orderdata_item_quantity);
     const unitPrice = numberValue(item.orderdata_price ?? item.unitPrice ?? item.unit_price);
+    const computed = pieces * unitPrice;
     const explicit = numberValue(item.listPriceTotal ?? item.list_price_total);
-    return sum + (explicit > 0 ? explicit : quantity * packSize * unitPrice);
+    return sum + (computed > 0 ? computed : explicit);
   }, 0));
 
+  // Each edited line already carries its own recomputed discount, so sum those:
+  // the header then equals the sum of the rows and nothing has to be rebalanced.
+  // Fall back to the original order's rate only when the lines carry no discount
+  // of their own (PHP sometimes discounts at order level only).
+  const lineDiscountTotal = roundMoney(items.reduce(
+    (sum, item) => sum + numberValue(item.orderdata_discount ?? item.discountAmount ?? item.discount_amount),
+    0
+  ));
   const original = resolveOrderAmounts(baseOrder ?? {});
   const originalGross = original.gross || grossAmount;
   const discountRatio = originalGross > 0 ? original.discountAmount / originalGross : 0;
-  const discountAmount = roundMoney(Math.max(0, grossAmount * discountRatio));
+  const discountAmount = lineDiscountTotal > 0
+    ? Math.min(lineDiscountTotal, grossAmount)
+    : roundMoney(Math.max(0, grossAmount * discountRatio));
   return {
     grossAmount,
     discountAmount,
@@ -322,7 +336,18 @@ export function buildOrderEditRevision(input: {
   const effectiveItems = input.requestedItems.map((item, index) => {
     const originalId = text(item.originalLineId ?? item.orderdata_id ?? item.orderItemId);
     const original = originalsById.get(originalId);
-    const normalized = normalizeItem({ ...(original ?? {}), ...item }, input.orderId, index);
+    // Recompute this line from its new piece count so the server, not the
+    // caller, owns the money. The discount RATE comes from the original line so
+    // changing quantity scales the discount instead of keeping a stale amount.
+    const merged = { ...(original ?? {}), ...item };
+    const pieces = numberValue(merged.totalPieces ?? merged.total_pieces) || numberValue(merged.orderdata_item_quantity);
+    const packSize = Math.max(1, numberValue(merged.packSize ?? merged.pack_size) || 1);
+    const priced = applyEditedLine(merged, computeLineFromPieces(
+      { ...merged, totalDiscountPercent: resolveLineDiscountPercent(original ?? merged) },
+      pieces,
+      packSize
+    ));
+    const normalized = normalizeItem(priced, input.orderId, index);
     const lineId = original ? text(original.orderdata_id) : firstNonEmpty(item.orderdata_id, item.orderItemId, `overlay:${input.orderId}:${randomUUID()}`);
     return { ...normalized, orderdata_id: lineId.startsWith("overlay:") || original ? lineId : `overlay:${input.orderId}:${lineId}` };
   });

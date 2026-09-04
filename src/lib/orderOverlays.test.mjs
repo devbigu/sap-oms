@@ -11,11 +11,19 @@ async function loadOverlayModule() {
   const mongoStubUrl = `data:text/javascript;base64,${Buffer.from('export async function getDb(){ throw new Error("not used"); }').toString("base64")}`;
   const amountStubUrl = `data:text/javascript;base64,${Buffer.from('export function resolveOrderAmounts(order){ const gross = Number(order?.grossAmount ?? order?.order_amount ?? order?.total ?? 0) || 0; const discount = Number(order?.discountAmount ?? order?.order_discount_amount ?? 0) || 0; const net = Number(order?.netPayableAmount ?? order?.order_net_amount ?? (gross - discount)) || 0; return { gross, discountAmount: discount || Math.max(0, gross - net), netPayable: net || Math.max(0, gross - discount) }; }').toString("base64")}`;
   const cutoffStubUrl = `data:text/javascript;base64,${Buffer.from('export function withOrderMongoCutoff(query){ return query; } export function isOrderMongoDocumentVisible(doc){ return !!doc; }').toString("base64")}`;
+  // Real module (pure, no deps) so the overlay uses the same line math as the UI.
+  const pricingPath = path.resolve("src/lib/orderEditPricing.ts");
+  const pricingJs = ts.transpileModule(await fs.readFile(pricingPath, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+    fileName: pricingPath,
+  }).outputText;
+  const pricingUrl = `data:text/javascript;base64,${Buffer.from(pricingJs, "utf8").toString("base64")}`;
   const rewrittenSource = source
     .replace(/from\s+["']@\/lib\/mongodb["']/, `from "${mongoStubUrl}"`)
     .replace(/from\s+["']@\/lib\/orderProductNotes\.mjs["']/, `from "${pathToFileURL(path.resolve("src/lib/orderProductNotes.mjs")).href}"`)
     .replace(/from\s+["']@\/lib\/orderAmounts["']/, `from "${amountStubUrl}"`)
-    .replace(/from\s+["']@\/lib\/orderMongoCutoff["']/, `from "${cutoffStubUrl}"`);
+    .replace(/from\s+["']@\/lib\/orderMongoCutoff["']/, `from "${cutoffStubUrl}"`)
+    .replace(/from\s+["']@\/lib\/orderEditPricing["']/, `from "${pricingUrl}"`);
   const transpiled = ts.transpileModule(rewrittenSource, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
@@ -219,3 +227,35 @@ test("latest edit revision supplies effective items and change history", () => {
   assert.equal(effective.effectiveItems[1].orderdata_item_quantity, "25");
   assert.equal(effective.changeHistory[0].type, "quantity_changed");
 });
+
+test("edited order totals equal the sum of the edited rows", () => {
+  // 10 packs of 5 at Rs.100 with 20% off; edited up to 20 packs (100 pcs).
+  const original = {
+    orderdata_id: "L1", orderdata_cat_no: "163/1", orderdata_item_quantity: "50",
+    totalPieces: "50", packSize: "5", orderdata_price: "100",
+    orderdata_totalprice: "5000", listPriceTotal: "5000",
+    orderdata_discount: "1000", orderdata_afterDisPrice: "4000",
+  };
+  const revision = overlays.buildOrderEditRevision({
+    orderId: "9001",
+    baseOrder: { order_amount: 5000, order_discount_amount: 1000, order_net_amount: 4000 },
+    originalItems: [original],
+    requestedItems: [{ ...original, originalLineId: "L1", orderdata_item_quantity: "100", totalPieces: "100" }],
+    expectedRevision: 0,
+    actor: { role: "dealer", actorId: "D-1" },
+  });
+
+  const line = revision.effectiveItems[0];
+  assert.equal(line.orderdata_item_quantity, "100", "quantity stays a piece count");
+  assert.equal(line.orderdata_totalprice, "10000", "amount = pieces * unit price");
+  assert.equal(line.orderdata_discount, "2000", "discount scales at the original 20%");
+  assert.equal(line.orderdata_afterDisPrice, "8000");
+
+  // The header must equal the row sum, otherwise the page rebalances the rows.
+  assert.deepEqual(revision.totals, { grossAmount: 10000, discountAmount: 2000, netPayableAmount: 8000 });
+  assert.equal(
+    revision.totals.discountAmount,
+    revision.effectiveItems.reduce((sum, item) => sum + Number(item.orderdata_discount), 0)
+  );
+});
+
