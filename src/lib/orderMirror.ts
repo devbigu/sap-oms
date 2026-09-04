@@ -192,3 +192,46 @@ export function compareOrderSnapshot(
 
   return { matches: mismatches.length === 0, mismatches };
 }
+
+/**
+ * Rebuild the order lines from the mirror when PHP lost or garbled them.
+ *
+ * PHP rows stay the source for anything the mirror does not own (line ids,
+ * dispatch/ready quantities, status), so only the fields that actually drifted
+ * are replaced and a missing line is re-added from the submitted payload.
+ */
+export function repairOrderDetailRows(
+  phpRows: Array<Record<string, unknown>>,
+  snapshot: OrderMirrorSnapshot,
+  orderId: string
+): Array<Record<string, unknown>> {
+  const phpBySku = new Map<string, Record<string, unknown>>();
+  for (const row of phpRows) {
+    const key = normalizeOrderDetailSku(row.orderdata_cat_no);
+    if (key && !phpBySku.has(key)) phpBySku.set(key, row);
+  }
+
+  return snapshot.items.map((item, index) => {
+    const key = normalizeOrderDetailSku(item.catNo);
+    const phpRow = phpBySku.get(key);
+    const base = phpRow ?? {
+      orderdata_id: `mirror:${orderId}:${key || index}`,
+      orderdata_orderid: orderId,
+      orderdata_status: "0",
+      readyquantity: "0",
+      product_unit: "Pcs",
+    };
+    return {
+      ...base,
+      orderdata_cat_no: item.catNo,
+      product_name: item.productName || text(base.product_name),
+      orderdata_item_quantity: String(item.quantity),
+      orderdata_price: String(item.price),
+      orderdata_discount: String(item.discount),
+      orderdata_afterDisPrice: String(item.finalPrice),
+      orderdata_totalprice: String(Math.round(item.quantity * item.price * 100) / 100),
+      mirrorRepaired: true,
+      mirrorRepairSource: phpRow ? "corrected" : "restored",
+    };
+  });
+}

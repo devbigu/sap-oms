@@ -116,3 +116,51 @@ test("SKU casing and whitespace do not create false mismatches", () => {
   );
   assert.equal(mirror.compareOrderSnapshot(expected, actual).matches, true);
 });
+
+test("repair restores a dropped line and corrects a wrong quantity", () => {
+  const snapshot = mirror.buildOrderMirrorSnapshot(submitted);
+  const broken = phpRows([{ catNo: "A-1", quantity: 1, price: 100 }]);
+  broken[0].orderdata_id = "php-line-1";
+  broken[0].readyquantity = "3";
+
+  const repaired = mirror.repairOrderDetailRows(broken, snapshot, "555");
+  assert.equal(repaired.length, 2);
+
+  const [first, second] = repaired;
+  assert.equal(first.orderdata_item_quantity, "10");
+  assert.equal(first.orderdata_id, "php-line-1", "keeps the PHP line id when the row exists");
+  assert.equal(first.readyquantity, "3", "keeps PHP-owned dispatch fields");
+  assert.equal(first.mirrorRepairSource, "corrected");
+
+  assert.equal(second.orderdata_cat_no, "B-2");
+  assert.equal(second.orderdata_item_quantity, "5");
+  assert.equal(second.orderdata_price, "200");
+  assert.equal(second.mirrorRepairSource, "restored");
+  assert.equal(second.orderdata_orderid, "555");
+});
+
+test("repaired rows verify clean against the mirror", () => {
+  const snapshot = mirror.buildOrderMirrorSnapshot(submitted);
+  const broken = phpRows([{ catNo: "A-1", quantity: 1, price: 100 }]);
+  const repaired = mirror.repairOrderDetailRows(broken, snapshot, "555");
+  const after = mirror.snapshotFromOrderDetailRows(repaired, {
+    order_amount: String(snapshot.totals.subtotal),
+    order_discount_amount: String(snapshot.totals.discountAmount),
+    order_net_amount: String(snapshot.totals.finalPayableAmount),
+  });
+  assert.deepEqual(mirror.compareOrderSnapshot(snapshot, after), { matches: true, mismatches: [] });
+});
+
+test("repair drops a product PHP invented that was never ordered", () => {
+  const snapshot = mirror.buildOrderMirrorSnapshot(submitted);
+  const repaired = mirror.repairOrderDetailRows(
+    phpRows([
+      { catNo: "A-1", quantity: 10, price: 100 },
+      { catNo: "B-2", quantity: 5, price: 200 },
+      { catNo: "C-3", quantity: 9, price: 50 },
+    ]),
+    snapshot,
+    "555"
+  );
+  assert.deepEqual(repaired.map((r) => r.orderdata_cat_no), ["A-1", "B-2"]);
+});

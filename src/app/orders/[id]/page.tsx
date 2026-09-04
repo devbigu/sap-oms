@@ -18,7 +18,7 @@ import {
   normalizeOrderDetailResponse,
   resolveEffectiveOrderDetailItems,
 } from "@/lib/orderDetailItems";
-import type { OrderMirrorVerification } from "@/lib/orderMirror";
+import { repairOrderDetailRows, type OrderMirrorSnapshot, type OrderMirrorVerification } from "@/lib/orderMirror";
 import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
 import {
   buildBulkDispatchPlan,
@@ -947,6 +947,7 @@ export default function ViewOrderDealerPage() {
   const [overlayState, setOverlayState] = useState<EffectiveOrderOverlayState | null>(null);
   const [overlayItems, setOverlayItems] = useState<OrderData[] | null>(null);
   const [mirrorVerification, setMirrorVerification] = useState<OrderMirrorVerification | null>(null);
+  const [mirrorSnapshot, setMirrorSnapshot] = useState<OrderMirrorSnapshot | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelError, setCancelError] = useState("");
@@ -1116,7 +1117,9 @@ export default function ViewOrderDealerPage() {
     fetch(`/api/order-mirror?orderId=${encodeURIComponent(id)}`, { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
       .then(json => {
-        if (!cancelled) setMirrorVerification(json?.verification ?? null);
+        if (cancelled) return;
+        setMirrorVerification(json?.verification ?? null);
+        setMirrorSnapshot(json?.snapshot ?? null);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -1219,7 +1222,13 @@ export default function ViewOrderDealerPage() {
     const localItems = Array.isArray(localOrderFallback?.items)
       ? normalizeOrderDetailResponse({ data: { ...(localOrderFallback ?? {}), items: localOrderFallback.items } }, id).items as OrderData[]
       : [];
-    const sourceItems = phpOrders.length > 0 ? phpOrders : summaryItems.length > 0 ? summaryItems : localItems;
+    const phpOrMongo = phpOrders.length > 0 ? phpOrders : summaryItems.length > 0 ? summaryItems : localItems;
+    // PHP occasionally drops or garbles lines on submit. When the Mongo mirror
+    // disagrees, it is the authoritative record of what was ordered, so rebuild
+    // the lines from it. A manual overlay edit still wins over this repair.
+    const sourceItems = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches
+      ? repairOrderDetailRows(phpOrMongo, mirrorSnapshot, id) as OrderData[]
+      : phpOrMongo;
     const hasEffectiveOverlay = !!overlayState?.isEdited || (overlayItems?.length ?? 0) > 0;
     const effectiveItems = resolveEffectiveOrderDetailItems(sourceItems, !hasEffectiveOverlay || overlayItems === null ? null : {
       effectiveItems: overlayItems,
@@ -1227,7 +1236,7 @@ export default function ViewOrderDealerPage() {
     }) as OrderData[];
     const withProductNotes = mergeFallbackProductNotes(effectiveItems, fallbackProductNotes) as OrderData[];
     return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
-  }, [dispatchRecords, fallbackProductNotes, id, localOrderFallback, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);
+  }, [dispatchRecords, fallbackProductNotes, id, localOrderFallback, mirrorSnapshot, mirrorVerification, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);
 
   const handleDispatchRecordsSaved = (records: OrderDispatchRecord[]) => {
     setDispatchRecords((previous) => {
@@ -1263,10 +1272,21 @@ export default function ViewOrderDealerPage() {
   };
 
   const firstOrder = displayOrders[0];
-  const resolvedSummary = useMemo(
-    () => mergeOrderSummarySources(summaryOverride ?? localOrderFallback, overlayTotals) as OrderSummaryOverride,
-    [localOrderFallback, overlayTotals, summaryOverride]
-  );
+  const resolvedSummary = useMemo(() => {
+    // Same precedence as the line items: a manual overlay edit wins, otherwise
+    // the mirror totals replace the drifted PHP ones.
+    const mirrorTotals = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches
+      ? {
+          grossAmount: mirrorSnapshot.totals.subtotal,
+          discountAmount: mirrorSnapshot.totals.discountAmount,
+          netPayableAmount: mirrorSnapshot.totals.finalPayableAmount,
+        }
+      : null;
+    return mergeOrderSummarySources(
+      summaryOverride ?? localOrderFallback,
+      overlayTotals ?? mirrorTotals
+    ) as OrderSummaryOverride;
+  }, [localOrderFallback, mirrorSnapshot, mirrorVerification, overlayTotals, summaryOverride]);
   const displayOrderMeta = useMemo(
     () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...resolvedSummary }) as OrderMeta,
     [activeOrderHeader, orderMeta, resolvedSummary]
@@ -1739,7 +1759,7 @@ export default function ViewOrderDealerPage() {
                       .join("\n")}
                     className="font-mono text-[12px] font-semibold text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg cursor-help"
                   >
-                    {mirrorVerification.mismatches.length} mismatch{mirrorVerification.mismatches.length === 1 ? "" : "es"} vs submitted
+                    Corrected from submitted order ({mirrorVerification.mismatches.length})
                   </span>
                 )}
               </div>
