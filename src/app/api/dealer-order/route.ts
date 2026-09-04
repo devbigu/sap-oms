@@ -5,6 +5,8 @@ import { normalizeDealerStatus, type DealerStatus } from "@/lib/dealerStatus";
 import { fetchStaffAssignedDealerIds, parseOrderActor } from "@/lib/orderScopeServer";
 import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import walletUtils from "@/lib/wallet";
+import { buildOrderMirrorSnapshot } from "@/lib/orderMirror";
+import { saveOrderMirror } from "@/lib/orderMirror.server";
 
 export const runtime = "nodejs";
 const PHP_BASE = "https://mirisoft.co.in/sas/dealerapi/api";
@@ -138,6 +140,10 @@ export async function POST(request: NextRequest) {
       const reserved = await walletUtils.reserveOrderFunds(db, dealerId, netPayable, { idempotencyKey });
       if (reserved.duplicate) return NextResponse.json({ success: true, duplicate: true, wallet: reserved });
       reservation = { dealerId, key: idempotencyKey };
+    }
+    // The mirror is keyed by order id, so the pre-POST history is needed on every
+    // order, not just wallet-funded ones.
+    if (!isExcelUpload) {
       previousOrderIds = new Set((await fetchRecentDealerOrders(dealerId).catch(() => [])).map(orderIdFromRow).filter(Boolean));
     }
 
@@ -155,8 +161,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: safeText(payload?.msg || payload?.message, 500) || "Order creation failed." }, { status: phpResponse.status || 502 });
     }
 
+    const createdOrderId = isExcelUpload ? "" : await resolveCreatedOrderId(dealerId, payload, previousOrderIds);
+    if (createdOrderId) {
+      // Fallback mirror: keep the exact submitted payload so a dropped/garbled
+      // line in the PHP order can be detected and recovered later.
+      await saveOrderMirror({
+        orderId: createdOrderId,
+        orderNumber: safeText(payload?.order_number || payload?.orderNumber, 120),
+        dealerId,
+        actor: { id: actor.actorId, role: actor.role, name: safeText(request.headers.get("x-omsons-actor-name"), 160) },
+        idempotencyKey,
+        snapshot: buildOrderMirrorSnapshot(incoming),
+        submittedForm: Object.fromEntries(
+          [...incoming.entries()].flatMap(([key, value]) => (typeof value === "string" ? [[key, value] as [string, string]] : []))
+        ),
+      });
+    }
+
     if (reservation) {
-      const orderId = await resolveCreatedOrderId(dealerId, payload, previousOrderIds);
+      const orderId = createdOrderId;
       if (!orderId) {
         await walletUtils.releaseOrderReservation(db, reservation.dealerId, reservation.key);
         reservation = null;

@@ -58,6 +58,7 @@ function canonicalRow(
     orderdata_cat_no: sku,
     orderdata_item_quantity: text(item.orderdata_item_quantity ?? item.quantityPacks ?? item.quantity ?? 0),
     orderdata_price: text(item.orderdata_price ?? item.unitPrice ?? item.unit_price ?? 0),
+    orderdata_totalprice: text(item.orderdata_totalprice ?? item.lineTotal ?? item.listPriceTotal ?? item.list_price_total ?? ""),
     orderdata_discount: text(item.orderdata_discount ?? item.discountAmount ?? item.discount_amount ?? 0),
     orderdata_afterDisPrice: text(item.orderdata_afterDisPrice ?? item.finalPrice ?? item.final_price ?? 0),
     orderdata_status: text(item.orderdata_status ?? item.status ?? "0"),
@@ -110,6 +111,9 @@ export function resolveEffectiveOrderDetailItems(
   overlay: OrderDetailOverlay | null
 ): OrderDetailRow[] {
   if (!overlay || !Array.isArray(overlay.effectiveItems)) return phpItems;
+  // An order always has at least one line, so an empty snapshot means the overlay
+  // failed to load, not that every item was removed. Keep the source rows.
+  if (overlay.effectiveItems.length === 0) return phpItems;
   if (overlay.itemContract !== "partial") return overlay.effectiveItems as OrderDetailRow[];
 
   const changes = Array.isArray(overlay.changeHistory) ? overlay.changeHistory : [];
