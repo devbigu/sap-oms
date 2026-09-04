@@ -1222,18 +1222,19 @@ export default function ViewOrderDealerPage() {
     const localItems = Array.isArray(localOrderFallback?.items)
       ? normalizeOrderDetailResponse({ data: { ...(localOrderFallback ?? {}), items: localOrderFallback.items } }, id).items as OrderData[]
       : [];
-    const phpOrMongo = phpOrders.length > 0 ? phpOrders : summaryItems.length > 0 ? summaryItems : localItems;
-    // PHP occasionally drops or garbles lines on submit. When the Mongo mirror
-    // disagrees, it is the authoritative record of what was ordered, so rebuild
-    // the lines from it. A manual overlay edit still wins over this repair.
-    const sourceItems = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches
-      ? repairOrderDetailRows(phpOrMongo, mirrorSnapshot, id) as OrderData[]
-      : phpOrMongo;
+    const sourceItems = phpOrders.length > 0 ? phpOrders : summaryItems.length > 0 ? summaryItems : localItems;
     const hasEffectiveOverlay = !!overlayState?.isEdited || (overlayItems?.length ?? 0) > 0;
-    const effectiveItems = resolveEffectiveOrderDetailItems(sourceItems, !hasEffectiveOverlay || overlayItems === null ? null : {
+    const overlaidItems = resolveEffectiveOrderDetailItems(sourceItems, !hasEffectiveOverlay || overlayItems === null ? null : {
       effectiveItems: overlayItems,
       itemContract: "complete",
     }) as OrderData[];
+    // PHP occasionally drops or garbles lines on submit, and the overlay echoes
+    // back whatever PHP has -- so repair AFTER the overlay merge, or a restored
+    // line is discarded again. A real admin edit (isEdited) is newer than the
+    // original submission, so it is left alone.
+    const effectiveItems = mirrorSnapshot && mirrorVerification && !mirrorVerification.matches && !overlayState?.isEdited
+      ? repairOrderDetailRows(overlaidItems, mirrorSnapshot, id) as OrderData[]
+      : overlaidItems;
     const withProductNotes = mergeFallbackProductNotes(effectiveItems, fallbackProductNotes) as OrderData[];
     return mergeOrderItemsWithDispatchRecords(withProductNotes, dispatchRecords) as OrderData[];
   }, [dispatchRecords, fallbackProductNotes, id, localOrderFallback, mirrorSnapshot, mirrorVerification, overlayItems, overlayState?.isEdited, phpOrders, summaryOverride]);

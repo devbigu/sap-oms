@@ -164,3 +164,22 @@ test("repair drops a product PHP invented that was never ordered", () => {
   );
   assert.deepEqual(repaired.map((r) => r.orderdata_cat_no), ["A-1", "B-2"]);
 });
+
+// Regression: the overlay endpoint echoes back whatever PHP holds even for an
+// unedited order. Repairing before that merge let the echo discard the restored
+// line, so the repair must run last.
+test("a restored line survives an unedited overlay echoing PHP's items", () => {
+  const { items: overlayEcho } = { items: phpRows([{ catNo: "A-1", quantity: 10, price: 100 }]) };
+  const snapshot = mirror.buildOrderMirrorSnapshot(submitted);
+
+  const repairedFirst = mirror.repairOrderDetailRows(overlayEcho, snapshot, "555");
+  assert.equal(repairedFirst.length, 2, "repair alone restores the dropped line");
+
+  // Overlay merge applied AFTER the repair drops it again (the old order).
+  const overlayWins = overlayEcho;
+  assert.equal(overlayWins.length, 1);
+
+  // Repair applied AFTER the overlay merge keeps it (the fixed order).
+  const repairedLast = mirror.repairOrderDetailRows(overlayWins, snapshot, "555");
+  assert.deepEqual(repairedLast.map((r) => r.orderdata_cat_no), ["A-1", "B-2"]);
+});
