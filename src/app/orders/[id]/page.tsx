@@ -1753,7 +1753,7 @@ export default function ViewOrderDealerPage() {
                     Edited
                   </span>
                 )}
-                {mirrorVerification && !mirrorVerification.matches && (
+                {/* {mirrorVerification && !mirrorVerification.matches && (
                   <span
                     title={mirrorVerification.mismatches
                       .map((m) => `${m.catNo ? `${m.catNo}: ` : ""}${m.field} expected ${m.expected}, got ${m.actual}`)
@@ -1762,7 +1762,7 @@ export default function ViewOrderDealerPage() {
                   >
                     Corrected from submitted order ({mirrorVerification.mismatches.length})
                   </span>
-                )}
+                )} */}
               </div>
               {dealer?.Dealer_Name && (
                 <p className="text-[13px] text-gray-500 mt-0.5">{dealer.Dealer_Name}</p>
