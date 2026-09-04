@@ -18,6 +18,7 @@ import {
   normalizeOrderDetailResponse,
   resolveEffectiveOrderDetailItems,
 } from "@/lib/orderDetailItems";
+import type { OrderMirrorVerification } from "@/lib/orderMirror";
 import ProductDispatchPanel from "@/components/orders/ProductDispatchPanel";
 import {
   buildBulkDispatchPlan,
@@ -43,6 +44,7 @@ type OrderData = {
   orderdata_cat_no: string;
   orderdata_item_quantity: string;
   orderdata_price: string;
+  orderdata_totalprice?: string;
   orderdata_discount: string;
   orderdata_afterDisPrice: string;
   orderdata_status: string;
@@ -544,30 +546,24 @@ export function getRowPricing(o: OrderData, packLookup: Record<string, number>, 
 
   const storedDiscount = num(o.discountAmount ?? o.discount_amount ?? o.orderdata_discount ?? o.order_discount);
   const storedNet = num(o.finalPrice ?? o.final_price ?? o.orderdata_afterDisPrice);
-  const storedGross = storedDiscount + storedNet;
-  const quantityGross = orderedQuantity * unitPrice;
-  const packGross = quantityGross * packSize;
 
-  let pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity;
-  let packs = explicitPacks > 0 ? explicitPacks : orderedQuantity;
-
-  if (explicitPieces <= 0 && packSize > 1) {
-    const storedQuantityLooksLikePacks =
-      storedGross > 0 &&
-      unitPrice > 0 &&
-      !closeTo(quantityGross, storedGross) &&
-      closeTo(packGross, storedGross);
-
-    if (storedQuantityLooksLikePacks) {
-      pieces = orderedQuantity * packSize;
-      if (explicitPacks <= 0) packs = orderedQuantity;
-    } else if (explicitPacks <= 0) {
-      packs = orderedQuantity > 0 ? Math.max(1, Math.ceil(orderedQuantity / packSize)) : 0;
-    }
-  }
-
+  // orderdata_item_quantity is a piece count and orderdata_price its unit price,
+  // so qty * unitPrice is the line gross. The backend already sends that product
+  // as orderdata_totalprice; prefer it and only fall back to computing it.
+  const lineTotal = num(o.orderdata_totalprice);
   const explicitGross = num(o.listPriceTotal ?? o.list_price_total ?? o.listPrice ?? o.list_price);
-  const gross = explicitGross > 0 ? explicitGross : storedGross > 0 ? storedGross : unitPrice * pieces;
+  const gross = explicitGross > 0
+    ? explicitGross
+    : lineTotal > 0
+      ? lineTotal
+      : orderedQuantity * unitPrice;
+
+  const pieces = explicitPieces > 0 ? explicitPieces : orderedQuantity;
+  const packs = explicitPacks > 0
+    ? explicitPacks
+    : packSize > 1
+      ? (pieces > 0 ? Math.max(1, Math.round(pieces / packSize)) : 0)
+      : pieces;
 
   const perItemPct = num(o.totalDiscountPercent ?? o.total_discount_percentage ?? o.total_discount ?? o.discount);
   const orderPct = num(orderMeta?.totalDiscountPercentage ?? orderMeta?.discountPercent ?? orderMeta?.allocatedDiscountPercent ?? orderMeta?.allocatedDiscount);
@@ -950,6 +946,7 @@ export default function ViewOrderDealerPage() {
   const [invoiceToast, setInvoiceToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [overlayState, setOverlayState] = useState<EffectiveOrderOverlayState | null>(null);
   const [overlayItems, setOverlayItems] = useState<OrderData[] | null>(null);
+  const [mirrorVerification, setMirrorVerification] = useState<OrderMirrorVerification | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelError, setCancelError] = useState("");
@@ -1115,6 +1112,18 @@ export default function ViewOrderDealerPage() {
 
   useEffect(() => {
     if (!orderAccessVerified || !id) return;
+    let cancelled = false;
+    fetch(`/api/order-mirror?orderId=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(json => {
+        if (!cancelled) setMirrorVerification(json?.verification ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, orderAccessVerified]);
+
+  useEffect(() => {
+    if (!orderAccessVerified || !id) return;
     fetch(`/api/order-notes?order_id=${encodeURIComponent(id)}`)
       .then(r => r.json())
       .then(json => {
@@ -1150,7 +1159,8 @@ export default function ViewOrderDealerPage() {
           const matched = json.data.find((item: OrderSummaryOverride) =>
             orderLookupKey(item.orderId ?? item.order_id) === normalizedId
           );
-          setSummaryOverride(matched ?? json.data[0] ?? null);
+          // Only this order's override may apply; json.data[0] could be another order's.
+          setSummaryOverride(matched ?? null);
           setSummaryError("");
         }
       })
@@ -1720,6 +1730,16 @@ export default function ViewOrderDealerPage() {
                 {overlayState?.isEdited && !overlayState.isCancelled && (
                   <span className="font-mono text-[12px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
                     Edited
+                  </span>
+                )}
+                {mirrorVerification && !mirrorVerification.matches && (
+                  <span
+                    title={mirrorVerification.mismatches
+                      .map((m) => `${m.catNo ? `${m.catNo}: ` : ""}${m.field} expected ${m.expected}, got ${m.actual}`)
+                      .join("\n")}
+                    className="font-mono text-[12px] font-semibold text-red-700 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg cursor-help"
+                  >
+                    {mirrorVerification.mismatches.length} mismatch{mirrorVerification.mismatches.length === 1 ? "" : "es"} vs submitted
                   </span>
                 )}
               </div>

@@ -96,3 +96,18 @@ test("overlay totals ignore unrelated fields", () => {
   assert.equal(merged.slabDiscountAmount, undefined);
   assert.equal(merged.netPayableAmount, 475);
 });
+
+test("an empty complete overlay does not wipe the order's items", () => {
+  const php = [legacyRow("1", "A"), legacyRow("2", "B")];
+  assert.deepEqual(
+    details.resolveEffectiveOrderDetailItems(php, { itemContract: "complete", effectiveItems: [] }),
+    php
+  );
+});
+
+test("orderdata_totalprice survives normalization as the line gross", () => {
+  const { items } = details.normalizeOrderDetailResponse({
+    data: [{ ...legacyRow("1", "A"), orderdata_item_quantity: "20", orderdata_price: "79", orderdata_totalprice: "1580" }],
+  }, "7001");
+  assert.equal(items[0].orderdata_totalprice, "1580");
+});
