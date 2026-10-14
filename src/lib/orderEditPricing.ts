@@ -18,6 +18,32 @@ function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+/** Parses PACK OF / pack size from a products.json Description HTML table: { catNo → packSize }. */
+export function parsePackSizes(html: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!html) return result;
+
+  const theadMatch = html.match(/<thead>([\s\S]*?)<\/thead>/i);
+  if (!theadMatch) return result;
+  const headers = [...theadMatch[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
+    .map(m => m[1].replace(/<[^>]*>/g, "").trim());
+  const packIdx = headers.findIndex(h => /pack|qty|quantity/i.test(h));
+  if (packIdx === -1) return result;
+
+  const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/i);
+  if (!tbodyMatch) return result;
+
+  [...tbodyMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/gi)].forEach(tr => {
+    const cells = [...tr[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
+      .map(m => m[1].replace(/<[^>]*>/g, "").trim());
+    const catNo = cells[0];
+    const packStr = cells[packIdx] ?? "1";
+    const n = parseInt(packStr, 10);
+    if (catNo) result[catNo] = isNaN(n) ? 1 : n;
+  });
+  return result;
+}
+
 /** Catalogue pack size wins; a line only falls back to its own stored value. */
 export function resolveLinePackSize(item: EditableLine, packLookup: Record<string, number> = {}) {
   const catNo = String(item.orderdata_cat_no ?? "").trim();

@@ -8,6 +8,8 @@ import { invalidatePendingProductsCache } from "@/lib/pendingProducts";
 import { findOrderOverlay } from "@/lib/orderOverlays";
 import { withOrderMongoCutoff } from "@/lib/orderMongoCutoff";
 import { parsePhpJsonResponse } from "@/lib/phpJson";
+import { repairOrderDetailRows } from "@/lib/orderMirror";
+import { findOrderMirror, verifyOrderAgainstMirror } from "@/lib/orderMirror.server";
 import {
   buildBulkDispatchPlan,
   buildBulkDispatchLineKey,
@@ -175,6 +177,19 @@ async function fetchPhpOrderPayload(orderId: string): Promise<PhpOrderPayload> {
   }
 
   const payload = await parsePhpJsonResponse<Record<string, unknown>>(response);
+  const parsed = toPhpOrderPayload(payload, orderId);
+
+  // PHP drops or garbles lines on submit and the order page restores them from
+  // the Mongo mirror (mirror:<orderId>:<sku> ids), so dispatch must see the same lines.
+  const mirror = await findOrderMirror(orderId);
+  if (!mirror || verifyOrderAgainstMirror(mirror, payload, orderId).matches) return parsed;
+  return {
+    items: repairOrderDetailRows(parsed.items, mirror.snapshot, orderId) as PhpOrderItem[],
+    meta: { order_dealer: mirror.dealerId, ...parsed.meta },
+  };
+}
+
+function toPhpOrderPayload(payload: Record<string, unknown> | null, orderId: string): PhpOrderPayload {
   const raw = payload?.data;
 
   if (Array.isArray(raw)) {

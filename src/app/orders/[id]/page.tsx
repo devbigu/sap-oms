@@ -23,6 +23,7 @@ import {
   applyEditedLine,
   computeEditedLine,
   computeLineFromPieces,
+  parsePackSizes,
   resolveLinePackSize,
   resolveLinePacks,
   resolveLinePieces,
@@ -193,7 +194,7 @@ type DispatchRecordResponse = OrderDispatchRecord & {
   remainingQuantity?: number;
 };
 
-type OrderDispatchAccessMeta = {
+type OrderDispatchAccessMeta = Record<string, unknown> & {
   accept_order?: string;
   staffid?: string;
   assignedstaff?: string;
@@ -325,7 +326,10 @@ async function fetchOrderDispatchAccessMeta(
   const matched = rows.find((entry: Record<string, unknown>) => orderLookupKey(entry?.order_id) === orderLookupKey(orderId));
   if (!matched) return null;
 
+  // Keep the whole header row: when PHP has lost the order's line items this is
+  // the only place the amounts, dealer and date still exist.
   return {
+    ...matched,
     accept_order: firstNonEmptyString(matched.accept_order),
     staffid: firstNonEmptyString(matched.staffid),
     assignedstaff: firstNonEmptyString(matched.assignedstaff),
@@ -447,32 +451,6 @@ function extractOrderNote(orders: OrderData[], overlayNote: string) {
     if (fromRemark) return fromRemark;
   }
   return "";
-}
-
-// Parse PACK OF / pack size from product description HTML table: returns { catNo → packSize }
-function parsePackSizes(html: string): Record<string, number> {
-  const result: Record<string, number> = {};
-  if (!html) return result;
-
-  const theadMatch = html.match(/<thead>([\s\S]*?)<\/thead>/i);
-  if (!theadMatch) return result;
-  const headers = [...theadMatch[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
-    .map(m => m[1].replace(/<[^>]*>/g, "").trim());
-  const packIdx = headers.findIndex(h => /pack|qty|quantity/i.test(h));
-  if (packIdx === -1) return result;
-
-  const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/i);
-  if (!tbodyMatch) return result;
-
-  [...tbodyMatch[1].matchAll(/<tr>([\s\S]*?)<\/tr>/gi)].forEach(tr => {
-    const cells = [...tr[1].matchAll(/<td>([\s\S]*?)<\/td>/gi)]
-      .map(m => m[1].replace(/<[^>]*>/g, "").trim());
-    const catNo = cells[0];
-    const packStr = cells[packIdx] ?? "1";
-    const n = parseInt(packStr, 10);
-    if (catNo) result[catNo] = isNaN(n) ? 1 : n;
-  });
-  return result;
 }
 
 // ─── Tracking Modal ────────────────────────────────────────────────────────────
@@ -1363,11 +1341,25 @@ export default function ViewOrderDealerPage() {
           netPayableAmount: mirrorSnapshot.totals.finalPayableAmount,
         }
       : null;
+    // PHP can return an order whose `orderdata` rows are gone (data:[]) while the
+    // header still knows the money. Without this the page renders completely
+    // blank -- no items and no totals. Legacy `order_discount` is the net amount.
+    // `discountAmount` must be spelled out: resolveOrderAmounts treats the zero
+    // from the (empty) line items as an explicit discount and would show 0.
+    const headerGross = num(activeOrderHeader?.order_amount);
+    const headerNet = num(activeOrderHeader?.order_discount);
+    const headerTotals = displayOrders.length === 0 && headerGross > 0
+      ? {
+          grossAmount: headerGross,
+          discountAmount: Math.max(0, roundMoney(headerGross - headerNet)),
+          netPayableAmount: headerNet,
+        }
+      : null;
     return mergeOrderSummarySources(
       summaryOverride ?? localOrderFallback,
-      overlayTotals ?? mirrorTotals
+      overlayTotals ?? mirrorTotals ?? headerTotals
     ) as OrderSummaryOverride;
-  }, [localOrderFallback, mirrorSnapshot, mirrorVerification, overlayState?.isEdited, overlayTotals, summaryOverride]);
+  }, [activeOrderHeader, displayOrders, localOrderFallback, mirrorSnapshot, mirrorVerification, overlayState?.isEdited, overlayTotals, summaryOverride]);
   const displayOrderMeta = useMemo(
     () => ({ ...(activeOrderHeader ?? {}), ...(orderMeta ?? {}), ...resolvedSummary }) as OrderMeta,
     [activeOrderHeader, orderMeta, resolvedSummary]
@@ -2004,6 +1996,12 @@ export default function ViewOrderDealerPage() {
                 <rect x="9" y="3" width="6" height="4" rx="1" />
               </svg>
               <p className="text-[14px]">No order items found.</p>
+              {!!activeOrderHeader?.order_amount && (
+                <p className="max-w-md text-center text-[12px] leading-5 text-amber-700">
+                  This order exists and its totals are shown above, but the server returned
+                  no product lines for it. Contact Admin before re-ordering.
+                </p>
+              )}
             </div>
           )}
 
