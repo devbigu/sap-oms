@@ -6,8 +6,8 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import axios from 'axios'
 import { CheckCircle2, Search, Trash2, Eye, EyeOff, MoreVertical } from 'lucide-react'
 import { confirmAlert } from 'react-confirm-alert'
-import ExportAllButton from '@/components/ExportAllButton'
-import { fetchAllPages } from '@/lib/exportAll'
+// import ExportAllButton from '@/components/ExportAllButton'
+// import { fetchAllPages } from '@/lib/exportAll'
 import {
   dealerStatusBadge,
   fetchDealerStatusOverrides,
@@ -581,7 +581,7 @@ export default function DealerListPage() {
                 {role === "staff" ? "View your active assigned dealers" : "Manage all registered dealers"}
               </p>
             </div>
-            <ExportAllButton
+            {/* <ExportAllButton
               name="dealers"
               load={async () => {
                 const dealers: Dealer[] = role === "staff"
@@ -593,7 +593,7 @@ export default function DealerListPage() {
                 }))
                 return { Dealers: role === "staff" ? rows.filter((d) => isActiveDealerStatus(d.dealer_status)) : rows }
               }}
-            />
+            /> */}
           </div>
 
           <div className="relative w-72">

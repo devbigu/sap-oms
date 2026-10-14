@@ -6,7 +6,7 @@ import {
   normalizeCustomDiscountRequestRecord,
   type NormalizedCustomDiscountRequest,
 } from "@/lib/customDiscountRequests";
-import ExportAllButton from "@/components/ExportAllButton";
+// import ExportAllButton from "@/components/ExportAllButton";
 
 type ApprovalStatus = "pending" | "approved" | "rejected";
 
@@ -159,14 +159,14 @@ export default function CustomDiscountApprovalsPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <ExportAllButton
+            {/* <ExportAllButton
               name="discount-requests"
               load={async () => {
                 const json = await fetch("/api/custom-discount-requests?limit=500", { cache: "no-store" }).then((r) => r.json());
                 if (!json.success) throw new Error(json.message ?? "Failed to load approvals");
                 return { Discount_Requests: json.data ?? [] };
               }}
-            />
+            /> */}
             <button
               onClick={loadRequests}
               className="w-fit rounded-xl border border-gray-200 bg-white px-4 py-2 text-[13px] font-semibold text-gray-700 hover:bg-gray-100"

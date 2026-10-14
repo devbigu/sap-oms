@@ -5,8 +5,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import ExportAllButton from '@/components/ExportAllButton'
-import { allOrderedProducts, downloadJson, fetchAllOrdersWithAmounts, fetchAllPages, withOrderItems } from '@/lib/exportAll'
+// import ExportAllButton from '@/components/ExportAllButton'
+// import { allOrderedProducts, downloadJson, fetchAllOrdersWithAmounts, fetchAllPages, withOrderItems } from '@/lib/exportAll'
 import { formatAdditionalDiscountBadge, getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
@@ -1427,7 +1427,7 @@ export default function OrdersPage() {
                 </button>
               </div>
             </div>
-            {session && cfg && (
+            {/* {session && cfg && (
               <ExportAllButton
                 name="orders"
                 load={async () => {
@@ -1439,7 +1439,7 @@ export default function OrdersPage() {
                   }
                 }}
               />
-            )}
+            )} */}
             <button
               onClick={exportCSV}
               disabled={isLoading || allData.length === 0}
