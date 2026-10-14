@@ -203,3 +203,32 @@ test("historical ambiguous orders preserve totals and hide unknown additional ro
   assert.equal(breakdown.netPayableAmount, 48000);
   assert.deepEqual(rows.map((row) => row.key), ["gross", "base", "total", "net"]);
 });
+
+test("an order whose PHP line items are gone still shows its header totals", () => {
+  // Real OM/2026/101: orderdatalist returns data:[] while the header row keeps
+  // the money. Legacy `order_discount` is the net payable, not the discount.
+  const header = { order_amount: "23920", order_discount: "11960" };
+  const summary = {
+    grossAmount: Number(header.order_amount),
+    discountAmount: Number(header.order_amount) - Number(header.order_discount),
+    netPayableAmount: Number(header.order_discount),
+  };
+  // No line items, so the row-derived totals are all zero.
+  const totals = orderAmounts.resolveOrderAmounts(
+    { grossAmount: 0, discountAmount: 0, netPayableAmount: 0 },
+    summary
+  );
+  assert.equal(totals.gross, 23920);
+  assert.equal(totals.netPayable, 11960);
+  assert.equal(totals.discountAmount, 11960);
+
+  const rows = orderAmounts.getOrderDiscountSummaryRows(
+    orderAmounts.resolveOrderDiscountBreakdown({
+      grossAmount: totals.gross,
+      discountAmount: totals.discountAmount,
+      netPayableAmount: totals.netPayable,
+    }, undefined, { itemDiscountTotal: 0 })
+  );
+  assert.equal(rows.find((row) => row.key === "gross")?.amount, 23920);
+  assert.equal(rows.find((row) => row.key === "net")?.amount, 11960);
+});

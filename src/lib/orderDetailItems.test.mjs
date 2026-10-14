@@ -111,3 +111,14 @@ test("orderdata_totalprice survives normalization as the line gross", () => {
   }, "7001");
   assert.equal(items[0].orderdata_totalprice, "1580");
 });
+
+test("a PHP header row supplies the totals when the order has lost its line items", () => {
+  // orderdatalist can return data:[] while the header still knows the money;
+  // legacy `order_discount` is the net payable, not the discount.
+  const summary = details.mergeOrderSummarySources(null, {
+    grossAmount: "23920",
+    netPayableAmount: "11960",
+  });
+  assert.equal(summary.grossAmount, "23920");
+  assert.equal(summary.netPayableAmount, "11960");
+});

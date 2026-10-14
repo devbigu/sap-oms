@@ -5,6 +5,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
+// import ExportAllButton from '@/components/ExportAllButton'
+// import { allOrderedProducts, downloadJson, fetchAllOrdersWithAmounts, fetchAllPages, withOrderItems } from '@/lib/exportAll'
 import { formatAdditionalDiscountBadge, getCompactOrderDiscountRows, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import {
@@ -1425,6 +1427,19 @@ export default function OrdersPage() {
                 </button>
               </div>
             </div>
+            {/* {session && cfg && (
+              <ExportAllButton
+                name="orders"
+                load={async () => {
+                  const orders = await withOrderItems(await fetchAllOrdersWithAmounts(cfg.endpoint(session.id, 1, ''), session.role === 'dealer' ? session.id : undefined), session)
+                  downloadJson('allproductdata.json', allOrderedProducts(orders))
+                  return {
+                    Orders: orders,
+                    Cancelled_Orders: await fetchAllPages(`/api/order-overlays/cancelled?role=${encodeURIComponent(session.role)}&id=${encodeURIComponent(session.id)}&search=`),
+                  }
+                }}
+              />
+            )} */}
             <button
               onClick={exportCSV}
               disabled={isLoading || allData.length === 0}
