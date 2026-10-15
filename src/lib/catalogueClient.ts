@@ -182,7 +182,8 @@ function mergeCatalogueProducts(
 }
 
 async function fetchCatalogueFile(path: string): Promise<CatalogueProduct[]> {
-  const response = await fetch(path, { cache: "force-cache" });
+  // no-cache = revalidate (cheap 304); force-cache served stale catalogue JSON after data fixes.
+  const response = await fetch(path, { cache: "no-cache" });
   if (!response.ok) {
     throw new Error("Unable to load the product catalogue.");
   }

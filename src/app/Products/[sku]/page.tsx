@@ -556,7 +556,7 @@ export default function ProductDetailsPage() {
                     <span style={{ color: "#64748b" }}>Catalogue No.</span>
                     <span style={{ fontWeight: 700 }}>{selectedVariant.sku}</span>
                   </div>
-                  {Object.entries(selectedVariant.specs).map(([k, val]) => (
+                  {Object.entries(selectedVariant.specs ?? {}).map(([k, val]) => (
                     <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                       <span style={{ color: "#64748b" }}>{k}</span>
                       <span style={{ fontWeight: 600 }}>{val}</span>

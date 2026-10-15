@@ -334,23 +334,27 @@ export default function Login() {
       />
     </div>
 
+    <div className="mx-auto mt-4 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 ring-8 ring-amber-50">
+      <AlertTriangle className="h-11 w-11 text-amber-500" strokeWidth={2.25} aria-hidden="true" />
+    </div>
+
     <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-black">
-Welcome to the Omsons Partner Portal
+Notice
     </p>
 
     <p
       id="testing-phase-title"
       className="mt-2 text-lg font-semibold tracking-[-0.01em] text-slate-950 sm:text-xl"
     >
-      Thank You for Being With Us
+      Scheduled Server Maintenance
     </p>
 
     <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
-     We appreciate your continued trust in Omsons. Our new Order Management System is designed to provide a seamless, transparent, and efficient ordering experience, empowering you to serve your customers with confidence.
+      The server will be under maintenance from <strong className="text-slate-900">Saturday, 17th October, 3:00 PM</strong> to <strong className="text-slate-900">Monday, 19th October, Morning</strong>. The portal may be unavailable during this period.
     </p>
 
     <div className="mt-5 rounded-2xl  px-4 py-3 text-sm leading-6">
-Together, we build success.    </div>
+We apologise for the inconvenience and thank you for your patience.    </div>
 
     <div className="mt-6 flex justify-center">
       {/* <button
