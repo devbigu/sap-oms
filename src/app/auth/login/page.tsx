@@ -6,6 +6,7 @@ import axios from "axios"
 import { AlertTriangle, Eye, EyeOff } from "lucide-react"
 import { fetchDealerStatus } from "@/lib/dealerStatus"
 import { clearAuthStorage } from "@/lib/roleAccess"
+import { MAINTENANCE } from "@/lib/maintenance"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -15,8 +16,6 @@ const ROLE_OPTIONS = [
 
 const BACKEND_URL = "https://mirisoft.co.in/sas/dealerapi/login/login_verify"
 const LOGO_SRC = "/omsons_logo.jpeg"
-// Flip to false when maintenance ends. While true, the login form is not rendered at all.
-const MAINTENANCE = true
 
 export default function Login() {
   const router = useRouter()
