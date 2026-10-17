@@ -205,17 +205,21 @@ export function repairOrderDetailRows(
   snapshot: OrderMirrorSnapshot,
   orderId: string
 ): Array<Record<string, unknown>> {
-  const phpBySku = new Map<string, Record<string, unknown>>();
+  // A SKU can repeat inside an order: the nth submitted line pairs with the nth PHP row of that SKU.
+  const phpBySku = new Map<string, Array<Record<string, unknown>>>();
   for (const row of phpRows) {
     const key = normalizeOrderDetailSku(row.orderdata_cat_no);
-    if (key && !phpBySku.has(key)) phpBySku.set(key, row);
+    if (key) phpBySku.set(key, [...(phpBySku.get(key) ?? []), row]);
   }
+  const occurrences = new Map<string, number>();
 
   return snapshot.items.map((item, index) => {
     const key = normalizeOrderDetailSku(item.catNo);
-    const phpRow = phpBySku.get(key);
+    const occurrence = occurrences.get(key) ?? 0;
+    occurrences.set(key, occurrence + 1);
+    const phpRow = phpBySku.get(key)?.[occurrence];
     const base = phpRow ?? {
-      orderdata_id: `mirror:${orderId}:${key || index}`,
+      orderdata_id: `mirror:${orderId}:${key || index}${occurrence ? `:${occurrence + 1}` : ""}`,
       orderdata_orderid: orderId,
       orderdata_status: "0",
       readyquantity: "0",

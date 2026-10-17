@@ -139,6 +139,18 @@ test("repair restores a dropped line and corrects a wrong quantity", () => {
   assert.equal(second.orderdata_orderid, "555");
 });
 
+test("repair pairs a repeated SKU with its own PHP row, not the first one twice", () => {
+  const item = { catNo: "A-1", productName: "Beaker", quantity: 10, price: 100, discount: 100.5, finalPrice: 899.5 };
+  const snapshot = { items: [item, { ...item, quantity: 4 }, { ...item, quantity: 2 }], totals: {} };
+  const rows = phpRows([{ catNo: "A-1", quantity: 10, price: 100 }, { catNo: "A-1", quantity: 4, price: 100 }]);
+  rows[0].orderdata_id = "line-1";
+  rows[1].orderdata_id = "line-2";
+
+  const repaired = mirror.repairOrderDetailRows(rows, snapshot, "555");
+  assert.deepEqual(repaired.map((r) => r.orderdata_id), ["line-1", "line-2", "mirror:555:a-1:3"]);
+  assert.deepEqual(repaired.map((r) => r.orderdata_item_quantity), ["10", "4", "2"]);
+});
+
 test("repaired rows verify clean against the mirror", () => {
   const snapshot = mirror.buildOrderMirrorSnapshot(submitted);
   const broken = phpRows([{ catNo: "A-1", quantity: 1, price: 100 }]);
