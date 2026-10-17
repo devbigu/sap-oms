@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import axios from 'axios'
 import { Pencil, Trash2, Download, Search, Users, Eye, EyeOff, MoreVertical } from 'lucide-react'
-// import ExportAllButton from '@/components/ExportAllButton'
+import ExportAllButton from '@/components/ExportAllButton'
 
 type StaffData = {
   staff_id: string
@@ -279,14 +279,14 @@ export default function StaffListPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {/* <ExportAllButton
+              <ExportAllButton
                 name="staff"
                 load={async () => {
                   const res = await axios.get(`${BACKEND_URL}/stafflist`)
                   const staff: StaffData[] = res.data?.data ?? []
                   return { Staff: staff.map(s => ({ ...s, role_label: roleBadge(s.staff_roletype).label })) }
                 }}
-              /> */}
+              />
               <button
                 onClick={handleDownloadCSV}
                 disabled={!data.length}
