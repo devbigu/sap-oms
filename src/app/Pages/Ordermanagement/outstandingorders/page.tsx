@@ -4,8 +4,8 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-// import ExportAllButton from '@/components/ExportAllButton'
-// import { fetchAllOrdersWithAmounts, withOrderItems } from '@/lib/exportAll'
+import ExportAllButton from '@/components/ExportAllButton'
+import { fetchAllOrdersWithAmounts, withOrderItems } from '@/lib/exportAll'
 import { STAFF_ORDER_SCOPE_VERSION } from '@/lib/staffOrderScope.js'
 import { formatAdditionalDiscountBadge, withDisplayOrderAmounts } from '@/lib/orderAmounts'
 
@@ -348,14 +348,14 @@ export default function PendingOrdersPage() {
               <div className="page-title">Pending Orders</div>
               <div className="page-caption">Track and manage all outstanding dealer orders</div>
             </div>
-            {/* {viewerRole && (
+            {viewerRole && (
               <ExportAllButton
                 name="pending-orders"
                 load={async () => ({
                   Pending_Orders: await withOrderItems(await fetchAllOrdersWithAmounts(`/api/orders-data?source=orderpeginationnew&role=${viewerRole}&id=${encodeURIComponent(viewerId)}&search=`), { id: viewerId, role: viewerRole }),
                 })}
               />
-            )} */}
+            )}
             <div className="search-wrap">
               <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>

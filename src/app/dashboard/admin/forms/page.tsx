@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Eye, Search } from "lucide-react";
 import { resolveStoredAuth } from "@/lib/roleAccess";
-// import ExportAllButton from "@/components/ExportAllButton";
-// import { fetchAllPages } from "@/lib/exportAll";
+import ExportAllButton from "@/components/ExportAllButton";
+import { fetchAllPages } from "@/lib/exportAll";
 
 type FormRow = {
   id: string;
@@ -104,10 +104,10 @@ export default function AdminFormsPage() {
             <h1 className="text-3xl font-bold text-gray-900">Forms</h1>
             <p className="mt-1 text-sm text-gray-500">Review filter requirement submissions from staff.</p>
           </div>
-          {/* <ExportAllButton
+          <ExportAllButton
             name="forms"
             load={async () => ({ Forms: await fetchAllPages("/api/forms", { headers: adminHeaders() }) })}
-          /> */}
+          />
         </div>
 
         <div className="mb-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm lg:flex-row lg:items-center">
