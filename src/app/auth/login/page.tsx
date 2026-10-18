@@ -1,12 +1,11 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import axios from "axios"
 import { AlertTriangle, Eye, EyeOff } from "lucide-react"
 import { fetchDealerStatus } from "@/lib/dealerStatus"
 import { clearAuthStorage } from "@/lib/roleAccess"
-import { MAINTENANCE } from "@/lib/maintenance"
 
 const ROLE_OPTIONS = [
   { label: "Staff", value: "1" },
@@ -20,6 +19,7 @@ const LOGO_SRC = "/omsons_logo.jpeg"
 export default function Login() {
   const router = useRouter()
 
+  const [showNotice, setShowNotice] = useState(true)
   const [roletype, setRoletype] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -27,7 +27,23 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
-  if (MAINTENANCE) return <MaintenanceNotice />
+  useEffect(() => {
+    if (!showNotice) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowNotice(false)
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [showNotice])
 
   const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -285,39 +301,74 @@ export default function Login() {
 
         </section>
       </div>
-    </main>
-  )
-}
 
-function MaintenanceNotice() {
-  return (
-    <main className="fixed inset-0 z-50 flex select-none items-center justify-center bg-slate-950 px-4 py-6">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="maintenance-title"
-        className="w-full max-w-[460px] rounded-3xl bg-zinc-100 p-6 text-center text-slate-900 shadow-[0_30px_80px_rgba(15,23,42,0.28)] ring-1 ring-black/5 sm:p-7"
+      {showNotice && (
+        <div>
+          <div
+  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-md"
+  onClick={() => setShowNotice(false)}
+  aria-hidden="true"
+>
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="testing-phase-title"
+    className="relative w-full max-w-[460px] rounded-3xl bg-zinc-100 p-6 text-center text-slate-900 shadow-[0_30px_80px_rgba(15,23,42,0.28)] ring-1 ring-black/5 sm:p-7"
+    onClick={(event) => event.stopPropagation()}
+  >
+    {/* Close button */}
+    <button
+      type="button"
+      onClick={() => setShowNotice(false)}
+      aria-label="Close"
+      className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus:ring-4 focus:ring-slate-100"
+    >
+    </button>
+
+    {/* Icon */}
+    <div className="mx-auto flex h-19 w-19 items-center justify-center rounded-full ">
+      <img
+        src={LOGO_SRC}
+        alt="Omsons Logo"
+        className="h-19 w-19 object-contain"
+      />
+    </div>
+
+    <div className="mx-auto mt-4 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 ring-8 ring-amber-50">
+      <AlertTriangle className="h-11 w-11 text-amber-500" strokeWidth={2.25} aria-hidden="true" />
+    </div>
+
+    <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-black">
+Notice
+    </p>
+
+    <p
+      id="testing-phase-title"
+      className="mt-2 text-lg font-semibold tracking-[-0.01em] text-slate-950 sm:text-xl"
+    >
+      Scheduled Server Maintenance
+    </p>
+
+    <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
+      The server will be under maintenance from <strong className="text-slate-900">Saturday, 17th October, 3:00 PM</strong> to <strong className="text-slate-900">Monday, 19th October, Morning</strong>. The portal may be unavailable during this period.
+    </p>
+
+    <div className="mt-5 rounded-2xl  px-4 py-3 text-sm leading-6">
+We apologise for the inconvenience and thank you for your patience.    </div>
+
+    <div className="mt-6 flex justify-center">
+      {/* <button
+        type="button"
+        onClick={() => setShowNotice(false)}
+        className="inline-flex h-11 w-full items-center justify-center rounded-full bg-amber-500 px-5 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(245,158,11,0.28)] transition hover:bg-amber-600 focus:outline-none focus:ring-4 focus:ring-amber-200 sm:w-auto sm:px-8"
       >
-        <img src={LOGO_SRC} alt="Omsons Logo" className="mx-auto h-19 w-19 object-contain" />
-
-        <div className="mx-auto mt-4 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 ring-8 ring-amber-50">
-          <AlertTriangle className="h-11 w-11 text-amber-500" strokeWidth={2.25} aria-hidden="true" />
+        Let's Get Started
+      </button> */}
+    </div>
+  </div>
+</div>
         </div>
-
-        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-black">Notice</p>
-
-        <p id="maintenance-title" className="mt-2 text-lg font-semibold tracking-[-0.01em] text-slate-950 sm:text-xl">
-          Scheduled Server Maintenance
-        </p>
-
-        <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-[15px]">
-          The server will be under maintenance from <strong className="text-slate-900">Saturday, 17th October, 3:00 PM</strong> to <strong className="text-slate-900">Monday, 19th October, Morning</strong>. The portal may be unavailable during this period.
-        </p>
-
-        <p className="mt-5 px-4 py-3 text-sm leading-6">
-          We apologise for the inconvenience and thank you for your patience.
-        </p>
-      </div>
+      )}
     </main>
   )
 }
